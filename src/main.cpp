@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <DNSServer.h>
+#include <ESPmDNS.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <TMCStepper.h>
@@ -136,6 +138,8 @@ AccelStepper* steppers[4] = {&stX, &stY, &stZ, &stE};
 
 SimplexNoise sn;
 AsyncWebServer server(80);
+DNSServer dnsServer;
+bool apMode = false;
 
 // --- CONFIG ---
 
@@ -1191,25 +1195,29 @@ void setup() {
     }
     if (WiFi.status() == WL_CONNECTED) {
       Serial.println("\nConnected to Wi-Fi!");
-      Serial.print("IP address: ");
+      Serial.print("IP address: http://");
       Serial.println(WiFi.localIP());
+      MDNS.begin("e4");
+      Serial.println("mDNS aktiv: http://e4.local");
     } else {
       Serial.println("\nFailed to connect to Wi-Fi. Starting AP.");
       WiFi.mode(WIFI_AP);
-      WiFi.softAP("E4-SETUP", "12345678"); // Use a distinct AP name for setup
-      Serial.print("Setup AP IP address: ");
+      WiFi.softAP("E4-Setup");
+      apMode = true;
+      dnsServer.start(53, "*", WiFi.softAPIP());
+      Serial.print("AP IP: http://");
       Serial.println(WiFi.softAPIP());
-      // #aus
-      // Usability Suggestion:
-      // Make the default AP password configurable or display it prominently in Serial output.
-      // #aus
+      Serial.println("Verbinde mit WLAN 'E4-Setup', dann Browser oeffnen.");
     }
   } else {
-    Serial.println("No Wi-Fi credentials found. Starting AP for setup.");
+    Serial.println("Keine WLAN-Zugangsdaten. Starte AP.");
     WiFi.mode(WIFI_AP);
-    WiFi.softAP("E4-SETUP", "12345678"); // Use a distinct AP name for setup
-    Serial.print("Setup AP IP address: ");
+    WiFi.softAP("E4-Setup");
+    apMode = true;
+    dnsServer.start(53, "*", WiFi.softAPIP());
+    Serial.print("AP IP: http://");
     Serial.println(WiFi.softAPIP());
+    Serial.println("Verbinde mit WLAN 'E4-Setup', dann Browser oeffnen.");
   }
 
   // #aus
@@ -1391,10 +1399,18 @@ void setup() {
     json += "}";
     req->send(200, "application/json", json);
   });
+  // Captive Portal: alle unbekannten URLs zur Startseite weiterleiten
+  server.onNotFound([](AsyncWebServerRequest *req){
+    req->redirect("/");
+  });
+
   server.begin();
+  Serial.println("Webserver gestartet.");
 }
 
 void loop() {
+  if (apMode) dnsServer.processNextRequest();
+
   portENTER_CRITICAL(&cfgMux);
   Config cfg = webCfg;
   portEXIT_CRITICAL(&cfgMux);
