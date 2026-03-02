@@ -321,6 +321,9 @@ const char index_html[] PROGMEM = R"rawliteral(
           <option value="0">LINEAR (Wind)</option>
           <option value="1">CIRCLE (Loop)</option>
           <option value="2">FIGURE 8 (Organic)</option>
+          <option value="3">SINUS</option>
+          <option value="4">SAW (Sägezahn)</option>
+          <option value="5">RECT (Rechteck)</option>
         </select>
 
         <div class="slider-row">
@@ -390,7 +393,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="slider-row">
           <button id="pick-mspace" class="pick" onclick="togglePick('mspace')">M</button>
           <div>
-            <label>Motor Spacing (cm) <span id="msV" class="val"></span></label>
+            <label><span id="msLabel">Motor Spacing (cm)</span> <span id="msV" class="val"></span></label>
             <input id="mspace" type="range" min="5" max="100" value="25" oninput="u('mspace', this.value)">
           </div>
         </div>
@@ -597,6 +600,10 @@ const char index_html[] PROGMEM = R"rawliteral(
   function updateSimulation(dt) {
     if (!currentCfg || !currentCfg.running) return;
     const cfg = currentCfg;
+    if (cfg.moveType >= 3) {
+      timeAccumulator += cfg.speed * dt;
+      return;
+    }
     const speed = cfg.speed;
     const angle = cfg.angle;
     const radius = cfg.radius;
@@ -654,27 +661,59 @@ const char index_html[] PROGMEM = R"rawliteral(
 
   function motorAnglesDeg() {
     if (!currentCfg) return [0, 0, 0, 0];
-    const framesize = currentCfg.framesize;
-    const contrast = currentCfg.contrast;
-    const zShape = currentCfg.zShape;
     const range = currentCfg.rangeDeg;
+    const contrast = currentCfg.contrast;
     const angles = [];
-    for (let i = 0; i < 4; i++) {
-      const offsetX = (i - 1.5) * currentCfg.motorSpacingCm;
-      const noiseX = (offsetX + flightX) * framesize;
-      const noiseY = (0 + flightY) * framesize;
-      const n = noise2D(noiseX, noiseY);
-      const nNorm = (n + 1.0) / 2.0;
-      let exponent = Math.abs(zShape);
-      if (exponent < 0.1) exponent = 0.1;
-      let nShaped = Math.pow(nNorm, exponent);
-      if (zShape < 0) nShaped = 1.0 - nShaped;
-      const finalNoise = (nShaped * 2.0) - 1.0;
-      const val = finalNoise * contrast;
-      const angle = Math.max(-range, Math.min(range, val * range));
-      angles.push(angle);
+
+    if (currentCfg.moveType >= 3) {
+      // Waveform Modi — Phasenversatz aus mspace: 25 = 90°
+      const phaseSpread = (currentCfg.motorSpacingCm / 100.0) * 2 * Math.PI;
+      for (let i = 0; i < 4; i++) {
+        const phase = timeAccumulator + i * phaseSpread;
+        let val = 0;
+        if (currentCfg.moveType === 3) {
+          val = Math.sin(phase);
+        } else if (currentCfg.moveType === 4) {
+          val = 2.0 * (((phase / (2 * Math.PI)) % 1.0 + 1.0) % 1.0) - 1.0;
+        } else if (currentCfg.moveType === 5) {
+          val = Math.sin(phase) >= 0 ? 1.0 : -1.0;
+        }
+        angles.push(Math.max(-range, Math.min(range, val * contrast * range)));
+      }
+    } else {
+      // Noise Modi
+      const framesize = currentCfg.framesize;
+      const zShape = currentCfg.zShape;
+      for (let i = 0; i < 4; i++) {
+        const offsetX = (i - 1.5) * currentCfg.motorSpacingCm;
+        const noiseX = (offsetX + flightX) * framesize;
+        const noiseY = (0 + flightY) * framesize;
+        const n = noise2D(noiseX, noiseY);
+        const nNorm = (n + 1.0) / 2.0;
+        let exponent = Math.abs(zShape);
+        if (exponent < 0.1) exponent = 0.1;
+        let nShaped = Math.pow(nNorm, exponent);
+        if (zShape < 0) nShaped = 1.0 - nShaped;
+        const finalNoise = (nShaped * 2.0) - 1.0;
+        const val = finalNoise * contrast;
+        angles.push(Math.max(-range, Math.min(range, val * range)));
+      }
     }
     return angles;
+  }
+
+  function updateAngleCards() {
+    const a = motorAnglesDeg();
+    const el = document.getElementById('angles');
+    el.textContent = `Angles: M1 ${a[0].toFixed(1)}°, M2 ${a[1].toFixed(1)}°, M3 ${a[2].toFixed(1)}°, M4 ${a[3].toFixed(1)}°`;
+    document.getElementById('angleVal1').textContent = `${a[0].toFixed(1)}°`;
+    document.getElementById('angleVal2').textContent = `${a[1].toFixed(1)}°`;
+    document.getElementById('angleVal3').textContent = `${a[2].toFixed(1)}°`;
+    document.getElementById('angleVal4').textContent = `${a[3].toFixed(1)}°`;
+    document.getElementById('needle1').style.transform = `translate(-50%, -100%) rotate(${a[0]}deg)`;
+    document.getElementById('needle2').style.transform = `translate(-50%, -100%) rotate(${a[1]}deg)`;
+    document.getElementById('needle3').style.transform = `translate(-50%, -100%) rotate(${a[2]}deg)`;
+    document.getElementById('needle4').style.transform = `translate(-50%, -100%) rotate(${a[3]}deg)`;
   }
 
   function drawPathAndMotors() {
@@ -738,23 +777,86 @@ const char index_html[] PROGMEM = R"rawliteral(
       ctx.fillText(`${ang[i].toFixed(1)}°`, motorX - 10, motorY - 8);
     }
 
-    const a = motorAnglesDeg();
-    const el = document.getElementById('angles');
-    el.textContent = `Angles: M1 ${a[0].toFixed(1)}°, M2 ${a[1].toFixed(1)}°, M3 ${a[2].toFixed(1)}°, M4 ${a[3].toFixed(1)}°`;
-    document.getElementById('angleVal1').textContent = `${a[0].toFixed(1)}°`;
-    document.getElementById('angleVal2').textContent = `${a[1].toFixed(1)}°`;
-    document.getElementById('angleVal3').textContent = `${a[2].toFixed(1)}°`;
-    document.getElementById('angleVal4').textContent = `${a[3].toFixed(1)}°`;
-    document.getElementById('needle1').style.transform = `translate(-50%, -100%) rotate(${a[0]}deg)`;
-    document.getElementById('needle2').style.transform = `translate(-50%, -100%) rotate(${a[1]}deg)`;
-    document.getElementById('needle3').style.transform = `translate(-50%, -100%) rotate(${a[2]}deg)`;
-    document.getElementById('needle4').style.transform = `translate(-50%, -100%) rotate(${a[3]}deg)`;
+    updateAngleCards();
+  }
+
+  function drawWaveform() {
+    resizeCanvas();
+    const W = canvas.width;
+    const H = canvas.height;
+    const cy = H / 2;
+    const amp = H * 0.36;
+    const contrast = currentCfg ? currentCfg.contrast : 1.0;
+    const mType = currentCfg ? currentCfg.moveType : 3;
+    const cycles = 3;
+
+    // Hintergrund
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, W, H);
+
+    // Mittelachse
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Amplitudengrenzen
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, cy - amp); ctx.lineTo(W, cy - amp); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, cy + amp); ctx.lineTo(W, cy + amp); ctx.stroke();
+
+    // Wellenform zeichnen
+    ctx.beginPath();
+    ctx.strokeStyle = '#4CAF50';
+    ctx.lineWidth = 2;
+    for (let px = 0; px < W; px++) {
+      const phase = (px / W) * cycles * 2 * Math.PI;
+      let val = 0;
+      if (mType === 3) {
+        val = Math.sin(phase);
+      } else if (mType === 4) {
+        val = 2.0 * ((phase / (2 * Math.PI)) % 1.0) - 1.0;
+      } else if (mType === 5) {
+        val = Math.sin(phase) >= 0 ? 1.0 : -1.0;
+      }
+      const y = cy - val * amp * Math.min(contrast, 1.5);
+      if (px === 0) ctx.moveTo(px, y); else ctx.lineTo(px, y);
+    }
+    ctx.stroke();
+
+    // Motor-Punkte auf der Welle
+    const colors = ['#ff4444', '#44aaff', '#ffaa00', '#aa44ff'];
+    const phaseSpread = currentCfg ? (currentCfg.motorSpacingCm / 100.0) * 2 * Math.PI : Math.PI / 2.0;
+    const totalRange = cycles * 2 * Math.PI;
+    for (let i = 0; i < 4; i++) {
+      const phase = ((timeAccumulator + i * phaseSpread) % totalRange + totalRange) % totalRange;
+      const px = (phase / totalRange) * W;
+      let val = 0;
+      if (mType === 3) val = Math.sin(phase);
+      else if (mType === 4) val = 2.0 * ((phase / (2 * Math.PI)) % 1.0) - 1.0;
+      else if (mType === 5) val = Math.sin(phase) >= 0 ? 1.0 : -1.0;
+      const py = cy - val * amp * Math.min(contrast, 1.5);
+      ctx.beginPath();
+      ctx.arc(px, py, 7, 0, Math.PI * 2);
+      ctx.fillStyle = colors[i];
+      ctx.fill();
+      ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = 'white'; ctx.font = '10px Arial';
+      ctx.fillText(`M${i + 1}`, px - 6, py - 12);
+    }
   }
 
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawNoiseField();
-    drawPathAndMotors();
+    if (currentCfg && currentCfg.moveType >= 3) {
+      drawWaveform();
+      updateAngleCards();
+    } else {
+      drawNoiseField();
+      drawPathAndMotors();
+    }
   }
 
   function animate(timestamp) {
@@ -790,7 +892,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     if(k=='angle') document.getElementById('aV').innerText = v + "°";
     if(k=='rad') document.getElementById('rV').innerText = v;
     if(k=='range') document.getElementById('rdV').innerText = v + "°";
-    if(k=='mspace') document.getElementById('msV').innerText = v + " cm";
+    if(k=='mspace') { const wf = parseInt(document.getElementById('mType').value) >= 3; document.getElementById('msV').innerText = wf ? Math.round(v * 3.6) + '°' : v + ' cm'; }
     if(k=='frame') document.getElementById('fsV').innerText = v;
     if(k=='mapzoom') document.getElementById('mzV').innerText = v + "x";
     if(k=='cont') document.getElementById('cV').innerText = v;
@@ -909,9 +1011,17 @@ const char index_html[] PROGMEM = R"rawliteral(
     saveBtn.classList.add('pulse');
   }
   function showControls() {
-    const t = document.getElementById('mType').value;
-    document.getElementById('angle').style.display = (t==0) ? 'block' : 'none';
-    document.getElementById('rad').style.display = (t!=0) ? 'block' : 'none';
+    const t = parseInt(document.getElementById('mType').value);
+    const isNoise = t <= 2;
+    document.getElementById('angle').closest('.slider-row').style.display = (t === 0) ? '' : 'none';
+    document.getElementById('rad').closest('.slider-row').style.display = (t >= 1 && t <= 2) ? '' : 'none';
+    document.getElementById('frame').closest('.slider-row').style.display = isNoise ? '' : 'none';
+    document.getElementById('shape').closest('.slider-row').style.display = isNoise ? '' : 'none';
+    document.getElementById('mapzoom').closest('.slider-row').style.display = isNoise ? '' : 'none';
+    // mspace bleibt immer sichtbar, aber Label wechselt je nach Modus
+    document.getElementById('msLabel').textContent = isNoise ? 'Motor Spacing (cm)' : 'Phasenversatz (°/Motor)';
+    const msVal = document.getElementById('mspace').value;
+    document.getElementById('msV').innerText = isNoise ? msVal + ' cm' : Math.round(msVal * 3.6) + '°';
   }
   function applyConfig(cfg) {
     currentCfg = { ...cfg };
@@ -1314,7 +1424,7 @@ void loop() {
         flightX = fmod(flightX, wrapLimit);
         flightY = fmod(flightY, wrapLimit);
       }
-      else { // Loop / Lissajous
+      else if(cfg.moveType <= 2) { // Loop / Lissajous
         timeAccumulator += cfg.speed * dt;
         if(cfg.moveType == 1) { // Kreis
           flightX = cfg.radius * cos(timeAccumulator);
@@ -1322,8 +1432,11 @@ void loop() {
         }
         else if(cfg.moveType == 2) { // Acht
           flightX = cfg.radius * cos(timeAccumulator);
-          flightY = (cfg.radius * 0.5) * sin(timeAccumulator * 2.0); 
+          flightY = (cfg.radius * 0.5) * sin(timeAccumulator * 2.0);
         }
+      }
+      else { // Waveform Modi (3=Sinus, 4=Saw, 5=Rect)
+        timeAccumulator += cfg.speed * dt;
       }
 
       // --- 2. NOISE PROCESSING ---
@@ -1332,58 +1445,40 @@ void loop() {
       long maxStepsL = (long)maxSteps;
 
       for(int i=0; i<4; i++) {
-        // A. POSITION (Framesize anwenden)
-        // Wir nehmen die Position + Motor Offset und multiplizieren mit Framesize
-        // #change: Compute motor offsets from adjustable spacing instead of fixed array.
-        // #author: Codex
-        // #time: 2026-02-05 18:47:48 CET
-        // #version: 0.2.4
-        // #beschreibung: Umstellung von berechnetem auf individuell einstellbaren Motor-Offset.
-        // #author: Gemini CLI Agent
-        // #time: 2026-02-05 16:45:00 (Approximate)
-        // #version: 0.4.6
-        float sampleX = (flightX + cfg.motorOffsets[i].x) * cfg.framesize;
-        float sampleY = (flightY + cfg.motorOffsets[i].y) * cfg.framesize;
+        long target = 0;
 
-        // B. RAW NOISE (-1.0 bis 1.0)
-        float n = sn.noise(sampleX, sampleY);
+        if (cfg.moveType >= 3) {
+          // --- WAVEFORM MODI (3=Sinus, 4=Säge, 5=Rechteck) ---
+          // Phasenversatz aus mspace: Wert 25 -> 90°, Wert 50 -> 180° usw.
+          float phaseSpread = (cfg.motorSpacingCm / 100.0f) * 2.0f * PI;
+          float phase = timeAccumulator + i * phaseSpread;
+          float val = 0.0f;
 
-        // Optional: Hier könnte eine Glättung des Noise-Wertes (n) implementiert werden,
-        // z.B. durch einen Low-Pass-Filter, um die Bewegung weicher zu machen.
-        // static float smoothed_n[4] = {0,0,0,0};
-        // smoothed_n[i] = (0.9 * smoothed_n[i]) + (0.1 * n);
-        // n = smoothed_n[i];
-        
-        // C. Z-SHAPE (Form/Spitzheit)
-        // Um Exponentialfunktionen anzuwenden, müssen wir den Noise erst auf 0..1 normieren
-        float nNorm = (n + 1.0f) / 2.0f; // jetzt 0.0 bis 1.0
-        
-        // Invertierungs-Logik basierend auf Z-Regler (Negativ = Invertiert)
-        float exponent = abs(cfg.zShape);
-        if (exponent < 0.1) exponent = 0.1; // Divide by zero schutz
-        
-        // Form anwenden (Gamma Korrektur)
-        // Exponent 1 = Linear, Exponent 3 = Spitz, Exponent 0.5 = Bauchig
-        float nShaped = pow(nNorm, exponent);
+          if (cfg.moveType == 3) { // Sinus
+            val = sinf(phase);
+          } else if (cfg.moveType == 4) { // Sägezahn
+            val = 2.0f * fmodf(phase / (2.0f * PI), 1.0f) - 1.0f;
+          } else if (cfg.moveType == 5) { // Rechteck
+            val = sinf(phase) >= 0.0f ? 1.0f : -1.0f;
+          }
+          target = (long)(val * maxSteps * cfg.contrast);
 
-        // Falls Z negativ war, invertieren (Berg wird Tal)
-        if (cfg.zShape < 0) {
-          nShaped = 1.0f - nShaped;
+        } else {
+          // --- NOISE MODI (0=Linear, 1=Kreis, 2=Acht) ---
+          float sampleX = (flightX + cfg.motorOffsets[i].x) * cfg.framesize;
+          float sampleY = (flightY + cfg.motorOffsets[i].y) * cfg.framesize;
+          float n = sn.noise(sampleX, sampleY);
+          float nNorm = (n + 1.0f) / 2.0f;
+          float exponent = abs(cfg.zShape);
+          if (exponent < 0.1) exponent = 0.1;
+          float nShaped = pow(nNorm, exponent);
+          if (cfg.zShape < 0) nShaped = 1.0f - nShaped;
+          float finalNoise = (nShaped * 2.0f) - 1.0f;
+          target = (long)(finalNoise * maxSteps * cfg.contrast);
         }
 
-        // Zurückrechnen auf -1..1
-        float finalNoise = (nShaped * 2.0f) - 1.0f;
-
-        // D. CONTRAST (Amplitude anwenden)
-        // Hier skalieren wir das Ergebnis und senden es an den Motor
-        long target = (long)(finalNoise * maxSteps * cfg.contrast);
-        // #change: Clamp target to +/-maxSteps to honor the +/-rangeDeg limit even with high contrast.
-        // #author: Codex
-        // #time: 2026-02-05 18:13:30 CET
-        // #version: 0.2.0
         if (target > maxStepsL) target = maxStepsL;
         if (target < -maxStepsL) target = -maxStepsL;
-        
         steppers[i]->moveTo(target);
       }
     }
