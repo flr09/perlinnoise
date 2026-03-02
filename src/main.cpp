@@ -808,21 +808,31 @@ const char index_html[] PROGMEM = R"rawliteral(
     ctx.beginPath(); ctx.moveTo(0, cy + amp); ctx.lineTo(W, cy + amp); ctx.stroke();
 
     // Wellenform zeichnen
-    ctx.beginPath();
     ctx.strokeStyle = '#4CAF50';
     ctx.lineWidth = 2;
+    // Säge und Rechteck brauchen saubere Sprünge (moveTo statt lineTo an Unstetigkeitsstellen)
+    let prevCycle = -1;
+    let prevSquareSign = null;
+    ctx.beginPath();
     for (let px = 0; px < W; px++) {
       const phase = (px / W) * cycles * 2 * Math.PI;
       let val = 0;
+      let jump = false;
       if (mType === 3) {
         val = Math.sin(phase);
       } else if (mType === 4) {
+        const cycleNum = Math.floor(phase / (2 * Math.PI));
+        if (cycleNum !== prevCycle && px > 0) jump = true;
+        prevCycle = cycleNum;
         val = 2.0 * ((phase / (2 * Math.PI)) % 1.0) - 1.0;
       } else if (mType === 5) {
-        val = Math.sin(phase) >= 0 ? 1.0 : -1.0;
+        const s = Math.sin(phase) >= 0 ? 1 : -1;
+        if (s !== prevSquareSign && prevSquareSign !== null) jump = true;
+        prevSquareSign = s;
+        val = s;
       }
       const y = cy - val * amp * Math.min(contrast, 1.5);
-      if (px === 0) ctx.moveTo(px, y); else ctx.lineTo(px, y);
+      if (px === 0 || jump) ctx.moveTo(px, y); else ctx.lineTo(px, y);
     }
     ctx.stroke();
 
