@@ -13,7 +13,7 @@
 // #author: Codex
 // #time: 2026-02-05 18:47:48 CET
 // #version: 0.2.4
-static const char* FW_VERSION = "0.2.4";
+static const char* FW_VERSION = "0.4.9";
 
 // #aus
 // Usability Suggestion:
@@ -21,6 +21,10 @@ static const char* FW_VERSION = "0.2.4";
 // However, for initial setup, embedding it as PROGMEM is simpler and ensures it's always available.
 // #aus
 const char INSTALL_HTML[] PROGMEM = R"rawliteral(
+<!-- #change: Added installer version marker and traceable change metadata. -->
+<!-- #author: Codex -->
+<!-- #time: 2026-02-05 18:45:26 CET -->
+<!-- #version: 0.2.3 -->
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -56,14 +60,23 @@ const char INSTALL_HTML[] PROGMEM = R"rawliteral(
       <button type="submit">Save & Connect</button>
     </form>
     <div id="status" class="status"></div>
+    <div style="margin-top:10px; font-size:0.75em; color:#888;">Installer v0.2.3</div>
   </div>
   <script>
+    // #beschreibung: Enhanced Wi-Fi save status feedback for clearer user guidance during connection.
+    // #author: Gemini CLI Agent
+    // #time: 2026-02-05 14:15:00 (Approximate)
+    // #version: 0.3.0
     document.querySelector('form').addEventListener('submit', function(event) {
       event.preventDefault();
       const form = event.target;
       const formData = new FormData(form);
       const urlParams = new URLSearchParams(formData).toString();
       
+      const statusDiv = document.getElementById('status');
+      statusDiv.className = "status";
+      statusDiv.innerText = "Applying settings and restarting board..."; // Loading indicator
+
       fetch(form.action, {
         method: form.method,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -71,19 +84,17 @@ const char INSTALL_HTML[] PROGMEM = R"rawliteral(
       })
       .then(response => response.text())
       .then(data => {
-        const statusDiv = document.getElementById('status');
         if (data === "OK") {
           statusDiv.className = "status success";
-          statusDiv.innerText = "Wi-Fi settings saved. Board will attempt to connect. Please reboot board manually if connection is not established.";
+          statusDiv.innerHTML = "Wi-Fi settings saved. Board is restarting to connect. Please connect your device to the configured network (SSID: " + formData.get('ssid') + ") or rejoin the 'E4-SETUP' AP if connection fails.";
         } else {
           statusDiv.className = "status error";
-          statusDiv.innerText = "Error saving settings: " + data;
+          statusDiv.innerText = "Error saving settings. Board might not have restarted or settings were invalid. Please try again. Error: " + data;
         }
       })
       .catch(error => {
-        const statusDiv = document.getElementById('status');
         statusDiv.className = "status error";
-        statusDiv.innerText = "Network error: " + error;
+        statusDiv.innerText = "Network error: " + error + ". Check if the board is still connected to this AP.";
       });
     });
   </script>
@@ -247,11 +258,22 @@ const char index_html[] PROGMEM = R"rawliteral(
   <title>E4 Config Editor</title>
   <style>
     body { font-family: Arial, sans-serif; text-align: center; margin: 20px; background-color: #333; color: #eee; }
-    .container { background-color: #444; padding: 20px; border-radius: 8px; max-width: 1000px; margin: 0 auto; }
-    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
-    .col-right { text-align: left; }
+    .container { background-color: #444; padding: 20px; border-radius: 8px; max-width: 1200px; margin: 0 auto; }
+    
+    .main-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    #left-column, #right-column {
+      background-color: #3a3a3a;
+      padding: 15px;
+      border-radius: 8px;
+    }
+
     h2 { color: #ff9800; }
     label { display: block; text-align: left; font-size: 0.8em; color: #bbb; margin-top: 12px; text-transform: uppercase; }
+    select { width: 100%; padding: 10px; margin-top: 6px; background-color: #555; color: #eee; border: 1px solid #666; border-radius: 4px; }
     input[type=range] { width: 100%; margin: 6px 0; }
     .val { float: right; color: #4CAF50; font-weight: bold; }
     button { background-color: #4CAF50; color: white; padding: 12px 18px; margin: 10px 0; border: none; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px; }
@@ -262,13 +284,13 @@ const char index_html[] PROGMEM = R"rawliteral(
     .note { font-size: 0.85em; color: #aaa; max-width: 520px; margin: 0 auto 8px; }
     .angles { text-align: left; font-size: 0.85em; color: #bbb; margin-top: 8px; }
     .angle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 8px; }
-    .angle-card { background: #3a3a3a; border: 1px solid #555; border-radius: 6px; padding: 6px; }
+    .angle-card { background: #2d2d2d; border: 1px solid #555; border-radius: 6px; padding: 6px; }
     .angle-card .label { font-size: 0.75em; color: #bbb; }
     .angle-card .value { font-size: 0.95em; color: #fff; }
     .gauge { width: 48px; height: 48px; border: 1px solid #666; border-radius: 50%; margin: 6px auto 0; position: relative; }
     .needle { position: absolute; left: 50%; top: 50%; width: 2px; height: 18px; background: #ff9800; transform-origin: 50% 100%; }
     .storage { display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px; margin-top: 10px; }
-    .slot { background: #3a3a3a; border: 1px solid #555; color: #eee; padding: 8px 0; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
+    .slot { background: #2d2d2d; border: 1px solid #555; color: #eee; padding: 8px 0; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
     .slot.active { outline: 2px solid #4CAF50; }
     .savebtn { background: #5a0000; color: #fff; padding: 8px 0; border: 1px solid #7a0000; border-radius: 6px; cursor: pointer; font-weight: bold; }
     .savebtn.armed { background: #8a0000; }
@@ -279,12 +301,16 @@ const char index_html[] PROGMEM = R"rawliteral(
     .pick { width: 26px; height: 26px; border-radius: 6px; border: 1px solid #666; background: #333; color: #eee; cursor: pointer; }
     .pick.on { background: #4CAF50; color: #111; border-color: #4CAF50; }
     .stoprow { margin-top: 10px; }
+    .hidden { display: none; }
     @keyframes blinkRed { 0%, 100% { filter: brightness(1.0); } 50% { filter: brightness(1.8); } }
-    @keyframes pulseRed { 0% { filter: brightness(1.0); } 50% { filter: brightness(1.6); } 100% { filter: brightness(1.0); } }
-    @media (max-width: 720px) {
+    @keyframes pulseRed { 0%, 100% { filter: brightness(1.0); } 50% { filter: brightness(1.6); } 100% { filter: brightness(1.0); } }
+
+    @media (max-width: 900px) {
+      .main-layout {
+        grid-template-columns: 1fr;
+      }
       body { margin: 10px; }
       .container { padding: 12px; }
-      .two-col { grid-template-columns: 1fr; }
       .angle-grid { grid-template-columns: repeat(2, 1fr); }
       .storage { grid-template-columns: repeat(5, 1fr); }
     }
@@ -293,8 +319,9 @@ const char index_html[] PROGMEM = R"rawliteral(
 <body>
   <div class="container">
     <h2>E4 Config Editor</h2>
-    <div class="two-col">
-      <div class="col-left">
+    <div class="main-layout">
+      <div id="left-column">
+        <div class="note">Offline-Preview (kein ESP nötig). Framesize = Noise-Zoom, Phasenversatz steuert Welleneffekt.</div>
         <canvas id="noiseCanvas" width="640" height="640"></canvas>
         <div id="angles" class="angles"></div>
         <div class="angle-grid" id="angleGrid">
@@ -302,9 +329,6 @@ const char index_html[] PROGMEM = R"rawliteral(
           <div class="angle-card"><div class="label">M2</div><div class="value" id="angleVal2">0.0°</div><div class="gauge"><div class="needle" id="needle2"></div></div></div>
           <div class="angle-card"><div class="label">M3</div><div class="value" id="angleVal3">0.0°</div><div class="gauge"><div class="needle" id="needle3"></div></div></div>
           <div class="angle-card"><div class="label">M4</div><div class="value" id="angleVal4">0.0°</div><div class="gauge"><div class="needle" id="needle4"></div></div></div>
-        </div>
-        <div class="stoprow">
-          <button id="btn" onclick="toggle()">START SYSTEM</button>
         </div>
         <div class="storage" id="storageRow">
           <button id="selectAll" class="selectbtn" onclick="toggleAll()">ALL</button>
@@ -318,71 +342,47 @@ const char index_html[] PROGMEM = R"rawliteral(
           <button class="slot" onclick="slotClick(8)">8</button>
           <button id="saveMode" class="savebtn" onclick="toggleSaveMode()">SPEICHERN</button>
         </div>
+        <div class="stoprow">
+          <button id="btn" onclick="toggle()">START SYSTEM</button>
+          <button id="btn_zero" onclick="setZero()" style="background:#ff9800; margin-top: 10px;">ALIGN (SET 0°)</button>
+        </div>
       </div>
-      <div class="col-right">
+      <div id="right-column">
         <label>Movement Pattern</label>
-        <select id="mType" onchange="u('type', this.value); showControls();" style="width:100%; padding:10px; margin-top:6px;">
+        <select id="mType" onchange="u('type', this.value); showControls();">
           <option value="0">LINEAR (Wind)</option>
           <option value="1">CIRCLE (Loop)</option>
           <option value="2">FIGURE 8 (Organic)</option>
-          <option value="3">SINUS</option>
-          <option value="4">SAW (Sägezahn)</option>
-          <option value="5">RECT (Rechteck)</option>
+          <option value="3">SINE (Wave)</option>
+          <option value="4">SAWTOOTH</option>
+          <option value="5">SQUARE</option>
         </select>
-
+        
         <div class="slider-row">
           <button id="pick-speed" class="pick" onclick="togglePick('speed')">S</button>
           <div>
             <label>Flight Speed <span id="sV" class="val"></span></label>
-            <input id="speed" type="range" min="0" max="200" value="12" oninput="u('speed', this.value/100)">
+            <input id="speed" type="range" min="0" max="200" value="50" oninput="u('speed', this.value/100)">
           </div>
         </div>
 
-        <div class="slider-row">
-          <button id="pick-angle" class="pick" onclick="togglePick('angle')">A</button>
-          <div>
-            <label>Direction (Angle) <span id="aV" class="val"></span></label>
-            <input id="angle" type="range" min="0" max="360" value="45" oninput="u('angle', this.value)">
+        <div id="cLinear">
+          <div class="slider-row">
+            <button id="pick-angle" class="pick" onclick="togglePick('angle')">A</button>
+            <div>
+              <label>Direction (Angle) / Bar Angle <span id="aV" class="val"></span></label>
+              <input id="angle" type="range" min="0" max="360" value="0" oninput="u('angle', this.value)">
+            </div>
           </div>
         </div>
 
-        <div class="slider-row">
-          <button id="pick-rad" class="pick" onclick="togglePick('rad')">R</button>
-          <div>
-            <label>Path Radius <span id="rV" class="val"></span></label>
-            <input id="rad" type="range" min="1" max="500" value="50" oninput="u('rad', this.value)">
-          </div>
-        </div>
-
-        <div class="slider-row">
-          <button id="pick-frame" class="pick" onclick="togglePick('frame')">F</button>
-          <div>
-            <label>Framesize <span id="fsV" class="val"></span></label>
-            <input id="frame" type="range" min="1" max="500" value="10" oninput="u('frame', this.value/1000)">
-          </div>
-        </div>
-
-        <div class="slider-row">
-          <button id="pick-cont" class="pick" onclick="togglePick('cont')">C</button>
-          <div>
-            <label>Contrast <span id="cV" class="val"></span></label>
-            <input id="cont" type="range" min="0" max="200" value="194" oninput="u('cont', this.value/100)">
-          </div>
-        </div>
-
-        <div class="slider-row">
-          <button id="pick-edgec" class="pick" onclick="togglePick('edgec')">E</button>
-          <div>
-            <label>Edge Contrast <span id="ecV" class="val"></span></label>
-            <input id="edgec" type="range" min="0" max="200" value="29" oninput="u('edgec', this.value/100)">
-          </div>
-        </div>
-
-        <div class="slider-row">
-          <button id="pick-shape" class="pick" onclick="togglePick('shape')">Z</button>
-          <div>
-            <label>Form (Z-Shape) <span id="zV" class="val"></span></label>
-            <input id="shape" type="range" min="-50" max="50" value="10" oninput="u('shape', this.value/10)">
+        <div id="cRadius" class="hidden">
+          <div class="slider-row">
+            <button id="pick-rad" class="pick" onclick="togglePick('rad')">R</button>
+            <div>
+              <label>Path Radius <span id="rV" class="val"></span></label>
+              <input id="rad" type="range" min="1" max="500" value="50" oninput="u('rad', this.value)">
+            </div>
           </div>
         </div>
 
@@ -397,16 +397,56 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="slider-row">
           <button id="pick-mspace" class="pick" onclick="togglePick('mspace')">M</button>
           <div>
-            <label><span id="msLabel">Motor Spacing (cm)</span> <span id="msV" class="val"></span></label>
+            <label>Motor Spacing (cm) <span id="msV" class="val"></span></label>
             <input id="mspace" type="range" min="5" max="100" value="25" oninput="u('mspace', this.value)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-dyn" class="pick" onclick="togglePick('dyn')">D</button>
+          <div>
+            <label>Drive Dynamics <span id="dynV" class="val"></span></label>
+            <input id="dyn" type="range" min="0" max="2" step="1" value="1" oninput="u('dyn', this.value)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-frame" class="pick" onclick="togglePick('frame')">F</button>
+          <div>
+            <label>Framesize / Dicke <span id="fsV" class="val"></span></label>
+            <input id="frame" type="range" min="1" max="500" value="20" oninput="u('frame', this.value/1000)">
           </div>
         </div>
 
         <div class="slider-row">
           <button id="pick-mapzoom" class="pick" onclick="togglePick('mapzoom')">Z</button>
           <div>
-            <label>Map Zoom <span id="mzV" class="val"></span></label>
-            <input id="mapzoom" type="range" min="20" max="300" value="100" oninput="u('mapzoom', this.value/100)">
+            <label>Map Zoom / Anzahl <span id="mzV" class="val"></span></label>
+            <input id="mapzoom" type="range" min="1" max="50" value="10" oninput="u('mapzoom', this.value)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-cont" class="pick" onclick="togglePick('cont')">C</button>
+          <div>
+            <label>Contrast <span id="cV" class="val"></span></label>
+            <input id="cont" type="range" min="0" max="200" value="100" oninput="u('cont', this.value/100)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-shape" class="pick" onclick="togglePick('shape')">Z</button>
+          <div>
+            <label>Form (Z-Shape) / Kantenschärfe <span id="zV" class="val"></span></label>
+            <input id="shape" type="range" min="-50" max="50" value="10" oninput="u('shape', this.value/10)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-edgec" class="pick" onclick="togglePick('edgec')">E</button>
+          <div>
+            <label>Edge Contrast / Form <span id="ecV" class="val"></span></label>
+            <input id="edgec" type="range" min="0" max="200" value="100" oninput="u('edgec', this.value/100)">
           </div>
         </div>
 
@@ -425,14 +465,13 @@ const char index_html[] PROGMEM = R"rawliteral(
             <input id="lamp" type="range" min="0" max="255" value="0" oninput="u('lamp', this.value)">
           </div>
         </div>
-
+        
         <label>Offline Preview: <span id="offlineVal">ON</span></label>
         <input id="offlineToggle" type="range" min="0" max="1" step="1" value="1" oninput="toggleOffline()">
       </div>
     </div>
-
     <div id="status" class="status"></div>
-    <div style="margin-top:10px; font-size:0.75em; color:#888;">Editor v0.3.3</div>
+    <div style="margin-top:10px; font-size:0.75em; color:#888;">Editor v0.3.8</div>
   </div>
 
   <script>
@@ -449,6 +488,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     rad: document.getElementById('pick-rad'),
     range: document.getElementById('pick-range'),
     mspace: document.getElementById('pick-mspace'),
+    dyn: document.getElementById('pick-dyn'),
     frame: document.getElementById('pick-frame'),
     mapzoom: document.getElementById('pick-mapzoom'),
     cont: document.getElementById('pick-cont'),
@@ -458,30 +498,55 @@ const char index_html[] PROGMEM = R"rawliteral(
     lamp: document.getElementById('pick-lamp')
   };
   let currentCfg = null;
+  let boardOnline = false;
   let animationFrameId = null;
   let lastTimestamp = 0;
+  let lastFrameDt = 1.0 / 60.0;
   let flightX = 0;
   let flightY = 0;
   let timeAccumulator = 0;
+  const displayedAngles = [0, 0, 0, 0];
+  const displayedAngleVel = [0, 0, 0, 0];
   const pathHistory = [];
   const MAX_PATH_HISTORY = 160;
   let saveArmed = false;
-  const selected = new Set(['speed','angle','rad','range','mspace','frame','mapzoom','cont','shape','edgec','fan','lamp']);
+  const selected = new Set(['speed','angle','rad','range','mspace','dyn','frame','mapzoom','cont','shape','edgec','fan','lamp']);
 
   const offlineCfg = {
     running: 1,
-    moveType: 0,
-    speed: 0.12,
+    moveType: 2,
+    speed: 0.7,
     angle: 45,
-    radius: 50,
-    framesize: 0.01,
-    contrast: 1.94,
+    radius: 120,
+    framesize: 0.02,
+    contrast: 1.0,
     zShape: 1.0,
     rangeDeg: 300,
     motorSpacingCm: 25,
+    dynMode: 1,
     fanSpeed: 0,
     lampBrightness: 0
   };
+
+  // 3-step profile that jointly scales speed, acceleration and target dynamics.
+  // 0=Langsam, 1=Normal, 2=Rasant
+  const dynamicsProfiles = [
+    { label: "LANGSAM", speedScale: 0.60, accelScale: 0.55, goalScale: 0.75 },
+    { label: "NORMAL",  speedScale: 1.00, accelScale: 1.00, goalScale: 1.00 },
+    { label: "RASANT",  speedScale: 1.65, accelScale: 1.85, goalScale: 1.30 }
+  ];
+
+  function getDynamicsMode() {
+    const dynEl = document.getElementById('dyn');
+    if (!dynEl) return 1;
+    const mode = parseInt(dynEl.value, 10);
+    if (!Number.isFinite(mode)) return 1;
+    return Math.max(0, Math.min(2, mode));
+  }
+
+  function getDynamicsProfile() {
+    return dynamicsProfiles[getDynamicsMode()] || dynamicsProfiles[1];
+  }
 
   // --- Simplex Noise (same style as perlin_visualizer.html) ---
   function SimplexNoise2D() {
@@ -541,6 +606,45 @@ const char index_html[] PROGMEM = R"rawliteral(
   }
   const noise2D = SimplexNoise2D();
 
+  // Noise shaping: same as main.cpp logic
+  function applyShape(n, zShape, edgeC) {
+    const nNorm = (n + 1.0) / 2.0;
+    let exponent = Math.abs(zShape);
+    if (exponent < 0.1) exponent = 0.1;
+    let nShaped = Math.pow(nNorm, exponent);
+    if (zShape < 0) nShaped = 1.0 - nShaped;
+    let finalNoise = (nShaped * 2.0) - 1.0;
+    const edge = 1.0 - Math.abs(finalNoise);
+    const edgeMix = Math.max(0.0, Math.min(2.0, edgeC));
+    const edgeBoost = (edge * 2.0 - 1.0) * edgeMix;
+    return finalNoise + edgeBoost;
+  }
+
+  // Waveform value: phase → [-1,1]
+  // zShape repurposed: Saw=skew/curve, Square=duty cycle (0→50%, ±5→10%/90%)
+  // edgeC as softness: higher=sharper (tanh soft-clip, 0=fully soft)
+  function waveformValue(mType, phase, zShape, edgeC) {
+    let val = 0;
+    if (mType === 3) { // Sinus
+      val = Math.sin(phase);
+    } else if (mType === 4) { // Sägezahn
+      const t = ((phase / (2 * Math.PI)) % 1.0 + 1.0) % 1.0; // 0..1
+      const exp = Math.max(0.1, Math.exp(zShape * 0.25));
+      val = Math.pow(t, exp) * 2.0 - 1.0;
+    } else if (mType === 5) { // Rechteck, zShape = duty
+      const duty = Math.max(0.05, Math.min(0.95, 0.5 + zShape * 0.08));
+      const t = ((phase / (2 * Math.PI)) % 1.0 + 1.0) % 1.0;
+      val = t < duty ? 1.0 : -1.0;
+    }
+    // Soft-clipping via edgeC: 0=hard, 2=silky smooth
+    const softness = Math.max(0.0, 2.0 - edgeC);
+    if (softness > 0.05) {
+      const k = 3.0 / softness;
+      val = Math.tanh(val * k) / Math.tanh(k);
+    }
+    return val;
+  }
+
   function convertToGrayscale(noiseVal, contrast, zShape, edgeC) {
     let nNorm = (noiseVal + 1.0) / 2.0;
     let exponent = Math.abs(zShape);
@@ -548,7 +652,6 @@ const char index_html[] PROGMEM = R"rawliteral(
     let nShaped = Math.pow(nNorm, exponent);
     if (zShape < 0) nShaped = 1.0 - nShaped;
     let finalNoise = (nShaped * 2.0) - 1.0;
-    // Edge contrast: emphasize zero-crossings (ridged look)
     const edge = 1.0 - Math.abs(finalNoise);
     const edgeMix = Math.max(0.0, Math.min(2.0, edgeC));
     const edgeBoost = (edge * 2.0 - 1.0) * edgeMix;
@@ -569,6 +672,36 @@ const char index_html[] PROGMEM = R"rawliteral(
     }
   }
 
+  // BUGFIX-NOTE: mapzoom was mixed between two semantics (raw 1..50 and legacy /100 scale),
+  // which collapsed motor spacing visually to near-zero at startup.
+  function getMapZoomScale() {
+    const slider = document.getElementById('mapzoom');
+    const raw = parseFloat(slider.value);
+    const max = parseFloat(slider.max || "50");
+    if (!Number.isFinite(raw)) return 1.0;
+    if (max <= 60) {
+      return Math.max(0.2, raw / 10.0); // 1..50 -> 0.2x..5.0x
+    }
+    return Math.max(0.2, raw / 100.0); // legacy 20..300 -> 0.2x..3.0x
+  }
+
+  function getMapZoomDisplayText(rawValue) {
+    const raw = parseFloat(rawValue);
+    const zoom = getMapZoomScale();
+    const stripes = Number.isFinite(raw) ? Math.max(1, Math.round(raw)) : 1;
+    return `${zoom.toFixed(2)}x / ${stripes}`;
+  }
+
+  // BUGFIX-NOTE: keep cm->px conversion independent from current spacing slider value.
+  // Otherwise spacing cancels out (`offsetX * worldScale`) and appears to do nothing.
+  function getWorldScalePxPerCm() {
+    const mapZoom = getMapZoomScale();
+    const referenceSpacingCm = 25.0;
+    const motorSpanPx = canvas.width * 0.6;
+    const baseScale = motorSpanPx / (3.0 * referenceSpacingCm);
+    return baseScale * mapZoom;
+  }
+
   function drawNoiseField() {
     if (!currentCfg) return;
     resizeCanvas();
@@ -579,10 +712,8 @@ const char index_html[] PROGMEM = R"rawliteral(
     const zShape = currentCfg.zShape;
     const mapOffsetX = flightX;
     const mapOffsetY = flightY;
-    const mapZoom = parseFloat(document.getElementById('mapzoom').value) / 100.0;
     const edgeC = parseFloat(document.getElementById('edgec').value) / 100.0;
-    const motorSpanPx = canvas.width * 0.6;
-    const worldScale = (motorSpanPx / (3.0 * Math.max(1, currentCfg.motorSpacingCm))) * mapZoom;
+    const worldScale = getWorldScalePxPerCm();
     for (let y = 0; y < canvas.height; y++) {
       for (let x = 0; x < canvas.width; x++) {
         const wx = (x - canvas.width / 2) / worldScale;
@@ -601,34 +732,37 @@ const char index_html[] PROGMEM = R"rawliteral(
     ctx.putImageData(imageData, 0, 0);
   }
 
+
+
   function updateSimulation(dt) {
     if (!currentCfg || !currentCfg.running) return;
     const cfg = currentCfg;
-    if (cfg.moveType >= 3) {
-      timeAccumulator += cfg.speed * dt;
-      return;
-    }
-    const speed = cfg.speed;
+    const dyn = getDynamicsProfile();
+    const speed = cfg.speed * dyn.speedScale;
     const angle = cfg.angle;
     const radius = cfg.radius;
-    const moveType = cfg.moveType;
+    const moveType = parseInt(cfg.moveType);
+
+    timeAccumulator += speed * dt; // Always increment time accumulator
+
     if (moveType === 0) {
       const rad = angle * Math.PI / 180.0;
       flightX += Math.cos(rad) * speed * dt * 10.0;
       flightY += Math.sin(rad) * speed * dt * 10.0;
-      const wrapLimit = 1000000.0;
-      flightX = flightX % wrapLimit;
-      flightY = flightY % wrapLimit;
-    } else {
-      timeAccumulator += speed * dt;
-      if (moveType === 1) {
-        flightX = radius * Math.cos(timeAccumulator);
-        flightY = radius * Math.sin(timeAccumulator);
-      } else if (moveType === 2) {
-        flightX = radius * Math.cos(timeAccumulator);
-        flightY = (radius * 0.5) * Math.sin(timeAccumulator * 2.0);
-      }
+    } else if (moveType === 1) {
+      flightX = radius * Math.cos(timeAccumulator);
+      flightY = radius * Math.sin(timeAccumulator);
+    } else if (moveType === 2) {
+      flightX = radius * Math.cos(timeAccumulator);
+      flightY = (radius * 0.5) * Math.sin(timeAccumulator * 2.0);
+    } else if (moveType >= 3) {
+      // Waveform Modi: nur Zeit läuft, kein Pfad im Noise-Raum
+      // flightX/Y werden für den Pfad-Canvas nicht verwendet
     }
+
+    const wrapLimit = 1000000.0;
+    flightX = flightX % wrapLimit;
+    
     pathHistory.push({ x: flightX, y: flightY });
     if (pathHistory.length > MAX_PATH_HISTORY) pathHistory.shift();
   }
@@ -640,22 +774,25 @@ const char index_html[] PROGMEM = R"rawliteral(
     let t = timeAccumulator;
     const pts = [];
     const cfg = currentCfg;
+    const dyn = getDynamicsProfile();
+    const simSpeed = cfg.speed * dyn.speedScale;
     for (let i = 0; i < steps; i++) {
+      if (cfg.moveType >= 4) continue; // Don't draw future path for simple oscillators
       if (cfg.moveType === 0) {
         const rad = cfg.angle * Math.PI / 180.0;
-        fx += Math.cos(rad) * cfg.speed * dt * 10.0;
-        fy += Math.sin(rad) * cfg.speed * dt * 10.0;
-        const wrapLimit = 1000000.0;
-        fx = fx % wrapLimit;
-        fy = fy % wrapLimit;
+        fx += Math.cos(rad) * simSpeed * dt * 10.0;
+        fy += Math.sin(rad) * simSpeed * dt * 10.0;
       } else {
-        t += cfg.speed * dt;
+        t += simSpeed * dt;
         if (cfg.moveType === 1) {
           fx = cfg.radius * Math.cos(t);
           fy = cfg.radius * Math.sin(t);
         } else if (cfg.moveType === 2) {
           fx = cfg.radius * Math.cos(t);
           fy = (cfg.radius * 0.5) * Math.sin(t * 2.0);
+        } else if (cfg.moveType === 3) {
+          fx += simSpeed * dt * 10.0;
+          fy = cfg.radius * Math.sin(t * 2.0);
         }
       }
       pts.push({ x: fx, y: fy });
@@ -665,49 +802,132 @@ const char index_html[] PROGMEM = R"rawliteral(
 
   function motorAnglesDeg() {
     if (!currentCfg) return [0, 0, 0, 0];
+    const dyn = getDynamicsProfile();
     const range = currentCfg.rangeDeg;
     const contrast = currentCfg.contrast;
+    const goalScale = dyn.goalScale;
+    const zShape = currentCfg.zShape;
+    const edgeC = parseFloat(document.getElementById('edgec').value) / 100.0;
     const angles = [];
-
     if (currentCfg.moveType >= 3) {
-      // Waveform Modi — Phasenversatz aus mspace: 25 = 90°
+      // Waveform Modi: Phasenversatz aus mspace (25=90°)
       const phaseSpread = (currentCfg.motorSpacingCm / 100.0) * 2 * Math.PI;
       for (let i = 0; i < 4; i++) {
         const phase = timeAccumulator + i * phaseSpread;
-        let val = 0;
-        if (currentCfg.moveType === 3) {
-          val = Math.sin(phase);
-        } else if (currentCfg.moveType === 4) {
-          val = 2.0 * (((phase / (2 * Math.PI)) % 1.0 + 1.0) % 1.0) - 1.0;
-        } else if (currentCfg.moveType === 5) {
-          val = Math.sin(phase) >= 0 ? 1.0 : -1.0;
-        }
-        angles.push(Math.max(-range, Math.min(range, val * contrast * range)));
+        const val = waveformValue(currentCfg.moveType, phase, zShape, edgeC);
+        angles.push(Math.max(-range, Math.min(range, val * contrast * range * goalScale)));
       }
     } else {
       // Noise Modi
       const framesize = currentCfg.framesize;
-      const zShape = currentCfg.zShape;
       for (let i = 0; i < 4; i++) {
         const offsetX = (i - 1.5) * currentCfg.motorSpacingCm;
         const noiseX = (offsetX + flightX) * framesize;
-        const noiseY = (0 + flightY) * framesize;
+        const noiseY = flightY * framesize;
         const n = noise2D(noiseX, noiseY);
-        const nNorm = (n + 1.0) / 2.0;
-        let exponent = Math.abs(zShape);
-        if (exponent < 0.1) exponent = 0.1;
-        let nShaped = Math.pow(nNorm, exponent);
-        if (zShape < 0) nShaped = 1.0 - nShaped;
-        const finalNoise = (nShaped * 2.0) - 1.0;
-        const val = finalNoise * contrast;
-        angles.push(Math.max(-range, Math.min(range, val * range)));
+        const finalNoise = applyShape(n, zShape, edgeC);
+        const angle = Math.max(-range, Math.min(range, finalNoise * contrast * range * goalScale));
+        angles.push(angle);
       }
     }
     return angles;
   }
 
-  function updateAngleCards() {
-    const a = motorAnglesDeg();
+  function updateDisplayedAngles(targetAngles, dt) {
+    const dyn = getDynamicsProfile();
+    const maxSpeed = 720.0 * dyn.speedScale;
+    const maxAccel = 1800.0 * dyn.accelScale;
+    const safeDt = Math.max(0.001, Math.min(0.04, dt));
+
+    for (let i = 0; i < 4; i++) {
+      const target = targetAngles[i];
+      const pos = displayedAngles[i];
+      const vel = displayedAngleVel[i];
+      const err = target - pos;
+
+      // Bremseweg bei aktueller Geschwindigkeit: d = v² / (2a)
+      const brakingDist = (vel * vel) / (2.0 * maxAccel);
+      let targetVel;
+      if (Math.abs(err) < brakingDist + 0.1) {
+        // Jetzt bremsen — Zielgeschwindigkeit proportional zu verbleibender Distanz
+        targetVel = Math.sign(err) * Math.sqrt(2.0 * maxAccel * Math.max(0, Math.abs(err)));
+      } else {
+        targetVel = Math.sign(err) * maxSpeed;
+      }
+      targetVel = Math.max(-maxSpeed, Math.min(maxSpeed, targetVel));
+      const dv = Math.max(-maxAccel * safeDt, Math.min(maxAccel * safeDt, targetVel - vel));
+      displayedAngleVel[i] += dv;
+      displayedAngles[i] += displayedAngleVel[i] * safeDt;
+
+      if (Math.abs(err) < 0.1 && Math.abs(displayedAngleVel[i]) < 1.0) {
+        displayedAngles[i] = target;
+        displayedAngleVel[i] = 0;
+      }
+    }
+  }
+
+  function drawPathAndMotors() {
+    if (!currentCfg) return;
+    resizeCanvas();
+    const framesize = currentCfg.framesize;
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const worldScale = getWorldScalePxPerCm();
+    
+    if (currentCfg.moveType < 3) {
+        ctx.beginPath();
+        ctx.lineWidth = 8;
+        ctx.setLineDash([10, 10]);
+        pathHistory.forEach((p, i) => {
+          const alpha = i / pathHistory.length;
+          ctx.strokeStyle = `rgba(255, 0, 0, ${alpha * 0.6})`;
+          const px = cx - p.x * worldScale;
+          const py = cy - p.y * worldScale;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const future = simulateFuturePath(120, 0.016);
+        ctx.beginPath();
+        ctx.lineWidth = 8;
+        ctx.strokeStyle = 'rgba(0, 255, 0, 0.7)';
+        future.forEach((p, i) => {
+          const px = cx - p.x * worldScale;
+          const py = cy - p.y * worldScale;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+    }
+
+    const isWaveMode = currentCfg.moveType >= 3;
+    if (!isWaveMode) {
+      ctx.beginPath();
+      ctx.arc(cx - flightX * worldScale, cy - flightY * worldScale, 3, 0, Math.PI * 2);
+      ctx.fillStyle = 'red';
+      ctx.fill();
+    }
+
+    const targetAngles = motorAnglesDeg();
+    updateDisplayedAngles(targetAngles, lastFrameDt);
+    const ang = displayedAngles;
+    for (let i = 0; i < 4; i++) {
+      const offsetX = (i - 1.5) * currentCfg.motorSpacingCm;
+      const motorX = cx + offsetX * worldScale;
+      const motorY = cy;
+      if (!isWaveMode) {
+        ctx.beginPath();
+        ctx.arc(motorX, motorY, 10, 0, Math.PI * 2);
+        ctx.fillStyle = `hsl(${i * 90}, 100%, 50%)`;
+        ctx.fill();
+        ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = 'white'; ctx.font = '8px Arial';
+        ctx.fillText(`M${i + 1}`, motorX - 6, motorY + 2);
+        ctx.fillStyle = 'white'; ctx.font = '9px Arial';
+        ctx.fillText(`${ang[i].toFixed(1)}°`, motorX - 10, motorY - 8);
+      }
+    }
+
+    const a = ang;
     const el = document.getElementById('angles');
     el.textContent = `Angles: M1 ${a[0].toFixed(1)}°, M2 ${a[1].toFixed(1)}°, M3 ${a[2].toFixed(1)}°, M4 ${a[3].toFixed(1)}°`;
     document.getElementById('angleVal1').textContent = `${a[0].toFixed(1)}°`;
@@ -720,163 +940,92 @@ const char index_html[] PROGMEM = R"rawliteral(
     document.getElementById('needle4').style.transform = `translate(-50%, -100%) rotate(${a[3]}deg)`;
   }
 
-  function drawPathAndMotors() {
-    if (!currentCfg) return;
-    resizeCanvas();
-    const framesize = currentCfg.framesize;
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
-    const mapZoom = parseFloat(document.getElementById('mapzoom').value) / 100.0;
-    const motorSpanPx = canvas.width * 0.6;
-    const worldScale = (motorSpanPx / (3.0 * Math.max(1, currentCfg.motorSpacingCm))) * mapZoom;
-    // Past path (red dashed, thick)
-    ctx.beginPath();
-    ctx.lineWidth = 8;
-    ctx.setLineDash([10, 10]);
-    pathHistory.forEach((p, i) => {
-      const alpha = i / pathHistory.length;
-      ctx.strokeStyle = `rgba(255, 0, 0, ${alpha * 0.6})`;
-      const px = cx - p.x * worldScale;
-      const py = cy - p.y * worldScale;
-      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-    });
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Future path (green solid, thick)
-    const future = simulateFuturePath(120, 0.016);
-    ctx.beginPath();
-    ctx.lineWidth = 8;
-    ctx.strokeStyle = 'rgba(0, 255, 0, 0.7)';
-    future.forEach((p, i) => {
-      const px = cx - p.x * worldScale;
-      const py = cy - p.y * worldScale;
-      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-    });
-    ctx.stroke();
-
-    // Flight point (map offset)
-    ctx.beginPath();
-    ctx.arc(cx - flightX * worldScale, cy - flightY * worldScale, 3, 0, Math.PI * 2);
-    ctx.fillStyle = 'red';
-    ctx.fill();
-
-    const ang = motorAnglesDeg();
-    for (let i = 0; i < 4; i++) {
-      const offsetX = (i - 1.5) * currentCfg.motorSpacingCm;
-      const motorX = cx + offsetX * worldScale;
-      const motorY = cy;
-      ctx.beginPath();
-      ctx.arc(motorX, motorY, 5, 0, Math.PI * 2);
-      ctx.fillStyle = `hsl(${i * 90}, 100%, 50%)`;
-      ctx.fill();
-      ctx.strokeStyle = 'white';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = 'white';
-      ctx.font = '8px Arial';
-      ctx.fillText(`M${i + 1}`, motorX - 6, motorY + 2);
-      ctx.fillStyle = 'white';
-      ctx.font = '9px Arial';
-      ctx.fillText(`${ang[i].toFixed(1)}°`, motorX - 10, motorY - 8);
-    }
-
-    updateAngleCards();
-  }
-
   function drawWaveform() {
     resizeCanvas();
     const W = canvas.width;
     const H = canvas.height;
     const cy = H / 2;
     const amp = H * 0.36;
-    const contrast = currentCfg ? currentCfg.contrast : 1.0;
     const mType = currentCfg ? currentCfg.moveType : 3;
+    const contrast = currentCfg ? Math.min(currentCfg.contrast, 1.5) : 1.0;
+    const zShape = currentCfg ? currentCfg.zShape : 0;
+    const edgeC = parseFloat(document.getElementById('edgec').value) / 100.0;
     const cycles = 3;
 
-    // Hintergrund
-    ctx.fillStyle = '#1a1a1a';
+    ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, W, H);
 
-    // Mittelachse
-    ctx.strokeStyle = '#444';
+    // Grid
+    ctx.strokeStyle = '#2a2a2a';
     ctx.lineWidth = 1;
+    [0.25, 0.5, 0.75].forEach(f => {
+      ctx.beginPath(); ctx.moveTo(0, H * f); ctx.lineTo(W, H * f); ctx.stroke();
+    });
+    ctx.strokeStyle = '#444';
     ctx.setLineDash([6, 6]);
     ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
     ctx.setLineDash([]);
-
-    // Amplitudengrenzen
-    ctx.strokeStyle = '#333';
-    ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, cy - amp); ctx.lineTo(W, cy - amp); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0, cy + amp); ctx.lineTo(W, cy + amp); ctx.stroke();
 
-    // Wellenform zeichnen
+    // Wellenform
     ctx.strokeStyle = '#4CAF50';
     ctx.lineWidth = 2;
-    // Säge und Rechteck brauchen saubere Sprünge (moveTo statt lineTo an Unstetigkeitsstellen)
-    let prevCycle = -1;
-    let prevSquareSign = null;
+    let prevCycle = -1, prevSign = null;
     ctx.beginPath();
     for (let px = 0; px < W; px++) {
       const phase = (px / W) * cycles * 2 * Math.PI;
-      let val = 0;
+      const val = waveformValue(mType, phase, zShape, edgeC);
       let jump = false;
-      if (mType === 3) {
-        val = Math.sin(phase);
-      } else if (mType === 4) {
-        const cycleNum = Math.floor(phase / (2 * Math.PI));
-        if (cycleNum !== prevCycle && px > 0) jump = true;
-        prevCycle = cycleNum;
-        val = 2.0 * ((phase / (2 * Math.PI)) % 1.0) - 1.0;
+      if (mType === 4) {
+        const cn = Math.floor(phase / (2 * Math.PI));
+        if (cn !== prevCycle && px > 0) jump = true;
+        prevCycle = cn;
       } else if (mType === 5) {
-        const s = Math.sin(phase) >= 0 ? 1 : -1;
-        if (s !== prevSquareSign && prevSquareSign !== null) jump = true;
-        prevSquareSign = s;
-        val = s;
+        const s = Math.sign(Math.sin(phase));
+        if (s !== prevSign && prevSign !== null) jump = true;
+        prevSign = s;
       }
-      const y = cy - val * amp * Math.min(contrast, 1.5);
+      const y = cy - val * amp * contrast;
       if (px === 0 || jump) ctx.moveTo(px, y); else ctx.lineTo(px, y);
     }
     ctx.stroke();
 
-    // Motor-Punkte auf der Welle
+    // Motor-Punkte
     const colors = ['#ff4444', '#44aaff', '#ffaa00', '#aa44ff'];
-    const phaseSpread = currentCfg ? (currentCfg.motorSpacingCm / 100.0) * 2 * Math.PI : Math.PI / 2.0;
+    const phaseSpread = currentCfg ? (currentCfg.motorSpacingCm / 100.0) * 2 * Math.PI : Math.PI / 2;
     const totalRange = cycles * 2 * Math.PI;
     for (let i = 0; i < 4; i++) {
       const phase = ((timeAccumulator + i * phaseSpread) % totalRange + totalRange) % totalRange;
       const px = (phase / totalRange) * W;
-      let val = 0;
-      if (mType === 3) val = Math.sin(phase);
-      else if (mType === 4) val = 2.0 * ((phase / (2 * Math.PI)) % 1.0) - 1.0;
-      else if (mType === 5) val = Math.sin(phase) >= 0 ? 1.0 : -1.0;
-      const py = cy - val * amp * Math.min(contrast, 1.5);
+      const val = waveformValue(mType, phase, zShape, edgeC);
+      const py = cy - val * amp * contrast;
       ctx.beginPath();
-      ctx.arc(px, py, 7, 0, Math.PI * 2);
+      ctx.arc(px, py, 8, 0, Math.PI * 2);
       ctx.fillStyle = colors[i];
       ctx.fill();
       ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.stroke();
       ctx.fillStyle = 'white'; ctx.font = '10px Arial';
-      ctx.fillText(`M${i + 1}`, px - 6, py - 12);
+      ctx.fillText(`M${i + 1}`, px - 6, py - 13);
     }
   }
 
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (currentCfg && currentCfg.moveType >= 3) {
+    const mType = currentCfg ? currentCfg.moveType : 0;
+    if (mType >= 3) {
       drawWaveform();
-      updateAngleCards();
     } else {
       drawNoiseField();
-      drawPathAndMotors();
     }
+    drawPathAndMotors();
   }
 
   function animate(timestamp) {
     if (!lastTimestamp) lastTimestamp = timestamp;
     const deltaTime = (timestamp - lastTimestamp) / 1000.0;
     lastTimestamp = timestamp;
+    lastFrameDt = Math.max(0.001, Math.min(0.050, deltaTime || (1.0 / 60.0)));
     updateSimulation(deltaTime);
     render();
     animationFrameId = requestAnimationFrame(animate);
@@ -889,37 +1038,86 @@ const char index_html[] PROGMEM = R"rawliteral(
     flightX = 0;
     flightY = 0;
     timeAccumulator = 0;
+    lastFrameDt = 1.0 / 60.0;
+    for (let i = 0; i < 4; i++) {
+      displayedAngles[i] = 0;
+      displayedAngleVel[i] = 0;
+    }
     pathHistory.length = 0;
     animate(0);
   }
+
   function toggle() {
     r = !r;
     const b = document.getElementById('btn');
     b.innerText = r ? "STOP SYSTEM" : "START SYSTEM";
     b.style.background = r ? "#f44336" : "#4CAF50";
-    fetch("/set?run=" + (r?1:0)).then(ok).catch(err);
+    if (boardOnline) {
+      fetch("/set?run=" + (r?1:0)).then(ok).catch(err);
+    } else {
+      const s = document.getElementById('status');
+      s.className = "status";
+      s.innerText = "Offline preview mode (no device connection).";
+    }
     syncCfgFromUI();
     restartAnimation();
   }
+
+  function setZero() {
+    if (r) { // if it's running, stop it first
+      toggle();
+    }
+    if (boardOnline) {
+      fetch("/setzero").then(ok).catch(err);
+      document.getElementById('status').innerText = "Aligning motors to 0...";
+    } else {
+      const s = document.getElementById('status');
+      s.className = "status";
+      s.innerText = "Offline preview: SetZero requires board connection.";
+    }
+  }
+
   function u(k, v) {
     if(k=='speed') document.getElementById('sV').innerText = v;
     if(k=='angle') document.getElementById('aV').innerText = v + "°";
     if(k=='rad') document.getElementById('rV').innerText = v;
     if(k=='range') document.getElementById('rdV').innerText = v + "°";
     if(k=='mspace') { const wf = parseInt(document.getElementById('mType').value) >= 3; document.getElementById('msV').innerText = wf ? Math.round(v * 3.6) + '°' : v + ' cm'; }
+    if(k=='dyn') {
+      const mode = Math.max(0, Math.min(2, parseInt(v, 10) || 1));
+      const p = dynamicsProfiles[mode];
+      document.getElementById('dynV').innerText = `${p.label} (Vx${p.speedScale.toFixed(2)}, Ax${p.accelScale.toFixed(2)}, Gx${p.goalScale.toFixed(2)})`;
+    }
     if(k=='frame') document.getElementById('fsV').innerText = v;
-    if(k=='mapzoom') document.getElementById('mzV').innerText = v + "x";
+    if(k=='mapzoom') document.getElementById('mzV').innerText = getMapZoomDisplayText(v);
     if(k=='cont') document.getElementById('cV').innerText = v;
     if(k=='shape') document.getElementById('zV').innerText = v;
     if(k=='edgec') document.getElementById('ecV').innerText = v;
     if(k=='fan') document.getElementById('fanV').innerText = Math.round(v / 255 * 100) + "%";
     if(k=='lamp') document.getElementById('lampV').innerText = Math.round(v / 255 * 100) + "%";
-    if(k=='mapzoom' || k=='edgec') {
+    if(k=='type') {
+      const t = parseInt(v, 10);
+      syncCfgFromUI();
+      render();
+      // Firmware currently supports only 0..2.
+      // Preview modes 3+ stay local in edit.html until firmware support is added.
+      if (boardOnline && Number.isFinite(t) && t <= 2) {
+        fetch("/set?type=" + t).then(ok).catch(err);
+      } else {
+        const s = document.getElementById('status');
+        s.className = "status";
+        s.innerText = boardOnline ? "Preview-only pattern (not sent to firmware)." : "Offline preview mode (type not sent).";
+      }
+      return;
+    }
+    if(k=='mapzoom' || k=='edgec' || k=='dyn') {
       syncCfgFromUI();
       render();
       return;
     }
-    fetch("/set?" + k + "=" + v).then(ok).catch(err);
+    if (boardOnline) {
+      fetch("/set?" + k + "=" + v).then(ok).catch(err);
+    }
     syncCfgFromUI();
     render();
   }
@@ -972,6 +1170,7 @@ const char index_html[] PROGMEM = R"rawliteral(
       rad: document.getElementById('rad').value,
       range: document.getElementById('range').value,
       mspace: document.getElementById('mspace').value,
+      dyn: document.getElementById('dyn').value,
       frame: document.getElementById('frame').value,
       mapzoom: document.getElementById('mapzoom').value,
       cont: document.getElementById('cont').value,
@@ -994,8 +1193,14 @@ const char index_html[] PROGMEM = R"rawliteral(
     if (data.rad !== undefined) { document.getElementById('rad').value = data.rad; u('rad', data.rad); }
     if (data.range !== undefined) { document.getElementById('range').value = data.range; u('range', data.range); }
     if (data.mspace !== undefined) { document.getElementById('mspace').value = data.mspace; u('mspace', data.mspace); }
+    if (data.dyn !== undefined) { document.getElementById('dyn').value = data.dyn; u('dyn', data.dyn); }
     if (data.frame !== undefined) { document.getElementById('frame').value = data.frame; u('frame', data.frame/1000); }
-    if (data.mapzoom !== undefined) { document.getElementById('mapzoom').value = data.mapzoom; u('mapzoom', data.mapzoom/100); }
+    if (data.mapzoom !== undefined) {
+      const mz = document.getElementById('mapzoom');
+      mz.value = data.mapzoom;
+      // BUGFIX-NOTE: use effective (possibly clamped) slider value for consistent preview text.
+      u('mapzoom', mz.value);
+    }
     if (data.cont !== undefined) { document.getElementById('cont').value = data.cont; u('cont', data.cont/100); }
     if (data.shape !== undefined) { document.getElementById('shape').value = data.shape; u('shape', data.shape/10); }
     if (data.edgec !== undefined) { document.getElementById('edgec').value = data.edgec; u('edgec', data.edgec/100); }
@@ -1025,17 +1230,50 @@ const char index_html[] PROGMEM = R"rawliteral(
     saveBtn.classList.add('pulse');
   }
   function showControls() {
-    const t = parseInt(document.getElementById('mType').value);
+    const t = parseInt(document.getElementById('mType').value, 10);
     const isNoise = t <= 2;
-    document.getElementById('angle').closest('.slider-row').style.display = (t === 0) ? '' : 'none';
-    document.getElementById('rad').closest('.slider-row').style.display = (t >= 1 && t <= 2) ? '' : 'none';
-    document.getElementById('frame').closest('.slider-row').style.display = isNoise ? '' : 'none';
-    document.getElementById('shape').closest('.slider-row').style.display = isNoise ? '' : 'none';
-    document.getElementById('mapzoom').closest('.slider-row').style.display = isNoise ? '' : 'none';
-    // mspace bleibt immer sichtbar, aber Label wechselt je nach Modus
-    document.getElementById('msLabel').textContent = isNoise ? 'Motor Spacing (cm)' : 'Phasenversatz (°/Motor)';
-    const msVal = document.getElementById('mspace').value;
-    document.getElementById('msV').innerText = isNoise ? msVal + ' cm' : Math.round(msVal * 3.6) + '°';
+    const isWave = t >= 3;
+
+    document.getElementById('cLinear').style.display = (t === 0) ? 'block' : 'none';
+    document.getElementById('cRadius').style.display = (t >= 1 && t <= 2) ? 'block' : 'none';
+
+    // Noise-only controls ein/ausblenden
+    const noiseOnlyIds = ['pick-frame', 'pick-mapzoom'];
+    noiseOnlyIds.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.closest('.slider-row').style.display = isNoise ? '' : 'none';
+    });
+
+    // mspace: label wechseln
+    const msEl = document.getElementById('mspace');
+    if (msEl) {
+      const msLabel = msEl.closest('.slider-row').querySelector('label');
+      const msV = document.getElementById('msV');
+      if (isWave) {
+        msLabel.childNodes[0].textContent = 'Phasenversatz (°/Motor) ';
+        if (msV) msV.textContent = Math.round(parseFloat(msEl.value) * 3.6) + '°';
+      } else {
+        msLabel.childNodes[0].textContent = 'Motor Spacing (cm) ';
+        if (msV) msV.textContent = msEl.value + ' cm';
+      }
+    }
+
+    // shape: label wechseln je nach Wellenform
+    const shapeLabel = document.getElementById('shape') &&
+      document.getElementById('shape').closest('.slider-row').querySelector('label');
+    if (shapeLabel) {
+      if (t === 5) shapeLabel.childNodes[0].textContent = 'Duty Cycle ';
+      else if (t === 4) shapeLabel.childNodes[0].textContent = 'Sägezahn-Kurve ';
+      else shapeLabel.childNodes[0].textContent = 'Form (Z-Shape) / Kantenschärfe ';
+    }
+
+    // edgec: label wechseln
+    const edgeLabel = document.getElementById('edgec') &&
+      document.getElementById('edgec').closest('.slider-row').querySelector('label');
+    if (edgeLabel) {
+      edgeLabel.childNodes[0].textContent = isWave ? 'Flankenschärfe ' : 'Edge Contrast / Form ';
+    }
+
   }
   function applyConfig(cfg) {
     currentCfg = { ...cfg };
@@ -1050,11 +1288,13 @@ const char index_html[] PROGMEM = R"rawliteral(
     document.getElementById('rad').value = Math.round(cfg.radius);
     document.getElementById('range').value = Math.round(cfg.rangeDeg);
     document.getElementById('mspace').value = Math.round(cfg.motorSpacingCm);
+    document.getElementById('dyn').value = (cfg.dynMode !== undefined) ? cfg.dynMode : 1;
     document.getElementById('frame').value = Math.round(cfg.framesize * 1000);
-    document.getElementById('mapzoom').value = 100;
+    // BUGFIX-NOTE: default to 1.0x equivalent to avoid collapsed spacing on startup.
+    document.getElementById('mapzoom').value = 10;
     document.getElementById('cont').value = Math.round(cfg.contrast * 100);
     document.getElementById('shape').value = Math.round(cfg.zShape * 10);
-    document.getElementById('edgec').value = 29;
+    document.getElementById('edgec').value = 100;
     document.getElementById('fan').value = cfg.fanSpeed || 0;
     document.getElementById('lamp').value = cfg.lampBrightness || 0;
 
@@ -1063,11 +1303,12 @@ const char index_html[] PROGMEM = R"rawliteral(
     u('rad', cfg.radius);
     u('range', cfg.rangeDeg);
     u('mspace', cfg.motorSpacingCm);
+    u('dyn', (cfg.dynMode !== undefined) ? cfg.dynMode : 1);
     u('frame', cfg.framesize);
-    u('mapzoom', 1.0);
+    u('mapzoom', 10);
     u('cont', cfg.contrast);
     u('shape', cfg.zShape);
-    u('edgec', 0.29);
+    u('edgec', 1.0);
     u('fan', cfg.fanSpeed || 0);
     u('lamp', cfg.lampBrightness || 0);
 
@@ -1084,15 +1325,31 @@ const char index_html[] PROGMEM = R"rawliteral(
     s.className = "status error";
     s.innerText = "Error: " + e;
   }
+
+  function enforceStartupDefaults(isOnline) {
+    // Autostart: sofort loslegen
+    if (!r) {
+      toggle();
+    } else {
+      if (isOnline) fetch("/set?run=1").then(ok).catch(err);
+      syncCfgFromUI();
+      restartAnimation();
+    }
+  }
+
   function init() {
     fetch("/config").then(r => r.json()).then(cfg => {
+      boardOnline = true;
       offlineToggle.value = 0;
       offlineVal.innerText = "OFF";
       applyConfig(cfg);
+      enforceStartupDefaults(true);
     }).catch(() => {
+      boardOnline = false;
       offlineToggle.value = 1;
       offlineVal.innerText = "ON";
       applyConfig(offlineCfg);
+      enforceStartupDefaults(false);
     });
     updatePickUI();
   }
@@ -1109,6 +1366,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     currentCfg.radius = parseFloat(document.getElementById('rad').value);
     currentCfg.rangeDeg = parseFloat(document.getElementById('range').value);
     currentCfg.motorSpacingCm = parseFloat(document.getElementById('mspace').value);
+    currentCfg.dynMode = parseInt(document.getElementById('dyn').value, 10);
     currentCfg.framesize = parseFloat(document.getElementById('frame').value) / 1000.0;
     currentCfg.contrast = parseFloat(document.getElementById('cont').value) / 100.0;
     currentCfg.zShape = parseFloat(document.getElementById('shape').value) / 10.0;
