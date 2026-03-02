@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Abstrakt</title>
+  <style>
+    body { font-family: Helvetica, Arial, sans-serif; margin: 24px; color: #111; }
+    h2 { font-size: 14pt; margin: 16px 0 6px; font-weight: 700; }
+    p { font-size: 11pt; margin: 0 0 10px; line-height: 1.35; }
+  </style>
+</head>
+<body>
+  <h2>Systemuebersicht</h2>
+  <p>Die Steuerung regelt vier Schrittmotoren in einer linearen Anordnung. Jeder Motor erhaelt Zielwinkel aus einem kontinuierlichen Noise-Feld. Das Feld basiert auf Simplex/Perlin-aehnlichem Gradient Noise. Die Firmware laeuft autark auf einem ESP32. Die Bedienung erfolgt ueber eine lokale Web-UI.</p>
+
+  <h2>Bewegungsmodell</h2>
+  <p>Ein virtueller Punkt durchlaeuft das Noise-Feld. Die Position des Punktes ist zeitabhaengig und folgt definierten Pfadtypen. Typen sind linear, Kreis und Acht. Jeder Motor tastet das Feld mit einem Offsetschritt ab. Dadurch entstehen korrelierte, aber nicht identische Bewegungen. Die Noise-Werte werden zu Winkelkommandos skaliert.</p>
+
+  <h2>Regelgroessen</h2>
+  <p>Die Hauptparameter sind Geschwindigkeit, Framesize, Kontrast und Z-Form. Framesize bestimmt die raeumliche Skala des Feldes. Kontrast bestimmt die Amplitude der Bewegungen. Z-Form steuert die Verteilung der Werte. Ein zusaetzlicher Zoom regelt nur die Kameraskalierung in der Vorschau. Die Regler wirken in Echtzeit.</p>
+
+  <h2>Bedienung und Zustand</h2>
+  <p>Die UI stellt Start/Stop, Pfadwahl und Parameterregler bereit. Der aktuelle Motorwinkel ist numerisch und grafisch sichtbar. Presets koennen in acht Speicherplaetzen abgelegt und geladen werden. Die Speicherung ist selektiv pro Regler moeglich. Alle Daten bleiben lokal im Browser. Es ist kein Internetzugang erforderlich.</p>
+
+  <h2>Anwendungszweck</h2>
+  <p>Die Steuerung dient der Erzeugung organischer, nicht periodischer Bewegungen. Sie eignet sich fuer kinetische Installationen und Testaufbauten. Der Ansatz reduziert wiederholende Muster und erhoeht die Vielfalt. Die Parameter erlauben kontrollierte Variationen. Das System ist fuer den Dauerbetrieb ausgelegt.</p>
+</body>
+</html>

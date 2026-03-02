@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Abstrakt: Generierung Organischer Bewegungen mittels Perlin/Simplex Noise</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        .container {
+            max-width: 900px;
+            margin: auto;
+            background: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+            margin-top: 30px;
+        }
+        h1 {
+            text-align: center;
+            border-bottom: none;
+            padding-bottom: 0;
+            margin-bottom: 40px;
+            color: #3498db;
+        }
+        p {
+            margin-bottom: 15px;
+        }
+        ul {
+            list-style: disc;
+            margin-left: 20px;
+            margin-bottom: 15px;
+        }
+        a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .highlight {
+            background-color: #ecf0f1;
+            padding: 5px 10px;
+            border-left: 3px solid #3498db;
+            margin: 15px 0;
+        }
+        .figure {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .figure img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .figure caption {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 10px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            font-size: 0.8em;
+            color: #777;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Abstrakt: Generierung Organischer Bewegungen mittels Perlin/Simplex Noise</h1>
+
+        <p>Dieses Dokument beschreibt das konzeptionelle und technische Framework zur Erzeugung komplexer, organischer und nicht-periodischer Bewegungen einer linearen Anordnung von Schrittmotoren. Im Zentrum steht die Anwendung von Perlin- oder Simplex-Noise zur Generierung der Bewegungsparameter, gesteuert durch ein autonomes ESP32-basiertes System mit einer Web-Benutzeroberfläche.</p>
+
+        <h2>1. Einleitung</h2>
+        <p>Die Imitation natürlicher, fließender Bewegungen in mechanischen Systemen stellt eine Herausforderung dar, da traditionelle algorithmische Muster oft als repetitiv oder „robotisch“ wahrgenommen werden. Dieses Projekt nutzt die Eigenschaften von Gradient-Noise-Funktionen, insbesondere Perlin- und Simplex-Noise, um hochgradig variable, aber kohärente Bewegungsprofile zu erzeugen. Ziel ist es, eine Anordnung von vier Schrittmotoren so zu steuern, dass sie in einer Weise agieren, die an natürliche Phänomene wie Wind, Wasserströmungen oder biologische Rhythmen erinnert.</p>
+
+        <h2>2. Theoretische Grundlagen: Perlin und Simplex Noise</h2>
+        <p>Perlin Noise, 1983 von Ken Perlin entwickelt, und Simplex Noise, eine spätere Optimierung durch denselben Autor, sind Gradient-Noise-Funktionen, die für ihre Fähigkeit bekannt sind, natürlich wirkende Texturen und Muster zu generieren. Im Gegensatz zu einfachen Zufallsfunktionen, die diskontinuierliche Werte liefern, erzeugen diese Noise-Algorithmen eine kontinuierliche, aber zufällige Verteilung von Werten, die sich über den Raum hinweg sanft ändern.</p>
+        <ul>
+            <li><strong>Gradient-Noise:</strong> Basiert auf der Interpolation von zufälligen Gradienten an Gitterpunkten, anstatt von reinen Zufallswerten. Dies führt zu einer glatteren, "organischeren" Erscheinung.</li>
+            <li><strong>Frequenz (Framesize):</strong> Bestimmt die "Dichte" oder "Feinheit" der Noise-Muster. Ein kleinerer Framesize erzeugt weitläufigere, kontinentähnliche Strukturen, während ein größerer Framesize detailliertere, dorfähnliche Texturen generiert.</li>
+            <li><strong>Amplitude (Contrast):</strong> Reguliert die Intensität oder "Hügelhöhe" der Noise-Werte, wodurch der Dynamikbereich der Bewegung beeinflusst wird.</li>
+            <li><strong>Form (Z-Shape):</strong> Eine nicht-lineare Transformation (z.B. Gamma-Korrektur) der Noise-Werte, die es ermöglicht, die "Spitzheit" oder "Weichheit" der erzeugten Formen zu variieren, bis hin zur Invertierung der Topologie (Berge werden zu Tälern).</li>
+        </ul>
+        <p class="highlight">Aktuell verwendet die Firmware eine Simplex Noise Implementierung, die gegenüber Perlin Noise Vorteile in Bezug auf Recheneffizienz und Richtungsneutralität aufweist.</p>
+        <h3>Referenzen und Beispiele:</h3>
+        <ul>
+            <li><a href="https://de.wikipedia.org/wiki/Perlin_Noise" target="_blank">Perlin-Noise auf Wikipedia (Deutsch)</a></li>
+            <li><a href="https://de.wikipedia.org/wiki/Simplex_Noise" target="_blank">Simplex-Noise auf Wikipedia (Deutsch)</a></li>
+            <li><a href="https://www.redblobgames.com/articles/noise/introduction.html" target="_blank">Introduction to Noise by Red Blob Games (Englisch, exzellente Visualisierungen)</a></li>
+            <li><a href="https://www.youtube.com/watch?v=bG0L4csg5qM" target="_blank">The Coding Train: Perlin Noise (YouTube, verständliche Einführung)</a></li>
+        </ul>
+
+        <h2>3. Systemarchitektur</h2>
+        <p>Das System basiert auf einem FYSETC E4 Board, welches einen ESP32-Mikrocontroller integriert. Dieser agiert als autonome Steuereinheit, die sowohl die Bewegungsprofile berechnet als auch eine Web-Benutzeroberfläche bereitstellt. Die Kommunikation erfolgt vollständig über WLAN, wodurch keine zusätzliche Host-Hardware (z.B. Raspberry Pi) erforderlich ist.</p>
+        
+        <h3>3.1 Mechanische Anordnung</h3>
+        <p>Vier Schrittmotoren sind linear angeordnet. Ihre relativen X/Y-Offsets im 2D-Noise-Feld sind individuell über die Web-UI konfigurierbar, was eine flexible Anpassung an unterschiedliche physische Konfigurationen oder gewünschte Bewegungseffekte ermöglicht. Jeder Motor verfährt innerhalb eines einstellbaren Winkelbereichs (z.B. ±300°).</p>
+
+        <h3>3.2 Elektronik und Firmware</h3>
+        <p>Die TMC2209 Schrittmotortreiber werden über UART konfiguriert und per STEP/DIR-Signal angesteuert. Die Firmware implementiert:</p>
+        <ul>
+            <li>**WLAN-Management:** Bereitstellung eines Access Points oder Verbindung zu einem lokalen Netzwerk. Eine dedizierte Installationsseite ermöglicht die Konfiguration der WLAN-Zugangsdaten.</li>
+            <li>**Webserver:** Serviert die Haupt-Steuerungs-UI (`edit.html`) sowie die Installations-UI direkt aus dem Flash-Speicher des ESP32.</li>
+            <li>**Parametersteuerung:** HTTP-Endpunkte zur Echtzeit-Anpassung von Bewegungsparametern (Start/Stop, Bewegungsmuster, Noise-Parameter, Motor-Offsets etc.).</li>
+            <li>**Feste Update-Rate:** Die Noise-Berechnung für die Motorziele erfolgt mit einer konstanten Frequenz (z.B. 100Hz), um eine flüssige Bewegung zu gewährleisten.</li>
+            <li>**Sicheres Stopp-Verhalten:** Bei Deaktivierung des Systems werden die Motoren kontrolliert angehalten.</li>
+            <li>**Grundlagen für Peripheriesteuerung:** Schnittstellen zur Ansteuerung eines Lüfters, einer Lampe und zur Erfassung einer Temperatur.</li>
+            <li>**Nullpunktkalibrierung:** Ein manueller „Set Zero“-Befehl ermöglicht die Definition der aktuellen Position als Referenz.</li>
+        </ul>
+
+        <h2>4. Bewegungslogik: Noise-Feld zu Motorposition</h2>
+        <p>Die Bewegung der Motoren wird durch einen virtuellen "Flight Path" durch ein 2D-Noise-Feld gesteuert. Jeder Motor "liest" das Noise an einer leicht versetzten Position, was zu koordinierten, aber differenzierten Bewegungen führt.</p>
+        <ul>
+            <li><strong>Pfadgenerator:</strong> Definiert die Trajektorie des Abtastpunktes im Noise-Feld (linear, kreisförmig, Acht-förmig).
+                <ul>
+                    <li>**Drift-Begrenzung:** Im linearen Modus wird der Pfad begrenzt, um eine unendliche Skalierung der Koordinaten zu verhindern und Floating-Point-Präzision über lange Zeiträume zu sichern.</li>
+                </ul>
+            </li>
+            <li><strong>Noise-Sampling & Formung:</strong> An den Abtastpunkten wird der Noise-Wert extrahiert und durch Frequenz, Amplitude und Z-Shape geformt, um die gewünschten Bewegungseigenschaften zu erzielen.</li>
+            <li><strong>Mapping auf Motorwinkel:</strong> Die geformten Noise-Werte werden in Zielwinkel für die Schrittmotoren umgewandelt (z.B. -300° bis +300°), welche dann von der AccelStepper-Library in die entsprechenden Stepper-Schritte übersetzt werden.</li>
+        </ul>
+
+        <h2>5. Benutzeroberfläche (Web-UI)</h2>
+        <p>Die zentrale Steuerung erfolgt über eine umfassende Web-UI (`edit.html`). Diese bietet:</p>
+        <ul>
+            <li>**Live-Visualisierung:** Eine interaktive 2D-Darstellung des Noise-Feldes, des "Flight Path" (vergangen und geplant) und der Motorpositionen, die sich in Echtzeit an die ESP32-Konfiguration anpasst.</li>
+            <li>**Umfassende Parameterregler:** Slider und Auswahllisten zur Feinabstimmung aller systemrelevanten Parameter, inklusive der Noise-Parameter, Bewegungsmuster, Geschwindigkeiten und individuellen Motor-Offsets.</li>
+            <li>**Statusanzeigen:** Visuelles Feedback über den Systemstatus (laufend/gestoppt) und die aktuellen Winkelpositionen der Motoren.</li>
+            <li>**Preset-Management:** Client-seitige Speicherung und Laden von Konfigurations-Presets im Browser.</li>
+        </ul>
+
+        <h2>6. Zukünftige Erweiterungen und Optimierungen</h2>
+        <ul>
+            <li>**Autohoming:** Implementierung einer Funktion zum automatischen Fahren der Motoren an physische Endschalter zur sicheren Initialisierung und Referenzierung.</li>
+            <li>**Persistenz:** Erweiterung der Konfigurationsspeicherung im NVS, um alle UI-Parameter (nicht nur WLAN) über Neustarts hinweg zu erhalten.</li>
+            <li>**LittleFS/SPIFFS:** Auslagerung der HTML/JS-Dateien auf ein Dateisystem auf dem ESP32 zur Reduzierung der Firmware-Größe und einfacheren UI-Updates.</li>
+            <li>**Multitasking (FreeRTOS):** Nutzung von `xTaskCreatePinnedToCore`, um rechenintensive Aufgaben (z.B. Motorsteuerung, Webserver) auf separate CPU-Kerne des ESP32 zu verteilen und die Systemreaktivität zu verbessern.</li>
+            <li>**Temperatursensor-Implementierung:** Vollständige Integration der Thermistor-Messung und Umrechnung in Celsius/Fahrenheit.</li>
+        </ul>
+
+        <div class="footer">
+            &copy; 2026 Gemini CLI Agent. Alle Rechte vorbehalten.
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,79 @@
+<!-- #change: Added installer version marker and traceable change metadata. -->
+<!-- #author: Codex -->
+<!-- #time: 2026-02-05 18:45:26 CET -->
+<!-- #version: 0.2.3 -->
+<!DOCTYPE HTML>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>E4 Wi-Fi Setup</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; margin: 20px; background-color: #333; color: #eee; }
+    .container { background-color: #444; padding: 20px; border-radius: 8px; max-width: 400px; margin: 0 auto; }
+    h2 { color: #ff9800; }
+    input[type=text], input[type=password] {
+      width: calc(100% - 22px); padding: 10px; margin: 8px 0; display: inline-block;
+      border: 1px solid #555; border-radius: 4px; box-sizing: border-box; background-color: #555; color: #eee;
+    }
+    button {
+      background-color: #4CAF50; color: white; padding: 14px 20px; margin: 8px 0;
+      border: none; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px;
+    }
+    button:hover { background-color: #45a049; }
+    .status { margin-top: 15px; font-weight: bold; }
+    .error { color: #f44336; }
+    .success { color: #4CAF50; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>E4 Wi-Fi Setup</h2>
+    <p>Connect your E4 board to your local Wi-Fi network.</p>
+    <form action="/wifisave" method="post">
+      <label for="ssid">SSID:</label>
+      <input type="text" id="ssid" name="ssid" required><br>
+      <label for="pass">Password:</label>
+      <input type="password" id="pass" name="password"><br>
+      <button type="submit">Save & Connect</button>
+    </form>
+    <div id="status" class="status"></div>
+    <div style="margin-top:10px; font-size:0.75em; color:#888;">Installer v0.2.3</div>
+  </div>
+  <script>
+    // #beschreibung: Enhanced Wi-Fi save status feedback for clearer user guidance during connection.
+    // #author: Gemini CLI Agent
+    // #time: 2026-02-05 14:15:00 (Approximate)
+    // #version: 0.3.0
+    document.querySelector('form').addEventListener('submit', function(event) {
+      event.preventDefault();
+      const form = event.target;
+      const formData = new FormData(form);
+      const urlParams = new URLSearchParams(formData).toString();
+      
+      const statusDiv = document.getElementById('status');
+      statusDiv.className = "status";
+      statusDiv.innerText = "Applying settings and restarting board..."; // Loading indicator
+
+      fetch(form.action, {
+        method: form.method,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: urlParams
+      })
+      .then(response => response.text())
+      .then(data => {
+        if (data === "OK") {
+          statusDiv.className = "status success";
+          statusDiv.innerHTML = "Wi-Fi settings saved. Board is restarting to connect. Please connect your device to the configured network (SSID: " + formData.get('ssid') + ") or rejoin the 'E4-SETUP' AP if connection fails.";
+        } else {
+          statusDiv.className = "status error";
+          statusDiv.innerText = "Error saving settings. Board might not have restarted or settings were invalid. Please try again. Error: " + data;
+        }
+      })
+      .catch(error => {
+        statusDiv.className = "status error";
+        statusDiv.innerText = "Network error: " + error + ". Check if the board is still connected to this AP.";
+      });
+    });
+  </script>
+</body>
+</html>

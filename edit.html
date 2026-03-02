@@ -1,0 +1,1107 @@
+<!-- #change: Added edit UI for runtime config viewing and control. -->
+<!-- #author: Codex -->
+<!-- #time: 2026-02-05 20:14:14 CET -->
+<!-- #version: 0.3.3 -->
+<!DOCTYPE HTML>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>E4 Config Editor</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; margin: 20px; background-color: #333; color: #eee; }
+    .container { background-color: #444; padding: 20px; border-radius: 8px; max-width: 1200px; margin: 0 auto; }
+    
+    .main-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    #left-column, #right-column {
+      background-color: #3a3a3a;
+      padding: 15px;
+      border-radius: 8px;
+    }
+
+    h2 { color: #ff9800; }
+    label { display: block; text-align: left; font-size: 0.8em; color: #bbb; margin-top: 12px; text-transform: uppercase; }
+    select { width: 100%; padding: 10px; margin-top: 6px; background-color: #555; color: #eee; border: 1px solid #666; border-radius: 4px; }
+    input[type=range] { width: 100%; margin: 6px 0; }
+    .val { float: right; color: #4CAF50; font-weight: bold; }
+    button { background-color: #4CAF50; color: white; padding: 12px 18px; margin: 10px 0; border: none; border-radius: 4px; cursor: pointer; width: 100%; font-size: 16px; }
+    .status { margin-top: 10px; font-weight: bold; }
+    .error { color: #f44336; }
+    .ok { color: #4CAF50; }
+    canvas { border: 1px solid #555; background-color: #333; display: block; margin: 12px auto; width: 100%; height: auto; }
+    .note { font-size: 0.85em; color: #aaa; max-width: 520px; margin: 0 auto 8px; }
+    .angles { text-align: left; font-size: 0.85em; color: #bbb; margin-top: 8px; }
+    .angle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 8px; }
+    .angle-card { background: #2d2d2d; border: 1px solid #555; border-radius: 6px; padding: 6px; }
+    .angle-card .label { font-size: 0.75em; color: #bbb; }
+    .angle-card .value { font-size: 0.95em; color: #fff; }
+    .gauge { width: 48px; height: 48px; border: 1px solid #666; border-radius: 50%; margin: 6px auto 0; position: relative; }
+    .needle { position: absolute; left: 50%; top: 50%; width: 2px; height: 18px; background: #ff9800; transform-origin: 50% 100%; }
+    .storage { display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px; margin-top: 10px; }
+    .slot { background: #2d2d2d; border: 1px solid #555; color: #eee; padding: 8px 0; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
+    .slot.active { outline: 2px solid #4CAF50; }
+    .savebtn { background: #5a0000; color: #fff; padding: 8px 0; border: 1px solid #7a0000; border-radius: 6px; cursor: pointer; font-weight: bold; }
+    .savebtn.armed { background: #8a0000; }
+    .savebtn.blink { animation: blinkRed 0.2s steps(1, end) 1; }
+    .savebtn.pulse { animation: pulseRed 0.5s ease-in-out 2; }
+    .selectbtn { background: #555; color: #eee; padding: 8px 0; border: 1px solid #666; border-radius: 6px; cursor: pointer; }
+    .slider-row { display: grid; grid-template-columns: 28px 1fr; gap: 8px; align-items: center; }
+    .pick { width: 26px; height: 26px; border-radius: 6px; border: 1px solid #666; background: #333; color: #eee; cursor: pointer; }
+    .pick.on { background: #4CAF50; color: #111; border-color: #4CAF50; }
+    .stoprow { margin-top: 10px; }
+    .hidden { display: none; }
+    @keyframes blinkRed { 0%, 100% { filter: brightness(1.0); } 50% { filter: brightness(1.8); } }
+    @keyframes pulseRed { 0%, 100% { filter: brightness(1.0); } 50% { filter: brightness(1.6); } 100% { filter: brightness(1.0); } }
+
+    @media (max-width: 900px) {
+      .main-layout {
+        grid-template-columns: 1fr;
+      }
+      body { margin: 10px; }
+      .container { padding: 12px; }
+      .angle-grid { grid-template-columns: repeat(2, 1fr); }
+      .storage { grid-template-columns: repeat(5, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>E4 Config Editor</h2>
+    <div class="main-layout">
+      <div id="left-column">
+        <div class="note">Preview mirrors the Perlin/Simplex visualizer (offline demo supported). Framesize = Noise-Scale, Map Zoom = Kamera.</div>
+        <label>Visualizer Mode</label>
+        <select id="vizMode" onchange="render()">
+          <option value="0">Noise Field</option>
+          <option value="1">Moving Bar</option>
+        </select>
+        <canvas id="noiseCanvas" width="640" height="640"></canvas>
+        <div id="angles" class="angles"></div>
+        <div class="angle-grid" id="angleGrid">
+          <div class="angle-card"><div class="label">M1</div><div class="value" id="angleVal1">0.0°</div><div class="gauge"><div class="needle" id="needle1"></div></div></div>
+          <div class="angle-card"><div class="label">M2</div><div class="value" id="angleVal2">0.0°</div><div class="gauge"><div class="needle" id="needle2"></div></div></div>
+          <div class="angle-card"><div class="label">M3</div><div class="value" id="angleVal3">0.0°</div><div class="gauge"><div class="needle" id="needle3"></div></div></div>
+          <div class="angle-card"><div class="label">M4</div><div class="value" id="angleVal4">0.0°</div><div class="gauge"><div class="needle" id="needle4"></div></div></div>
+        </div>
+        <div class="storage" id="storageRow">
+          <button id="selectAll" class="selectbtn" onclick="toggleAll()">ALL</button>
+          <button class="slot" onclick="slotClick(1)">1</button>
+          <button class="slot" onclick="slotClick(2)">2</button>
+          <button class="slot" onclick="slotClick(3)">3</button>
+          <button class="slot" onclick="slotClick(4)">4</button>
+          <button class="slot" onclick="slotClick(5)">5</button>
+          <button class="slot" onclick="slotClick(6)">6</button>
+          <button class="slot" onclick="slotClick(7)">7</button>
+          <button class="slot" onclick="slotClick(8)">8</button>
+          <button id="saveMode" class="savebtn" onclick="toggleSaveMode()">SPEICHERN</button>
+        </div>
+        <div class="stoprow">
+          <button id="btn" onclick="toggle()">START SYSTEM</button>
+          <button id="btn_zero" onclick="setZero()" style="background:#ff9800; margin-top: 10px;">ALIGN (SET 0°)</button>
+        </div>
+      </div>
+      <div id="right-column">
+        <label>Movement Pattern</label>
+        <select id="mType" onchange="u('type', this.value); showControls();">
+          <option value="0">LINEAR (Wind)</option>
+          <option value="1">CIRCLE (Loop)</option>
+          <option value="2">FIGURE 8 (Organic)</option>
+          <option value="3">SINE (Wave)</option>
+          <option value="4">SAWTOOTH</option>
+          <option value="5">SQUARE</option>
+        </select>
+        
+        <div class="slider-row">
+          <button id="pick-speed" class="pick" onclick="togglePick('speed')">S</button>
+          <div>
+            <label>Flight Speed <span id="sV" class="val"></span></label>
+            <input id="speed" type="range" min="0" max="200" value="50" oninput="u('speed', this.value/100)">
+          </div>
+        </div>
+
+        <div id="cLinear">
+          <div class="slider-row">
+            <button id="pick-angle" class="pick" onclick="togglePick('angle')">A</button>
+            <div>
+              <label>Direction (Angle) / Bar Angle <span id="aV" class="val"></span></label>
+              <input id="angle" type="range" min="0" max="360" value="0" oninput="u('angle', this.value)">
+            </div>
+          </div>
+        </div>
+
+        <div id="cRadius" class="hidden">
+          <div class="slider-row">
+            <button id="pick-rad" class="pick" onclick="togglePick('rad')">R</button>
+            <div>
+              <label>Path Radius <span id="rV" class="val"></span></label>
+              <input id="rad" type="range" min="1" max="500" value="50" oninput="u('rad', this.value)">
+            </div>
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-range" class="pick" onclick="togglePick('range')">G</button>
+          <div>
+            <label>Max Range (deg) <span id="rdV" class="val"></span></label>
+            <input id="range" type="range" min="30" max="360" value="300" oninput="u('range', this.value)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-mspace" class="pick" onclick="togglePick('mspace')">M</button>
+          <div>
+            <label>Motor Spacing (cm) <span id="msV" class="val"></span></label>
+            <input id="mspace" type="range" min="5" max="100" value="25" oninput="u('mspace', this.value)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-dyn" class="pick" onclick="togglePick('dyn')">D</button>
+          <div>
+            <label>Drive Dynamics <span id="dynV" class="val"></span></label>
+            <input id="dyn" type="range" min="0" max="2" step="1" value="1" oninput="u('dyn', this.value)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-frame" class="pick" onclick="togglePick('frame')">F</button>
+          <div>
+            <label>Framesize / Dicke <span id="fsV" class="val"></span></label>
+            <input id="frame" type="range" min="1" max="500" value="20" oninput="u('frame', this.value/1000)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-mapzoom" class="pick" onclick="togglePick('mapzoom')">Z</button>
+          <div>
+            <label>Map Zoom / Anzahl <span id="mzV" class="val"></span></label>
+            <input id="mapzoom" type="range" min="1" max="50" value="10" oninput="u('mapzoom', this.value)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-cont" class="pick" onclick="togglePick('cont')">C</button>
+          <div>
+            <label>Contrast <span id="cV" class="val"></span></label>
+            <input id="cont" type="range" min="0" max="200" value="100" oninput="u('cont', this.value/100)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-shape" class="pick" onclick="togglePick('shape')">Z</button>
+          <div>
+            <label>Form (Z-Shape) / Kantenschärfe <span id="zV" class="val"></span></label>
+            <input id="shape" type="range" min="-50" max="50" value="10" oninput="u('shape', this.value/10)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-edgec" class="pick" onclick="togglePick('edgec')">E</button>
+          <div>
+            <label>Edge Contrast / Form <span id="ecV" class="val"></span></label>
+            <input id="edgec" type="range" min="0" max="200" value="100" oninput="u('edgec', this.value/100)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-fan" class="pick" onclick="togglePick('fan')">F</button>
+          <div>
+            <label>PWM Fan <span id="fanV" class="val"></span></label>
+            <input id="fan" type="range" min="0" max="255" value="0" oninput="u('fan', this.value)">
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <button id="pick-lamp" class="pick" onclick="togglePick('lamp')">L</button>
+          <div>
+            <label>Lamp <span id="lampV" class="val"></span></label>
+            <input id="lamp" type="range" min="0" max="255" value="0" oninput="u('lamp', this.value)">
+          </div>
+        </div>
+        
+        <label>Offline Preview: <span id="offlineVal">ON</span></label>
+        <input id="offlineToggle" type="range" min="0" max="1" step="1" value="1" oninput="toggleOffline()">
+      </div>
+    </div>
+    <div id="status" class="status"></div>
+    <div style="margin-top:10px; font-size:0.75em; color:#888;">Editor v0.3.8</div>
+  </div>
+
+  <script>
+  let r = false;
+  const canvas = document.getElementById('noiseCanvas');
+  const ctx = canvas.getContext('2d');
+  const offlineToggle = document.getElementById('offlineToggle');
+  const offlineVal = document.getElementById('offlineVal');
+  const saveBtn = document.getElementById('saveMode');
+  const selectAllBtn = document.getElementById('selectAll');
+  const pickButtons = {
+    speed: document.getElementById('pick-speed'),
+    angle: document.getElementById('pick-angle'),
+    rad: document.getElementById('pick-rad'),
+    range: document.getElementById('pick-range'),
+    mspace: document.getElementById('pick-mspace'),
+    dyn: document.getElementById('pick-dyn'),
+    frame: document.getElementById('pick-frame'),
+    mapzoom: document.getElementById('pick-mapzoom'),
+    cont: document.getElementById('pick-cont'),
+    shape: document.getElementById('pick-shape'),
+    edgec: document.getElementById('pick-edgec'),
+    fan: document.getElementById('pick-fan'),
+    lamp: document.getElementById('pick-lamp')
+  };
+  let currentCfg = null;
+  let boardOnline = false;
+  let animationFrameId = null;
+  let lastTimestamp = 0;
+  let lastFrameDt = 1.0 / 60.0;
+  let flightX = 0;
+  let flightY = 0;
+  let timeAccumulator = 0;
+  const displayedAngles = [0, 0, 0, 0];
+  const displayedAngleVel = [0, 0, 0, 0];
+  const pathHistory = [];
+  const MAX_PATH_HISTORY = 160;
+  let saveArmed = false;
+  const selected = new Set(['speed','angle','rad','range','mspace','dyn','frame','mapzoom','cont','shape','edgec','fan','lamp']);
+
+  const offlineCfg = {
+    running: 1,
+    moveType: 2,
+    speed: 0.7,
+    angle: 45,
+    radius: 120,
+    framesize: 0.02,
+    contrast: 1.0,
+    zShape: 1.0,
+    rangeDeg: 300,
+    motorSpacingCm: 25,
+    dynMode: 1,
+    fanSpeed: 0,
+    lampBrightness: 0
+  };
+
+  // 3-step profile that jointly scales speed, acceleration and target dynamics.
+  // 0=Langsam, 1=Normal, 2=Rasant
+  const dynamicsProfiles = [
+    { label: "LANGSAM", speedScale: 0.60, accelScale: 0.55, goalScale: 0.75 },
+    { label: "NORMAL",  speedScale: 1.00, accelScale: 1.00, goalScale: 1.00 },
+    { label: "RASANT",  speedScale: 1.65, accelScale: 1.85, goalScale: 1.30 }
+  ];
+
+  function getDynamicsMode() {
+    const dynEl = document.getElementById('dyn');
+    if (!dynEl) return 1;
+    const mode = parseInt(dynEl.value, 10);
+    if (!Number.isFinite(mode)) return 1;
+    return Math.max(0, Math.min(2, mode));
+  }
+
+  function getDynamicsProfile() {
+    return dynamicsProfiles[getDynamicsMode()] || dynamicsProfiles[1];
+  }
+
+  // --- Simplex Noise (same style as perlin_visualizer.html) ---
+  function SimplexNoise2D() {
+    const F2 = 0.5 * (Math.sqrt(3.0) - 1.0);
+    const G2 = (3.0 - Math.sqrt(3.0)) / 6.0;
+    const p = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) p[i] = Math.floor(Math.random() * 256);
+    const perm = new Uint8Array(512);
+    const permMod12 = new Uint8Array(512);
+    for (let i = 0; i < 512; i++) {
+      perm[i] = p[i & 255];
+      permMod12[i] = perm[i] % 12;
+    }
+    function grad(hash, x, y) {
+      const h = hash % 6;
+      const u = h < 4 ? x : y;
+      const v = h < 4 ? y : x;
+      return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+    }
+    return function(x, y) {
+      let s = (x + y) * F2;
+      let i = Math.floor(x + s);
+      let j = Math.floor(y + s);
+      let t = (i + j) * G2;
+      let X0 = i - t;
+      let Y0 = j - t;
+      let x0 = x - X0;
+      let y0 = y - Y0;
+      let i1, j1;
+      if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+      let x1 = x0 - i1 + G2;
+      let y1 = y0 - j1 + G2;
+      let x2 = x0 - 1.0 + 2.0 * G2;
+      let y2 = y0 - 1.0 + 2.0 * G2;
+      const ii = i & 255;
+      const jj = j & 255;
+      let t0 = 0.5 - x0 * x0 - y0 * y0;
+      let n0 = 0.0;
+      if (t0 >= 0) {
+        t0 *= t0;
+        n0 = t0 * t0 * grad(permMod12[ii + perm[jj]], x0, y0);
+      }
+      let t1 = 0.5 - x1 * x1 - y1 * y1;
+      let n1 = 0.0;
+      if (t1 >= 0) {
+        t1 *= t1;
+        n1 = t1 * t1 * grad(permMod12[ii + i1 + perm[jj + j1]], x1, y1);
+      }
+      let t2 = 0.5 - x2 * x2 - y2 * y2;
+      let n2 = 0.0;
+      if (t2 >= 0) {
+        t2 *= t2;
+        n2 = t2 * t2 * grad(permMod12[ii + 1 + perm[jj + 1]], x2, y2);
+      }
+      return 70.0 * (n0 + n1 + n2);
+    };
+  }
+  const noise2D = SimplexNoise2D();
+
+  function convertToGrayscale(noiseVal, contrast, zShape, edgeC) {
+    let nNorm = (noiseVal + 1.0) / 2.0;
+    let exponent = Math.abs(zShape);
+    if (exponent < 0.1) exponent = 0.1;
+    let nShaped = Math.pow(nNorm, exponent);
+    if (zShape < 0) nShaped = 1.0 - nShaped;
+    let finalNoise = (nShaped * 2.0) - 1.0;
+    const edge = 1.0 - Math.abs(finalNoise);
+    const edgeMix = Math.max(0.0, Math.min(2.0, edgeC));
+    const edgeBoost = (edge * 2.0 - 1.0) * edgeMix;
+    let scaledNoise = (finalNoise + edgeBoost) * contrast;
+    let gray = Math.floor(((scaledNoise + 1.0) / 2.0) * 255);
+    return Math.max(0, Math.min(255, gray));
+  }
+
+  function resizeCanvas() {
+    const cssWidth = Math.min(canvas.parentElement.clientWidth, 640);
+    const cssHeight = cssWidth;
+    const dpr = window.devicePixelRatio || 1;
+    const targetW = Math.max(1, Math.floor(cssWidth * dpr));
+    const targetH = Math.max(1, Math.floor(cssHeight * dpr));
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+  }
+
+  // BUGFIX-NOTE: mapzoom was mixed between two semantics (raw 1..50 and legacy /100 scale),
+  // which collapsed motor spacing visually to near-zero at startup.
+  function getMapZoomScale() {
+    const slider = document.getElementById('mapzoom');
+    const raw = parseFloat(slider.value);
+    const max = parseFloat(slider.max || "50");
+    if (!Number.isFinite(raw)) return 1.0;
+    if (max <= 60) {
+      return Math.max(0.2, raw / 10.0); // 1..50 -> 0.2x..5.0x
+    }
+    return Math.max(0.2, raw / 100.0); // legacy 20..300 -> 0.2x..3.0x
+  }
+
+  function getMapZoomDisplayText(rawValue) {
+    const raw = parseFloat(rawValue);
+    const zoom = getMapZoomScale();
+    const stripes = Number.isFinite(raw) ? Math.max(1, Math.round(raw)) : 1;
+    return `${zoom.toFixed(2)}x / ${stripes}`;
+  }
+
+  // BUGFIX-NOTE: keep cm->px conversion independent from current spacing slider value.
+  // Otherwise spacing cancels out (`offsetX * worldScale`) and appears to do nothing.
+  function getWorldScalePxPerCm() {
+    const mapZoom = getMapZoomScale();
+    const referenceSpacingCm = 25.0;
+    const motorSpanPx = canvas.width * 0.6;
+    const baseScale = motorSpanPx / (3.0 * referenceSpacingCm);
+    return baseScale * mapZoom;
+  }
+
+  function drawNoiseField() {
+    if (!currentCfg) return;
+    resizeCanvas();
+    const imageData = ctx.createImageData(canvas.width, canvas.height);
+    const data = imageData.data;
+    const framesize = currentCfg.framesize;
+    const contrast = currentCfg.contrast;
+    const zShape = currentCfg.zShape;
+    const mapOffsetX = flightX;
+    const mapOffsetY = flightY;
+    const edgeC = parseFloat(document.getElementById('edgec').value) / 100.0;
+    const worldScale = getWorldScalePxPerCm();
+    for (let y = 0; y < canvas.height; y++) {
+      for (let x = 0; x < canvas.width; x++) {
+        const wx = (x - canvas.width / 2) / worldScale;
+        const wy = (y - canvas.height / 2) / worldScale;
+        const noiseX = (wx + mapOffsetX) * framesize;
+        const noiseY = (wy + mapOffsetY) * framesize;
+        const noiseVal = noise2D(noiseX, noiseY);
+        const gray = convertToGrayscale(noiseVal, contrast, zShape, edgeC);
+        const index = (y * canvas.width + x) * 4;
+        data[index] = gray;
+        data[index + 1] = gray;
+        data[index + 2] = gray;
+        data[index + 3] = 255;
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }
+
+  // #################################################################
+  // ### MOVING BAR VISUALIZER #######################################
+  // #################################################################
+  // This function draws the "Moving Bar" visualization.
+  // It uses various sliders to control the appearance of one or more shapes.
+  function drawMovingBar() {
+    if (!currentCfg) return;
+
+    // Clear canvas with a black background
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // --- Get Slider Values ---
+    const speed = currentCfg.speed;
+    const rotationAngle = parseFloat(document.getElementById('angle').value); // Use Angle slider for rotation
+    const thickness = currentCfg.framesize * 5000; // Use Framesize for thickness
+    // Keep Moving-Bar behavior: mapzoom raw value controls stripe count.
+    const numStripes = Math.max(1, Math.round(parseFloat(document.getElementById('mapzoom').value) || 1));
+    const contrast = currentCfg.contrast; // Opacity
+    const edgeSharpness = currentCfg.zShape; // Blur
+    const shapeSelector = (parseFloat(document.getElementById('edgec').value) / 100.0) * 2.0 - 1.0; // Edge Contrast for shape (-1 to 1)
+
+    // --- Render Stripes ---
+    for (let i = 0; i < numStripes; i++) {
+      // Calculate the base X position based on time, speed, and stripe index
+      const time_factor = (lastTimestamp / 1000.0) * (speed * 100);
+      const main_pos = time_factor % (canvas.width + thickness);
+      // Distribute stripes evenly across the canvas
+      const stripe_offset = (i / numStripes) * canvas.width;
+      const x_pos = (main_pos + stripe_offset) % (canvas.width + thickness) - thickness;
+      const y_pos = canvas.height / 2;
+
+      // Save canvas state before transforming for this stripe
+      ctx.save();
+
+      // --- Apply Transformations ---
+      ctx.translate(x_pos, y_pos);
+      ctx.rotate(rotationAngle * Math.PI / 180.0);
+
+      // --- Apply Appearance ---
+      ctx.globalAlpha = Math.max(0.1, contrast);
+      // BUG-NOTE: with current zShape range (-5..+5), this blur formula clamps to 0 for |zShape|>1.1.
+      // Result: "Kantenschaerfe" appears to do little/no visible change over much of the slider travel.
+      // Map zShape to blur radius (inverted: higher value = sharper edge)
+      ctx.shadowBlur = Math.max(0, (1.1 - Math.abs(edgeSharpness)) * 30);
+      ctx.shadowColor = 'white';
+      
+      // --- Draw Shape ---
+      ctx.lineWidth = thickness;
+      ctx.strokeStyle = `rgba(255, 255, 255, ${Math.max(0.1, contrast)})`;
+
+      // Switch shape based on the 'edgec' slider
+      if (shapeSelector < -0.5) {
+        drawS_Shape(canvas.height * 0.8, thickness);
+      } else if (shapeSelector > 0.5) {
+        drawQuestionMark_Shape(canvas.height * 0.8, thickness);
+      } else {
+        drawStraightBar(canvas.height * 0.8, thickness);
+      }
+      
+      // Restore canvas state for the next stripe
+      ctx.restore();
+    }
+    // Reset global alpha after drawing all stripes
+    ctx.globalAlpha = 1.0;
+  }
+
+  // Helper to draw a simple straight bar
+  function drawStraightBar(height, width) {
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.fillRect(-width / 2, -height / 2, width, height);
+  }
+
+  // Helper to draw an 'S' shape with Bezier curves
+  function drawS_Shape(height, width) {
+    const h2 = height / 2;
+    const h4 = height / 4;
+    ctx.beginPath();
+    ctx.moveTo(0, -h2);
+    ctx.bezierCurveTo(width * 3, -h4, -width * 3, h4, 0, h2);
+    ctx.stroke();
+  }
+  
+  // Helper to draw a '?' shape with Bezier and Arc
+  function drawQuestionMark_Shape(height, width) {
+    const h = height * 0.8;
+    const dotRadius = width;
+    ctx.beginPath();
+    ctx.moveTo(0, -h/2);
+    ctx.bezierCurveTo(width * 4, -h/3, 0, h/6, 0, h/3);
+    ctx.lineTo(0, h/2.5);
+    ctx.stroke();
+    // Draw the dot
+    ctx.beginPath();
+    ctx.arc(0, h/2 + dotRadius*2, dotRadius, 0, Math.PI * 2);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.fill();
+  }
+
+
+  function updateSimulation(dt) {
+    if (!currentCfg || !currentCfg.running) return;
+    const cfg = currentCfg;
+    const dyn = getDynamicsProfile();
+    const speed = cfg.speed * dyn.speedScale;
+    const angle = cfg.angle;
+    const radius = cfg.radius;
+    const moveType = parseInt(cfg.moveType);
+
+    timeAccumulator += speed * dt; // Always increment time accumulator
+
+    if (moveType === 0) {
+      const rad = angle * Math.PI / 180.0;
+      flightX += Math.cos(rad) * speed * dt * 10.0;
+      flightY += Math.sin(rad) * speed * dt * 10.0;
+    } else if (moveType === 1) {
+      flightX = radius * Math.cos(timeAccumulator);
+      flightY = radius * Math.sin(timeAccumulator);
+    } else if (moveType === 2) {
+      flightX = radius * Math.cos(timeAccumulator);
+      flightY = (radius * 0.5) * Math.sin(timeAccumulator * 2.0);
+    } else if (moveType === 3) {
+      flightX += speed * dt * 10.0;
+      flightY = radius * Math.sin(timeAccumulator * 2.0);
+    } else if (moveType === 4) { // SAWTOOTH
+      const period = 5.0 / Math.max(0.1, speed);
+      const ramp = (timeAccumulator % period) / period;
+      flightX = radius * ((ramp * 2.0) - 1.0);
+      // BUG-NOTE: tying Y directly to X here couples both axes; if a vertical saw was intended,
+      // this should likely be `flightY = radius * (...)` with independent X behavior.
+      flightY = flightX;
+    } else if (moveType === 5) { // SQUARE
+      flightX += speed * dt * 10.0;
+      flightY = radius * Math.sign(Math.sin(timeAccumulator * 2.0));
+    }
+
+    const wrapLimit = 1000000.0;
+    flightX = flightX % wrapLimit;
+    
+    pathHistory.push({ x: flightX, y: flightY });
+    if (pathHistory.length > MAX_PATH_HISTORY) pathHistory.shift();
+  }
+
+  function simulateFuturePath(steps, dt) {
+    if (!currentCfg) return [];
+    let fx = flightX;
+    let fy = flightY;
+    let t = timeAccumulator;
+    const pts = [];
+    const cfg = currentCfg;
+    const dyn = getDynamicsProfile();
+    const simSpeed = cfg.speed * dyn.speedScale;
+    for (let i = 0; i < steps; i++) {
+      if (cfg.moveType >= 4) continue; // Don't draw future path for simple oscillators
+      if (cfg.moveType === 0) {
+        const rad = cfg.angle * Math.PI / 180.0;
+        fx += Math.cos(rad) * simSpeed * dt * 10.0;
+        fy += Math.sin(rad) * simSpeed * dt * 10.0;
+      } else {
+        t += simSpeed * dt;
+        if (cfg.moveType === 1) {
+          fx = cfg.radius * Math.cos(t);
+          fy = cfg.radius * Math.sin(t);
+        } else if (cfg.moveType === 2) {
+          fx = cfg.radius * Math.cos(t);
+          fy = (cfg.radius * 0.5) * Math.sin(t * 2.0);
+        } else if (cfg.moveType === 3) {
+          fx += simSpeed * dt * 10.0;
+          fy = cfg.radius * Math.sin(t * 2.0);
+        }
+      }
+      pts.push({ x: fx, y: fy });
+    }
+    return pts;
+  }
+
+  function motorAnglesDeg() {
+    if (!currentCfg) return [0, 0, 0, 0];
+    const dyn = getDynamicsProfile();
+    const framesize = currentCfg.framesize;
+    const contrast = currentCfg.contrast;
+    const zShape = currentCfg.zShape;
+    const edgeC = parseFloat(document.getElementById('edgec').value) / 100.0;
+    const vizMode = document.getElementById('vizMode').value;
+    const range = currentCfg.rangeDeg;
+    const goalScale = dyn.goalScale;
+    const angles = [];
+    for (let i = 0; i < 4; i++) {
+      const offsetX = (i - 1.5) * currentCfg.motorSpacingCm;
+      let finalNoise = 0.0;
+      if (vizMode === "1" || currentCfg.moveType >= 4) {
+         // BUG-NOTE: this branch bypasses spatial sampling (`offsetX`, `framesize`) and noise shaping.
+         // Side effects: max range may feel detached from image detail; edge/shape controls don't map
+         // intuitively to clock behavior in Moving-Bar / Saw / Square modes.
+         // Use oscillator logic for bar viz OR for Saw/Square modes
+         const single_val = flightY / Math.max(1, currentCfg.radius); // Normalize to -1..1
+         finalNoise = (i % 2 === 0) ? single_val : -single_val; // Example: make motors alternate
+      } else { // Noise-based modes
+        const noiseX = (offsetX + flightX) * framesize;
+        const noiseY = (0 + flightY) * framesize;
+        const n = noise2D(noiseX, noiseY);
+        finalNoise = applyShape(n, zShape, edgeC);
+      }
+      const val = finalNoise * contrast;
+      const angle = Math.max(-range, Math.min(range, val * range * goalScale));
+      angles.push(angle);
+    }
+    return angles;
+  }
+
+  function updateDisplayedAngles(targetAngles, dt) {
+    const dyn = getDynamicsProfile();
+    const baseMaxSpeedDegPerSec = 720.0;
+    const baseAccelDegPerSec2 = 1800.0;
+    const maxSpeed = baseMaxSpeedDegPerSec * dyn.speedScale;
+    const maxAccel = baseAccelDegPerSec2 * dyn.accelScale;
+    const safeDt = Math.max(0.001, dt);
+
+    for (let i = 0; i < 4; i++) {
+      const target = targetAngles[i];
+      const err = target - displayedAngles[i];
+      const desiredVel = Math.max(-maxSpeed, Math.min(maxSpeed, err / safeDt));
+      const maxDeltaVel = maxAccel * safeDt;
+      const velDelta = Math.max(-maxDeltaVel, Math.min(maxDeltaVel, desiredVel - displayedAngleVel[i]));
+      displayedAngleVel[i] += velDelta;
+      displayedAngles[i] += displayedAngleVel[i] * safeDt;
+      if (Math.abs(err) < 0.05 && Math.abs(displayedAngleVel[i]) < 0.5) {
+        displayedAngles[i] = target;
+        displayedAngleVel[i] = 0;
+      }
+    }
+  }
+
+  function drawPathAndMotors() {
+    if (!currentCfg) return;
+    resizeCanvas();
+    const framesize = currentCfg.framesize;
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const worldScale = getWorldScalePxPerCm();
+    
+    if (currentCfg.moveType < 4) {
+        ctx.beginPath();
+        ctx.lineWidth = 8;
+        ctx.setLineDash([10, 10]);
+        pathHistory.forEach((p, i) => {
+          const alpha = i / pathHistory.length;
+          ctx.strokeStyle = `rgba(255, 0, 0, ${alpha * 0.6})`;
+          const px = cx - p.x * worldScale;
+          const py = cy - p.y * worldScale;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const future = simulateFuturePath(120, 0.016);
+        ctx.beginPath();
+        ctx.lineWidth = 8;
+        ctx.strokeStyle = 'rgba(0, 255, 0, 0.7)';
+        future.forEach((p, i) => {
+          const px = cx - p.x * worldScale;
+          const py = cy - p.y * worldScale;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+    }
+
+    ctx.beginPath();
+    ctx.arc(cx - flightX * worldScale, cy - flightY * worldScale, 3, 0, Math.PI * 2);
+    ctx.fillStyle = 'red';
+    ctx.fill();
+
+    const targetAngles = motorAnglesDeg();
+    updateDisplayedAngles(targetAngles, lastFrameDt);
+    const ang = displayedAngles;
+    for (let i = 0; i < 4; i++) {
+      const offsetX = (i - 1.5) * currentCfg.motorSpacingCm;
+      const motorX = cx + offsetX * worldScale;
+      const motorY = cy;
+      ctx.beginPath();
+      ctx.arc(motorX, motorY, 10, 0, Math.PI * 2);
+      ctx.fillStyle = `hsl(${i * 90}, 100%, 50%)`;
+      ctx.fill();
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = 'white';
+      ctx.font = '8px Arial';
+      ctx.fillText(`M${i + 1}`, motorX - 6, motorY + 2);
+      ctx.fillStyle = 'white';
+      ctx.font = '9px Arial';
+      ctx.fillText(`${ang[i].toFixed(1)}°`, motorX - 10, motorY - 8);
+    }
+
+    const a = ang;
+    const el = document.getElementById('angles');
+    el.textContent = `Angles: M1 ${a[0].toFixed(1)}°, M2 ${a[1].toFixed(1)}°, M3 ${a[2].toFixed(1)}°, M4 ${a[3].toFixed(1)}°`;
+    document.getElementById('angleVal1').textContent = `${a[0].toFixed(1)}°`;
+    document.getElementById('angleVal2').textContent = `${a[1].toFixed(1)}°`;
+    document.getElementById('angleVal3').textContent = `${a[2].toFixed(1)}°`;
+    document.getElementById('angleVal4').textContent = `${a[3].toFixed(1)}°`;
+    document.getElementById('needle1').style.transform = `translate(-50%, -100%) rotate(${a[0]}deg)`;
+    document.getElementById('needle2').style.transform = `translate(-50%, -100%) rotate(${a[1]}deg)`;
+    document.getElementById('needle3').style.transform = `translate(-50%, -100%) rotate(${a[2]}deg)`;
+    document.getElementById('needle4').style.transform = `translate(-50%, -100%) rotate(${a[3]}deg)`;
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const vizMode = document.getElementById('vizMode').value;
+    if (vizMode === "1") {
+      drawMovingBar();
+    } else {
+      drawNoiseField();
+    }
+    drawPathAndMotors();
+  }
+
+  function animate(timestamp) {
+    if (!lastTimestamp) lastTimestamp = timestamp;
+    const deltaTime = (timestamp - lastTimestamp) / 1000.0;
+    lastTimestamp = timestamp;
+    lastFrameDt = Math.max(0.001, Math.min(0.050, deltaTime || (1.0 / 60.0)));
+    updateSimulation(deltaTime);
+    render();
+    animationFrameId = requestAnimationFrame(animate);
+  }
+
+  function restartAnimation() {
+    if (animationFrameId) cancelAnimationFrame(animationFrameId);
+    animationFrameId = null;
+    lastTimestamp = 0;
+    flightX = 0;
+    flightY = 0;
+    timeAccumulator = 0;
+    lastFrameDt = 1.0 / 60.0;
+    for (let i = 0; i < 4; i++) {
+      displayedAngles[i] = 0;
+      displayedAngleVel[i] = 0;
+    }
+    pathHistory.length = 0;
+    animate(0);
+  }
+
+  function toggle() {
+    r = !r;
+    const b = document.getElementById('btn');
+    b.innerText = r ? "STOP SYSTEM" : "START SYSTEM";
+    b.style.background = r ? "#f44336" : "#4CAF50";
+    if (boardOnline) {
+      fetch("/set?run=" + (r?1:0)).then(ok).catch(err);
+    } else {
+      const s = document.getElementById('status');
+      s.className = "status";
+      s.innerText = "Offline preview mode (no device connection).";
+    }
+    syncCfgFromUI();
+    restartAnimation();
+  }
+
+  function setZero() {
+    if (r) { // if it's running, stop it first
+      toggle();
+    }
+    if (boardOnline) {
+      fetch("/setzero").then(ok).catch(err);
+      document.getElementById('status').innerText = "Aligning motors to 0...";
+    } else {
+      const s = document.getElementById('status');
+      s.className = "status";
+      s.innerText = "Offline preview: SetZero requires board connection.";
+    }
+  }
+
+  function u(k, v) {
+    if(k=='speed') document.getElementById('sV').innerText = v;
+    if(k=='angle') document.getElementById('aV').innerText = v + "°";
+    if(k=='rad') document.getElementById('rV').innerText = v;
+    if(k=='range') document.getElementById('rdV').innerText = v + "°";
+    if(k=='mspace') document.getElementById('msV').innerText = v + " cm";
+    if(k=='dyn') {
+      const mode = Math.max(0, Math.min(2, parseInt(v, 10) || 1));
+      const p = dynamicsProfiles[mode];
+      document.getElementById('dynV').innerText = `${p.label} (Vx${p.speedScale.toFixed(2)}, Ax${p.accelScale.toFixed(2)}, Gx${p.goalScale.toFixed(2)})`;
+    }
+    if(k=='frame') document.getElementById('fsV').innerText = v;
+    if(k=='mapzoom') document.getElementById('mzV').innerText = getMapZoomDisplayText(v);
+    if(k=='cont') document.getElementById('cV').innerText = v;
+    if(k=='shape') document.getElementById('zV').innerText = v;
+    if(k=='edgec') document.getElementById('ecV').innerText = v;
+    if(k=='fan') document.getElementById('fanV').innerText = Math.round(v / 255 * 100) + "%";
+    if(k=='lamp') document.getElementById('lampV').innerText = Math.round(v / 255 * 100) + "%";
+    if(k=='type') {
+      const t = parseInt(v, 10);
+      syncCfgFromUI();
+      render();
+      // Firmware currently supports only 0..2.
+      // Preview modes 3+ stay local in edit.html until firmware support is added.
+      if (boardOnline && Number.isFinite(t) && t <= 2) {
+        fetch("/set?type=" + t).then(ok).catch(err);
+      } else {
+        const s = document.getElementById('status');
+        s.className = "status";
+        s.innerText = boardOnline ? "Preview-only pattern (not sent to firmware)." : "Offline preview mode (type not sent).";
+      }
+      return;
+    }
+    if(k=='mapzoom' || k=='edgec' || k=='dyn') {
+      syncCfgFromUI();
+      render();
+      return;
+    }
+    if (boardOnline) {
+      fetch("/set?" + k + "=" + v).then(ok).catch(err);
+    }
+    syncCfgFromUI();
+    render();
+  }
+
+  function togglePick(key) {
+    if (selected.has(key)) selected.delete(key);
+    else selected.add(key);
+    updatePickUI();
+  }
+
+  function toggleAll() {
+    if (selected.size === Object.keys(pickButtons).length) {
+      selected.clear();
+    } else {
+      Object.keys(pickButtons).forEach(k => selected.add(k));
+    }
+    updatePickUI();
+  }
+
+  function updatePickUI() {
+    Object.keys(pickButtons).forEach(k => {
+      if (selected.has(k)) pickButtons[k].classList.add('on');
+      else pickButtons[k].classList.remove('on');
+    });
+    selectAllBtn.textContent = (selected.size === Object.keys(pickButtons).length) ? 'ALL' : 'ALL';
+  }
+
+  function toggleSaveMode() {
+    saveArmed = !saveArmed;
+    saveBtn.classList.remove('blink', 'pulse');
+    saveBtn.classList.toggle('armed', saveArmed);
+  }
+
+  function slotClick(idx) {
+    if (saveArmed) {
+      flashSavePress();
+      saveSlot(idx);
+      pulseSaveConfirm();
+    } else {
+      loadSlot(idx);
+    }
+  }
+
+  function saveSlot(idx) {
+    syncCfgFromUI();
+    const payload = {};
+    const map = {
+      speed: document.getElementById('speed').value,
+      angle: document.getElementById('angle').value,
+      rad: document.getElementById('rad').value,
+      range: document.getElementById('range').value,
+      mspace: document.getElementById('mspace').value,
+      dyn: document.getElementById('dyn').value,
+      frame: document.getElementById('frame').value,
+      mapzoom: document.getElementById('mapzoom').value,
+      cont: document.getElementById('cont').value,
+      shape: document.getElementById('shape').value,
+      edgec: document.getElementById('edgec').value,
+      fan: document.getElementById('fan').value,
+      lamp: document.getElementById('lamp').value
+    };
+    selected.forEach(k => payload[k] = map[k]);
+    localStorage.setItem(`e4_slot_${idx}`, JSON.stringify(payload));
+    markSlot(idx);
+  }
+
+  function loadSlot(idx) {
+    const raw = localStorage.getItem(`e4_slot_${idx}`);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (data.speed !== undefined) { document.getElementById('speed').value = data.speed; u('speed', data.speed/100); }
+    if (data.angle !== undefined) { document.getElementById('angle').value = data.angle; u('angle', data.angle); }
+    if (data.rad !== undefined) { document.getElementById('rad').value = data.rad; u('rad', data.rad); }
+    if (data.range !== undefined) { document.getElementById('range').value = data.range; u('range', data.range); }
+    if (data.mspace !== undefined) { document.getElementById('mspace').value = data.mspace; u('mspace', data.mspace); }
+    if (data.dyn !== undefined) { document.getElementById('dyn').value = data.dyn; u('dyn', data.dyn); }
+    if (data.frame !== undefined) { document.getElementById('frame').value = data.frame; u('frame', data.frame/1000); }
+    if (data.mapzoom !== undefined) {
+      const mz = document.getElementById('mapzoom');
+      mz.value = data.mapzoom;
+      // BUGFIX-NOTE: use effective (possibly clamped) slider value for consistent preview text.
+      u('mapzoom', mz.value);
+    }
+    if (data.cont !== undefined) { document.getElementById('cont').value = data.cont; u('cont', data.cont/100); }
+    if (data.shape !== undefined) { document.getElementById('shape').value = data.shape; u('shape', data.shape/10); }
+    if (data.edgec !== undefined) { document.getElementById('edgec').value = data.edgec; u('edgec', data.edgec/100); }
+    if (data.fan !== undefined) { document.getElementById('fan').value = data.fan; u('fan', data.fan); }
+    if (data.lamp !== undefined) { document.getElementById('lamp').value = data.lamp; u('lamp', data.lamp); }
+    markSlot(idx);
+  }
+
+  function markSlot(idx) {
+    const row = document.getElementById('storageRow');
+    const slots = row.querySelectorAll('.slot');
+    slots.forEach((b, i) => {
+      if (i === idx - 1) b.classList.add('active');
+      else b.classList.remove('active');
+    });
+  }
+
+  function flashSavePress() {
+    saveBtn.classList.remove('blink');
+    void saveBtn.offsetWidth;
+    saveBtn.classList.add('blink');
+  }
+
+  function pulseSaveConfirm() {
+    saveBtn.classList.remove('pulse');
+    void saveBtn.offsetWidth;
+    saveBtn.classList.add('pulse');
+  }
+  function showControls() {
+    const t = parseInt(document.getElementById('mType').value, 10);
+    document.getElementById('cLinear').style.display = (t === 0) ? 'block' : 'none';
+    // Show Radius for Circle, Figure8, Sine
+    document.getElementById('cRadius').style.display = (t > 0 && t < 4) ? 'block' : 'none';
+  }
+  function applyConfig(cfg) {
+    currentCfg = { ...cfg };
+    r = !!cfg.running;
+    const b = document.getElementById('btn');
+    b.innerText = r ? "STOP SYSTEM" : "START SYSTEM";
+    b.style.background = r ? "#f44336" : "#4CAF50";
+
+    document.getElementById('mType').value = cfg.moveType;
+    document.getElementById('speed').value = Math.round(cfg.speed * 100);
+    document.getElementById('angle').value = Math.round(cfg.angle);
+    document.getElementById('rad').value = Math.round(cfg.radius);
+    document.getElementById('range').value = Math.round(cfg.rangeDeg);
+    document.getElementById('mspace').value = Math.round(cfg.motorSpacingCm);
+    document.getElementById('dyn').value = (cfg.dynMode !== undefined) ? cfg.dynMode : 1;
+    document.getElementById('frame').value = Math.round(cfg.framesize * 1000);
+    // BUGFIX-NOTE: default to 1.0x equivalent to avoid collapsed spacing on startup.
+    document.getElementById('mapzoom').value = 10;
+    document.getElementById('cont').value = Math.round(cfg.contrast * 100);
+    document.getElementById('shape').value = Math.round(cfg.zShape * 10);
+    document.getElementById('edgec').value = 100;
+    document.getElementById('fan').value = cfg.fanSpeed || 0;
+    document.getElementById('lamp').value = cfg.lampBrightness || 0;
+
+    u('speed', cfg.speed);
+    u('angle', cfg.angle);
+    u('rad', cfg.radius);
+    u('range', cfg.rangeDeg);
+    u('mspace', cfg.motorSpacingCm);
+    u('dyn', (cfg.dynMode !== undefined) ? cfg.dynMode : 1);
+    u('frame', cfg.framesize);
+    u('mapzoom', 10);
+    u('cont', cfg.contrast);
+    u('shape', cfg.zShape);
+    u('edgec', 1.0);
+    u('fan', cfg.fanSpeed || 0);
+    u('lamp', cfg.lampBrightness || 0);
+
+    showControls();
+    restartAnimation();
+  }
+  function ok() {
+    const s = document.getElementById('status');
+    s.className = "status ok";
+    s.innerText = "OK";
+  }
+  function err(e) {
+    const s = document.getElementById('status');
+    s.className = "status error";
+    s.innerText = "Error: " + e;
+  }
+
+  function enforceStartupDefaults(isOnline) {
+    // Startup policy: always begin in standard Noise Field + Wind (Linear).
+    document.getElementById('vizMode').value = "0";
+    document.getElementById('mType').value = "0";
+
+    if (isOnline) {
+      // Sends `type=0` to firmware via existing handler.
+      u('type', '0');
+    } else {
+      syncCfgFromUI();
+      showControls();
+      render();
+    }
+
+    // Autostart policy: start motion immediately.
+    if (!r) {
+      toggle();
+    } else {
+      if (isOnline) fetch("/set?run=1").then(ok).catch(err);
+      syncCfgFromUI();
+      restartAnimation();
+    }
+  }
+
+  function init() {
+    fetch("/config").then(r => r.json()).then(cfg => {
+      boardOnline = true;
+      offlineToggle.value = 0;
+      offlineVal.innerText = "OFF";
+      applyConfig(cfg);
+      enforceStartupDefaults(true);
+    }).catch(() => {
+      boardOnline = false;
+      offlineToggle.value = 1;
+      offlineVal.innerText = "ON";
+      applyConfig(offlineCfg);
+      enforceStartupDefaults(false);
+    });
+    updatePickUI();
+  }
+  document.addEventListener('DOMContentLoaded', init);
+  window.addEventListener('resize', () => {
+    render();
+  });
+
+  function syncCfgFromUI() {
+    if (!currentCfg) currentCfg = { ...offlineCfg };
+    currentCfg.moveType = parseInt(document.getElementById('mType').value, 10);
+    currentCfg.speed = parseFloat(document.getElementById('speed').value) / 100.0;
+    currentCfg.angle = parseFloat(document.getElementById('angle').value);
+    currentCfg.radius = parseFloat(document.getElementById('rad').value);
+    currentCfg.rangeDeg = parseFloat(document.getElementById('range').value);
+    currentCfg.motorSpacingCm = parseFloat(document.getElementById('mspace').value);
+    currentCfg.dynMode = parseInt(document.getElementById('dyn').value, 10);
+    currentCfg.framesize = parseFloat(document.getElementById('frame').value) / 1000.0;
+    currentCfg.contrast = parseFloat(document.getElementById('cont').value) / 100.0;
+    currentCfg.zShape = parseFloat(document.getElementById('shape').value) / 10.0;
+    currentCfg.fanSpeed = parseInt(document.getElementById('fan').value, 10);
+    currentCfg.lampBrightness = parseInt(document.getElementById('lamp').value, 10);
+    currentCfg.running = r ? 1 : 0;
+  }
+
+  function toggleOffline() {
+    const on = offlineToggle.value === "1";
+    offlineVal.innerText = on ? "ON" : "OFF";
+    if (on) {
+      applyConfig(offlineCfg);
+    } else {
+      init();
+    }
+  }
+</script>
+</body>
+</html>

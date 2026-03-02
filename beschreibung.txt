@@ -1,0 +1,276 @@
+Beschreibung:
+Eine Motorenanordung soll Bewegungen ausführen. Die Motoren sind im linearen Abstand angeordnet, können über eine web ui in vielen Parametern angeglichen werden
+
+
+
+Ziel
+Eine Anordnung aus vier Schrittmotoren soll organische, nicht-periodische Bewegungen ausführen. Die Bewegungswerte werden aus einem Noise‑Feld (aktuell: Simplex/Perlin‑ähnlicher Noise) generiert und in Motorwinkel übersetzt. Das System läuft autark auf dem FYSETC E4 (ESP32) und wird über eine Web‑UI im Browser gesteuert (ohne zusätzlichen Raspberry Pi).
+
+Mechanik / Aufbau
+
+4 Motoren in linearer Anordnung (gleichmäßiger Abstand entlang einer Linie).
+
+Die relative Position/Abstände bzw. der „Einflussbereich“ jedes Motors kann über Offsets in der Web‑UI angepasst werden (gedacht als virtuelle Abtastpunkte im Noise‑Feld, nicht als physisches Verschieben).
+
+Jeder Motor soll innerhalb eines einstellbaren Winkelbereichs verfahren, z. B. ±300° (Gesamt 600°), abhängig von Mechanik (Endanschläge, Kabel, Getriebe).
+
+Die Übersetzung von „Grad → Steps“ erfolgt über Steps per Revolution × Microsteps × ggf. Getriebe.
+
+Elektronik / Firmware (Funktionsprinzip)
+
+Controller: FYSETC E4 / ESP32, Treiber: TMC2209 (UART‑Konfiguration + STEP/DIR Ansteuerung).
+
+Das Programm stellt einen WiFi Access Point bereit und serviert eine HTML‑Seite (UI) direkt aus dem Flash.
+
+Über HTTP‑Requests (/set?...) werden Parameter gesetzt (Start/Stop, Speed, Pattern, Framesize, Contrast, Shape, Range usw.).
+
+Die Firmware berechnet fortlaufend Zielpositionen pro Motor und steuert die Motoren über eine Stepper‑Library (aktuell: Konzept mit Zielpositionen und „run()“).
+
+Bewegungslogik (Noise → Motorposition)
+
+Grundidee:
+Es wird ein 2D‑Noise‑Feld (Simplex/Perlin‑Noise) als „Landschaft“ verstanden. Ein virtueller Punkt („Flight Path“) bewegt sich durch diese Landschaft. Jeder Motor tastet an einer leicht versetzten Position ab, wodurch ähnliche, aber nicht identische Bewegungen entstehen.
+
+Pipeline pro Update-Zyklus:
+
+Pfadgenerator (wählt die Bewegung des Abtastpunkts im Noise‑Feld)
+
+Muster: z. B. Linear (Wind), Circle (Loop), Figure‑8 (Organic)
+
+Parameter: Geschwindigkeit, Winkel (linear), Radius (circle/8)
+
+Noise‑Sampling je Motor
+
+sample = noise( (flightX + offsetX)*framesize, (flightY + offsetY)*framesize )
+
+Offsets erzeugen räumliche Variation zwischen Motoren
+
+Noise‑Formung (Shaping)
+
+Framesize = Zoom/Frequenz (Dorf ↔ Kontinent)
+
+Contrast = Amplitude (Hügelhöhe)
+
+Z‑Shape = Form/Gamma + optional Invertierung (spitz ↔ weich / Berge ↔ Täler)
+
+Mapping auf Motorwinkel
+
+Noise (−1…+1) → Zielwinkel (z. B. −300°…+300°) → Steps → Zielposition
+
+Bedienung über Web‑UI (Stand heute)
+
+Start/Stop des Gesamtsystems
+
+Auswahl des Bewegungsmusters
+
+Parameterregler: Geschwindigkeit, Richtung/Radius, Framesize, Contrast, Z‑Shape
+
+(Optional/naheliegend) pro Motor: Offset, Invertierung, individueller Range/Nullpunkt
+
+ 
+
+
+
+
+Verbesserungen :
+
+In der Kommunikation klar benennen: „Noise“ (Perlin/Simplex).
+Aktuell nutzt ihr SimplexNoise; das ist vollkommen ok, aber dann in Text & UI nicht „Perlin“ sagen, oder alternativ wirklich auf eine Perlin‑Library wechseln.
+
+2) weitere ports:
+einen temperaturfühler integrieren
+zwei 12v ausgägnge definieren
+a: lüfter
+b: lampe
+
+
+
+
+3) Kalibrierung / Nullpunkt
+
+
+
+„Set Zero“ Button (manuelle Nullsetzung)
+
+
+
+4) Motion-Qualität verbessern (Ruckeln reduzieren)
+
+Noise‑Targets in fester Rate updaten (z. B. 50–200 Hz), Stepper‑Run weiterhin maximal häufig.
+
+Optional: zusätzliche Glättung (Low‑Pass / Slew‑Rate Limit), damit es „organischer“ wird.
+
+
+
+5) „Loop-Länge“ / Wiederholbarkeit als Feature
+
+Wenn gewünscht, dass sich Bewegungen nach X Sekunden nahtlos wiederholen:
+
+tileable/periodischer Noise oder kreisförmige Zeitparametrisierung (Loop‑fähig).
+
+
+
+Wenn Nicht‑Wiederholung gewünscht: bewusst nicht periodisch, aber mit Drift‑Begrenzung.
+
+6) UI/UX Erweiterungen
+
+Presets speichern  
+
+Live‑Status: aktuelle Werte, Motorpositionen, „Running“ Indikator
+
+Pro Motor: Offset‑Regler, invert direction, individuelle Amplitude
+
+
+7) Robustheit / Langzeitbetrieb
+
+Drift im linearen Pfad begrenzen (Werte wrap/modulo), damit Noise auch nach Stunden stabil bleibt.
+
+WLAN: Passwort/SSID konfigurierbar, optional „Client Mode“ statt AP.
+
+auch:
+
+
+1. prozessorkern: nur bewegung
+1. prozessorkern: nur web (wenn nötig- sonst off, oder weitere berechnungen)
+
+
+Range als harte Soft‑Limits: Zielwinkel strikt clampen.
+
+Optional: Stop‑Verhalten (Ramp‑down) + Treiber deaktivieren, damit nichts „hängt“.
+
+
+Update 2026-02-05 19:18:22 CET
+Version: 0.2.6
+
+Dateien und Funktionen (aktuell)
+main.cpp
+Firmware (ESP32/FYSETC E4). Steuert 4 Stepper via TMC2209, erzeugt Simplex-Noise Bewegungen, bietet Web-UI, API und Wi-Fi Setup.
+
+install.html
+Wi-Fi Setup UI (SSID/Passwort). Dient als Setup-Seite für WLAN.
+
+edit.html
+Runtime-Editor UI (Regler + Start/Stop + Noise-Vorschau). Dient als Bedienpanel für /set und /config.
+
+perlin_visualizer.html
+Noise-Visualizer im Browser. Liest /config und zeigt Noise-Feld + Pfad an. Visualisierung ist aktiv und als Referenz nutzbar.
+
+platformio.ini
+Build-Konfiguration und Library-Abhängigkeiten.
+
+Funktionen und Variablen (main.cpp)
+Globale Objekte
+AsyncWebServer server(80)
+SimplexNoise sn
+TMC2209Stepper driverX/Y/Z/E
+AccelStepper stX/stY/stZ/stE
+Preferences preferences
+
+Config (Struct)
+running: System an/aus
+moveType: 0=Linear, 1=Circle, 2=Figure8
+speed: Bewegungsgeschwindigkeit
+angle: Richtung bei Linear (Grad)
+radius: Radius bei Kreis/Acht
+framesize: Noise-Zoom
+contrast: Noise-Amplitude
+zShape: Noise-Form (Gamma)
+rangeDeg: Max. Hub in Grad (UI-regelbar)
+motorSpacingCm: Motorabstand (UI-regelbar)
+wifi_ssid / wifi_password: WLAN Zugangsdaten
+
+Wichtige Funktionen
+setup(): Init TMC, Stepper, Wi-Fi, Webserver
+loop(): Pfadgenerator + Noise + Stepper.run()
+loadConfig()/saveConfig(): Wi-Fi NVS
+
+API Endpoints
+GET /            Haupt-UI (im Firmware-Flash als index_html String)
+GET /install     Wi-Fi Setup UI
+POST /wifisave   Speichert WLAN + Neustart
+GET /set         Runtime-Parameter setzen (run,type,speed,angle,rad,range,frame,cont,shape,mspace)
+GET /config      Aktuellen Config-Stand als JSON
+
+UI Elemente (edit.html + Haupt-UI)
+Start/Stop Button (run)
+Movement Pattern (type)
+Flight Speed (speed)
+Direction (angle)
+Path Radius (rad)
+Max Range (rangeDeg)
+Motor Spacing (motorSpacingCm)
+Framesize (framesize)
+Contrast (contrast)
+Z-Shape (zShape)
+
+
+Update 2026-02-05 19:27:56 CET
+Version: 0.2.7
+
+- edit.html: Perlin/Simplex Vorschau gespiegelt (Noise-Feld + Pfad + Motorpunkte) inkl. Offline-Demo ohne Board.
+- perlin_visualizer.html: Offline-Demo aktiv, weiterhin als Referenz nutzbar.
+
+
+Update 2026-02-05 19:32:41 CET
+Version: 0.2.8
+
+- edit.html: Vorschau umgedreht (Motoren stehen, Perlin/Noise-Feld bewegt sich darunter).
+- edit.html: Drehwinkel je Motor sichtbar (Overlay + Textzeile).
+- edit.html: Pfade: zukuenftig = gruen (solid), vergangen = rot (gestrichelt), Breite 8px.
+
+
+Update 2026-02-05 19:40:21 CET
+Version: 0.2.9
+
+- edit.html: Vorschau-Fenster auf 640x640 gesetzt, Motoren bleiben im sichtbaren Bereich (skalierte Weltprojektion).
+- edit.html: Drehwinkel als Zahlen + Zeigeranzeige unterhalb der Vorschau.
+- edit.html: Pfade weiterhin gruen (zukuenftig) und rot gestrichelt (vergangen), Breite 8px.
+
+
+Update 2026-02-05 19:48:44 CET
+Version: 0.3.0
+
+- edit.html: Framesize (Noise-Skalierung) und Map Zoom (Kamera) getrennt.
+- edit.html: Edge Contrast Regler fuer Kantenbetonung im Preview (ridged/edge look).
+- edit.html: Mobile/Responsive Anpassungen (Canvas skaliert dynamisch).
+- edit.html: Winkelanzeige unter dem Preview mit Zahlen + Zeigern.
+
+Hinweis (Recherche Simplex/Perlin):
+- Simplex Noise (Gustavson) ist eine Alternative zu klassischem Perlin Noise; beide liefern kontinuierliche Gradient-Noise Felder.
+- Kantenbetonung / "Ridged"-Look kann durch Betrag/Invertierung des Noise-Signals erreicht werden (vgl. ridged noise).
+
+
+Quellen (Noise Recherche)
+- https://en.wikipedia.org/wiki/Perlin_noise
+- https://de.wikipedia.org/wiki/Simplex_Noise
+- https://en.wikipedia.org/wiki/Gradient_noise
+- https://www.redblobgames.com/maps/terrain-from-noise/
+- https://github.com/SRombauts/SimplexNoise
+
+
+Update 2026-02-05 20:01:53 CET
+Version: 0.3.1
+
+- edit.html: Motorwinkel direkt unter dem Noise-Fenster; Speicherleiste darunter (8 Slots, horizontal).
+- edit.html: Speicherlogik lokal im Browser (localStorage), keine Online-Libraries.
+- edit.html: Speicherablauf: SPEICHERN AN -> Slot drücken -> SPEICHERN AUS; Slot-Klick ohne Save lädt Werte.
+- edit.html: ALL-Button + Einzeltoggle pro Fader (Auswahl was gespeichert wird).
+
+
+Update 2026-02-05 20:09:47 CET
+Version: 0.3.2
+
+- edit.html: Reihenfolge angepasst: Motoranzeige -> Speicherzeile (ALL, 1-8, SPEICHERN) -> STOP unten.
+- edit.html: SPEICHERN Button dunkelrot, Klick blinkt (0.2s), bestaetigt pulst 2x (0.5s).
+- edit.html: Speicherleiste horizontal, keine Online-Libraries.
+
+
+Update 2026-02-05 20:14:14 CET
+Version: 0.3.3
+
+- edit.html: Motoranzeige direkt unter dem Noise-Fenster; Speicherzeile darunter (ALL, 1-8, SPEICHERN), STOP darunter.
+- edit.html: Speicherauswahl pro Fader (Einzelbuttons + ALL) inkl. Fan/Lamp.
+- edit.html: Speichern-Logik: SPEICHERN-Taster -> Slot -> SPEICHERN-Taster.
+- edit.html: PWM Fan und Lamp Fader hinzugefuegt (lokal, keine Online-Libraries).
+- edit.html: Start/Stop Logik im Preview gefixt.
+

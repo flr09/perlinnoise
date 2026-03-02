@@ -1,0 +1,41 @@
+# Zusammenfassung des PerlinNoise Projekts (FYSETC E4)
+
+**Datum der Analyse:** 2026-02-13
+
+## Allgemeiner Projektstatus:
+Das Projekt zielt darauf ab, vier linear angeordnete Schrittmotoren mittels eines ESP32 (FYSETC E4) und einer Web-Benutzeroberfläche zu steuern. Die Motorbewegungen werden basierend auf einem Perlin/Simplex-Noise-Feld generiert, wodurch organische und nicht-periodische Bewegungen entstehen.
+
+## Schlüsselkomponenten und deren Status:
+
+*   **`main.cpp` (Firmware):** Verantwortlich für die Ansteuerung der Motoren, Generierung der Simplex-Noise-Bewegungen, Bereitstellung der Web-UI und Wi-Fi-Konfiguration. Es verwendet TMC2209-Treiber und die AccelStepper-Bibliothek. Die Konfiguration wird in einer `Config`-Struktur verwaltet, und WLAN-Zugangsdaten werden im NVS (Non-Volatile Storage) gespeichert.
+
+*   **`install.html` (Wi-Fi Setup UI):** Dient als Einrichtungsseite für die WLAN-Verbindung. Wichtige Verbesserungen zur Benutzerführung, die vom Gemini CLI Agent vorgenommen wurden, sind **noch nicht in die `main.cpp` integriert**.
+
+*   **`edit.html` (Runtime-Editor UI):** Dies ist die am weitesten entwickelte Benutzeroberfläche, die Schieberegler, eine Live-Noise-Vorschau, Motoranzeigen und clientseitige Preset-Speicherung bietet. Sie wurde in mehreren Iterationen (bis Version 0.3.3 vom 2026-02-05) erheblich weiterentwickelt.
+    *   **Problem:** Einige UI-Elemente in `edit.html` (z.B. `Map Zoom`, `Edge Contrast`) sind noch nicht in die `Config`-Struktur oder die API-Endpunkte in `main.cpp` integriert und daher funktionslos.
+    *   **Funktionen:** Bietet eine Live-Vorschau (Noise-Feld + Pfad + Motorpunkte), Anzeige der Motorwinkel, lokale clientseitige Speicherung von Presets (8 Slots), individuelle Fader-Auswahl zum Speichern und Fader für PWM-Lüfter und -Lampe.
+
+*   **`perlin_visualizer.html`:** Ein separater Noise-Visualizer im Browser, der zu Referenzzwecken und für Offline-Demos nützlich ist.
+
+*   **`platformio.ini`:** Enthält die Build-Konfiguration und Bibliotheksabhängigkeiten.
+
+## Identifizierte Probleme und fehlende Funktionen (aus `analyse.txt`):
+
+1.  **Inkonsistenz `edit.html` vs. `main.cpp` Config:** Parameter wie `mapZoom` und `edgeContrast` aus `edit.html` fehlen noch in der `Config`-Struktur von `main.cpp`.
+2.  **Fehlende Autohoming-Routine:** Es gibt keine physikalische Homing-Funktion; die "Set Zero"-Funktion setzt lediglich die aktuelle Position als Nullpunkt.
+3.  **UI-Konflikt/Redundanz:** Es existieren zwei primäre UIs (`index_html` eingebettet in `main.cpp` und `edit.html` als separate Datei), die unterschiedliche Funktionalitäten aufweisen. Es wird empfohlen, `edit.html` als primäre UI zu etablieren.
+4.  **Veraltete `install.html`-Integration:** Die vom Agenten vorgenommenen Verbesserungen an `install.html` sind nicht in der in `main.cpp` eingebetteten Version enthalten.
+5.  **Keine serverseitige Persistenz:** Abgesehen von WLAN-Anmeldeinformationen werden die meisten Konfigurationsparameter nicht über Neustarts des ESP32 hinweg gespeichert.
+
+## Empfehlungen für nächste Schritte (aus `analyse.txt`):
+
+*   Konsolidierung der UI zugunsten von `edit.html` als primäre Schnittstelle.
+*   Implementierung der fehlenden Konfigurationsparameter (`mapZoom`, `edgeContrast`) in `main.cpp`.
+*   Entwicklung einer echten Autohoming-Routine.
+*   Einführung einer serverseitigen Persistenz für alle Konfigurationsparameter.
+*   Auslagerung der HTML-Dateien auf ein LittleFS-Dateisystem zur Reduzierung der Firmware-Größe.
+*   Integration der verbesserten `install.html`-Version in `main.cpp`.
+*   Implementierung der Logik für einen Temperatursensor und dessen Anzeige in der UI.
+
+## Fazit:
+Es existiert ein funktionsfähiger Prototyp zur Steuerung von Schrittmotoren mit Perlin/Simplex-Noise über eine Web-UI auf einem ESP32. Die `edit.html`-Benutzeroberfläche ist hoch entwickelt und interaktiv, mit Live-Visualisierung und clientseitiger Preset-Verwaltung. Es gibt jedoch eine deutliche Lücke bei der Integration aller `edit.html`-Funktionen mit der `main.cpp`-Firmware, zusammen mit wichtigen fehlenden Funktionen wie Autohoming und serverseitiger Persistenz für alle Einstellungen. Das Projekt hat eine klare Roadmap für Verbesserungen, die in den Empfehlungen der `analyse.txt` dargelegt sind.
