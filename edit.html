@@ -362,6 +362,45 @@
   }
   const noise2D = SimplexNoise2D();
 
+  // Noise shaping: same as main.cpp logic
+  function applyShape(n, zShape, edgeC) {
+    const nNorm = (n + 1.0) / 2.0;
+    let exponent = Math.abs(zShape);
+    if (exponent < 0.1) exponent = 0.1;
+    let nShaped = Math.pow(nNorm, exponent);
+    if (zShape < 0) nShaped = 1.0 - nShaped;
+    let finalNoise = (nShaped * 2.0) - 1.0;
+    const edge = 1.0 - Math.abs(finalNoise);
+    const edgeMix = Math.max(0.0, Math.min(2.0, edgeC));
+    const edgeBoost = (edge * 2.0 - 1.0) * edgeMix;
+    return finalNoise + edgeBoost;
+  }
+
+  // Waveform value: phase → [-1,1]
+  // zShape repurposed: Saw=skew/curve, Square=duty cycle (0→50%, ±5→10%/90%)
+  // edgeC as softness: higher=sharper (tanh soft-clip, 0=fully soft)
+  function waveformValue(mType, phase, zShape, edgeC) {
+    let val = 0;
+    if (mType === 3) { // Sinus
+      val = Math.sin(phase);
+    } else if (mType === 4) { // Sägezahn
+      const t = ((phase / (2 * Math.PI)) % 1.0 + 1.0) % 1.0; // 0..1
+      const exp = Math.max(0.1, Math.exp(zShape * 0.25));
+      val = Math.pow(t, exp) * 2.0 - 1.0;
+    } else if (mType === 5) { // Rechteck, zShape = duty
+      const duty = Math.max(0.05, Math.min(0.95, 0.5 + zShape * 0.08));
+      const t = ((phase / (2 * Math.PI)) % 1.0 + 1.0) % 1.0;
+      val = t < duty ? 1.0 : -1.0;
+    }
+    // Soft-clipping via edgeC: 0=hard, 2=silky smooth
+    const softness = Math.max(0.0, 2.0 - edgeC);
+    if (softness > 0.05) {
+      const k = 3.0 / softness;
+      val = Math.tanh(val * k) / Math.tanh(k);
+    }
+    return val;
+  }
+
   function convertToGrayscale(noiseVal, contrast, zShape, edgeC) {
     let nNorm = (noiseVal + 1.0) / 2.0;
     let exponent = Math.abs(zShape);
@@ -570,19 +609,9 @@
     } else if (moveType === 2) {
       flightX = radius * Math.cos(timeAccumulator);
       flightY = (radius * 0.5) * Math.sin(timeAccumulator * 2.0);
-    } else if (moveType === 3) {
-      flightX += speed * dt * 10.0;
-      flightY = radius * Math.sin(timeAccumulator * 2.0);
-    } else if (moveType === 4) { // SAWTOOTH
-      const period = 5.0 / Math.max(0.1, speed);
-      const ramp = (timeAccumulator % period) / period;
-      flightX = radius * ((ramp * 2.0) - 1.0);
-      // BUG-NOTE: tying Y directly to X here couples both axes; if a vertical saw was intended,
-      // this should likely be `flightY = radius * (...)` with independent X behavior.
-      flightY = flightX;
-    } else if (moveType === 5) { // SQUARE
-      flightX += speed * dt * 10.0;
-      flightY = radius * Math.sign(Math.sin(timeAccumulator * 2.0));
+    } else if (moveType >= 3) {
+      // Waveform Modi: nur Zeit läuft, kein Pfad im Noise-Raum
+      // flightX/Y werden für den Pfad-Canvas nicht verwendet
     }
 
     const wrapLimit = 1000000.0;
@@ -628,54 +657,63 @@
   function motorAnglesDeg() {
     if (!currentCfg) return [0, 0, 0, 0];
     const dyn = getDynamicsProfile();
-    const framesize = currentCfg.framesize;
+    const range = currentCfg.rangeDeg;
     const contrast = currentCfg.contrast;
+    const goalScale = dyn.goalScale;
     const zShape = currentCfg.zShape;
     const edgeC = parseFloat(document.getElementById('edgec').value) / 100.0;
-    const vizMode = document.getElementById('vizMode').value;
-    const range = currentCfg.rangeDeg;
-    const goalScale = dyn.goalScale;
     const angles = [];
-    for (let i = 0; i < 4; i++) {
-      const offsetX = (i - 1.5) * currentCfg.motorSpacingCm;
-      let finalNoise = 0.0;
-      if (vizMode === "1" || currentCfg.moveType >= 4) {
-         // BUG-NOTE: this branch bypasses spatial sampling (`offsetX`, `framesize`) and noise shaping.
-         // Side effects: max range may feel detached from image detail; edge/shape controls don't map
-         // intuitively to clock behavior in Moving-Bar / Saw / Square modes.
-         // Use oscillator logic for bar viz OR for Saw/Square modes
-         const single_val = flightY / Math.max(1, currentCfg.radius); // Normalize to -1..1
-         finalNoise = (i % 2 === 0) ? single_val : -single_val; // Example: make motors alternate
-      } else { // Noise-based modes
-        const noiseX = (offsetX + flightX) * framesize;
-        const noiseY = (0 + flightY) * framesize;
-        const n = noise2D(noiseX, noiseY);
-        finalNoise = applyShape(n, zShape, edgeC);
+    if (currentCfg.moveType >= 3) {
+      // Waveform Modi: Phasenversatz aus mspace (25=90°)
+      const phaseSpread = (currentCfg.motorSpacingCm / 100.0) * 2 * Math.PI;
+      for (let i = 0; i < 4; i++) {
+        const phase = timeAccumulator + i * phaseSpread;
+        const val = waveformValue(currentCfg.moveType, phase, zShape, edgeC);
+        angles.push(Math.max(-range, Math.min(range, val * contrast * range * goalScale)));
       }
-      const val = finalNoise * contrast;
-      const angle = Math.max(-range, Math.min(range, val * range * goalScale));
-      angles.push(angle);
+    } else {
+      // Noise Modi
+      const framesize = currentCfg.framesize;
+      for (let i = 0; i < 4; i++) {
+        const offsetX = (i - 1.5) * currentCfg.motorSpacingCm;
+        const noiseX = (offsetX + flightX) * framesize;
+        const noiseY = flightY * framesize;
+        const n = noise2D(noiseX, noiseY);
+        const finalNoise = applyShape(n, zShape, edgeC);
+        const angle = Math.max(-range, Math.min(range, finalNoise * contrast * range * goalScale));
+        angles.push(angle);
+      }
     }
     return angles;
   }
 
   function updateDisplayedAngles(targetAngles, dt) {
     const dyn = getDynamicsProfile();
-    const baseMaxSpeedDegPerSec = 720.0;
-    const baseAccelDegPerSec2 = 1800.0;
-    const maxSpeed = baseMaxSpeedDegPerSec * dyn.speedScale;
-    const maxAccel = baseAccelDegPerSec2 * dyn.accelScale;
-    const safeDt = Math.max(0.001, dt);
+    const maxSpeed = 720.0 * dyn.speedScale;
+    const maxAccel = 1800.0 * dyn.accelScale;
+    const safeDt = Math.max(0.001, Math.min(0.04, dt));
 
     for (let i = 0; i < 4; i++) {
       const target = targetAngles[i];
-      const err = target - displayedAngles[i];
-      const desiredVel = Math.max(-maxSpeed, Math.min(maxSpeed, err / safeDt));
-      const maxDeltaVel = maxAccel * safeDt;
-      const velDelta = Math.max(-maxDeltaVel, Math.min(maxDeltaVel, desiredVel - displayedAngleVel[i]));
-      displayedAngleVel[i] += velDelta;
+      const pos = displayedAngles[i];
+      const vel = displayedAngleVel[i];
+      const err = target - pos;
+
+      // Bremseweg bei aktueller Geschwindigkeit: d = v² / (2a)
+      const brakingDist = (vel * vel) / (2.0 * maxAccel);
+      let targetVel;
+      if (Math.abs(err) < brakingDist + 0.1) {
+        // Jetzt bremsen — Zielgeschwindigkeit proportional zu verbleibender Distanz
+        targetVel = Math.sign(err) * Math.sqrt(2.0 * maxAccel * Math.max(0, Math.abs(err)));
+      } else {
+        targetVel = Math.sign(err) * maxSpeed;
+      }
+      targetVel = Math.max(-maxSpeed, Math.min(maxSpeed, targetVel));
+      const dv = Math.max(-maxAccel * safeDt, Math.min(maxAccel * safeDt, targetVel - vel));
+      displayedAngleVel[i] += dv;
       displayedAngles[i] += displayedAngleVel[i] * safeDt;
-      if (Math.abs(err) < 0.05 && Math.abs(displayedAngleVel[i]) < 0.5) {
+
+      if (Math.abs(err) < 0.1 && Math.abs(displayedAngleVel[i]) < 1.0) {
         displayedAngles[i] = target;
         displayedAngleVel[i] = 0;
       }
@@ -690,7 +728,7 @@
     const cy = canvas.height / 2;
     const worldScale = getWorldScalePxPerCm();
     
-    if (currentCfg.moveType < 4) {
+    if (currentCfg.moveType < 3) {
         ctx.beginPath();
         ctx.lineWidth = 8;
         ctx.setLineDash([10, 10]);
@@ -715,10 +753,13 @@
         ctx.stroke();
     }
 
-    ctx.beginPath();
-    ctx.arc(cx - flightX * worldScale, cy - flightY * worldScale, 3, 0, Math.PI * 2);
-    ctx.fillStyle = 'red';
-    ctx.fill();
+    const isWaveMode = currentCfg.moveType >= 3;
+    if (!isWaveMode) {
+      ctx.beginPath();
+      ctx.arc(cx - flightX * worldScale, cy - flightY * worldScale, 3, 0, Math.PI * 2);
+      ctx.fillStyle = 'red';
+      ctx.fill();
+    }
 
     const targetAngles = motorAnglesDeg();
     updateDisplayedAngles(targetAngles, lastFrameDt);
@@ -727,19 +768,17 @@
       const offsetX = (i - 1.5) * currentCfg.motorSpacingCm;
       const motorX = cx + offsetX * worldScale;
       const motorY = cy;
-      ctx.beginPath();
-      ctx.arc(motorX, motorY, 10, 0, Math.PI * 2);
-      ctx.fillStyle = `hsl(${i * 90}, 100%, 50%)`;
-      ctx.fill();
-      ctx.strokeStyle = 'white';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = 'white';
-      ctx.font = '8px Arial';
-      ctx.fillText(`M${i + 1}`, motorX - 6, motorY + 2);
-      ctx.fillStyle = 'white';
-      ctx.font = '9px Arial';
-      ctx.fillText(`${ang[i].toFixed(1)}°`, motorX - 10, motorY - 8);
+      if (!isWaveMode) {
+        ctx.beginPath();
+        ctx.arc(motorX, motorY, 10, 0, Math.PI * 2);
+        ctx.fillStyle = `hsl(${i * 90}, 100%, 50%)`;
+        ctx.fill();
+        ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = 'white'; ctx.font = '8px Arial';
+        ctx.fillText(`M${i + 1}`, motorX - 6, motorY + 2);
+        ctx.fillStyle = 'white'; ctx.font = '9px Arial';
+        ctx.fillText(`${ang[i].toFixed(1)}°`, motorX - 10, motorY - 8);
+      }
     }
 
     const a = ang;
@@ -755,13 +794,88 @@
     document.getElementById('needle4').style.transform = `translate(-50%, -100%) rotate(${a[3]}deg)`;
   }
 
+  function drawWaveform() {
+    resizeCanvas();
+    const W = canvas.width;
+    const H = canvas.height;
+    const cy = H / 2;
+    const amp = H * 0.36;
+    const mType = currentCfg ? currentCfg.moveType : 3;
+    const contrast = currentCfg ? Math.min(currentCfg.contrast, 1.5) : 1.0;
+    const zShape = currentCfg ? currentCfg.zShape : 0;
+    const edgeC = parseFloat(document.getElementById('edgec').value) / 100.0;
+    const cycles = 3;
+
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid
+    ctx.strokeStyle = '#2a2a2a';
+    ctx.lineWidth = 1;
+    [0.25, 0.5, 0.75].forEach(f => {
+      ctx.beginPath(); ctx.moveTo(0, H * f); ctx.lineTo(W, H * f); ctx.stroke();
+    });
+    ctx.strokeStyle = '#444';
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.moveTo(0, cy - amp); ctx.lineTo(W, cy - amp); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, cy + amp); ctx.lineTo(W, cy + amp); ctx.stroke();
+
+    // Wellenform
+    ctx.strokeStyle = '#4CAF50';
+    ctx.lineWidth = 2;
+    let prevCycle = -1, prevSign = null;
+    ctx.beginPath();
+    for (let px = 0; px < W; px++) {
+      const phase = (px / W) * cycles * 2 * Math.PI;
+      const val = waveformValue(mType, phase, zShape, edgeC);
+      let jump = false;
+      if (mType === 4) {
+        const cn = Math.floor(phase / (2 * Math.PI));
+        if (cn !== prevCycle && px > 0) jump = true;
+        prevCycle = cn;
+      } else if (mType === 5) {
+        const s = Math.sign(Math.sin(phase));
+        if (s !== prevSign && prevSign !== null) jump = true;
+        prevSign = s;
+      }
+      const y = cy - val * amp * contrast;
+      if (px === 0 || jump) ctx.moveTo(px, y); else ctx.lineTo(px, y);
+    }
+    ctx.stroke();
+
+    // Motor-Punkte
+    const colors = ['#ff4444', '#44aaff', '#ffaa00', '#aa44ff'];
+    const phaseSpread = currentCfg ? (currentCfg.motorSpacingCm / 100.0) * 2 * Math.PI : Math.PI / 2;
+    const totalRange = cycles * 2 * Math.PI;
+    for (let i = 0; i < 4; i++) {
+      const phase = ((timeAccumulator + i * phaseSpread) % totalRange + totalRange) % totalRange;
+      const px = (phase / totalRange) * W;
+      const val = waveformValue(mType, phase, zShape, edgeC);
+      const py = cy - val * amp * contrast;
+      ctx.beginPath();
+      ctx.arc(px, py, 8, 0, Math.PI * 2);
+      ctx.fillStyle = colors[i];
+      ctx.fill();
+      ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.stroke();
+      ctx.fillStyle = 'white'; ctx.font = '10px Arial';
+      ctx.fillText(`M${i + 1}`, px - 6, py - 13);
+    }
+  }
+
   function render() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const vizMode = document.getElementById('vizMode').value;
-    if (vizMode === "1") {
-      drawMovingBar();
+    const mType = currentCfg ? currentCfg.moveType : 0;
+    if (mType >= 3) {
+      drawWaveform();
     } else {
-      drawNoiseField();
+      const vizMode = document.getElementById('vizMode').value;
+      if (vizMode === "1") {
+        drawMovingBar();
+      } else {
+        drawNoiseField();
+      }
     }
     drawPathAndMotors();
   }
@@ -827,7 +941,7 @@
     if(k=='angle') document.getElementById('aV').innerText = v + "°";
     if(k=='rad') document.getElementById('rV').innerText = v;
     if(k=='range') document.getElementById('rdV').innerText = v + "°";
-    if(k=='mspace') document.getElementById('msV').innerText = v + " cm";
+    if(k=='mspace') { const wf = parseInt(document.getElementById('mType').value) >= 3; document.getElementById('msV').innerText = wf ? Math.round(v * 3.6) + '°' : v + ' cm'; }
     if(k=='dyn') {
       const mode = Math.max(0, Math.min(2, parseInt(v, 10) || 1));
       const p = dynamicsProfiles[mode];
@@ -976,9 +1090,53 @@
   }
   function showControls() {
     const t = parseInt(document.getElementById('mType').value, 10);
+    const isNoise = t <= 2;
+    const isWave = t >= 3;
+
     document.getElementById('cLinear').style.display = (t === 0) ? 'block' : 'none';
-    // Show Radius for Circle, Figure8, Sine
-    document.getElementById('cRadius').style.display = (t > 0 && t < 4) ? 'block' : 'none';
+    document.getElementById('cRadius').style.display = (t >= 1 && t <= 2) ? 'block' : 'none';
+
+    // Noise-only controls ein/ausblenden
+    const noiseOnlyIds = ['pick-frame', 'pick-mapzoom'];
+    noiseOnlyIds.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.closest('.slider-row').style.display = isNoise ? '' : 'none';
+    });
+
+    // mspace: label wechseln
+    const msEl = document.getElementById('mspace');
+    if (msEl) {
+      const msLabel = msEl.closest('.slider-row').querySelector('label');
+      const msV = document.getElementById('msV');
+      if (isWave) {
+        msLabel.childNodes[0].textContent = 'Phasenversatz (°/Motor) ';
+        if (msV) msV.textContent = Math.round(parseFloat(msEl.value) * 3.6) + '°';
+      } else {
+        msLabel.childNodes[0].textContent = 'Motor Spacing (cm) ';
+        if (msV) msV.textContent = msEl.value + ' cm';
+      }
+    }
+
+    // shape: label wechseln je nach Wellenform
+    const shapeLabel = document.getElementById('shape') &&
+      document.getElementById('shape').closest('.slider-row').querySelector('label');
+    if (shapeLabel) {
+      if (t === 5) shapeLabel.childNodes[0].textContent = 'Duty Cycle ';
+      else if (t === 4) shapeLabel.childNodes[0].textContent = 'Sägezahn-Kurve ';
+      else shapeLabel.childNodes[0].textContent = 'Form (Z-Shape) / Kantenschärfe ';
+    }
+
+    // edgec: label wechseln
+    const edgeLabel = document.getElementById('edgec') &&
+      document.getElementById('edgec').closest('.slider-row').querySelector('label');
+    if (edgeLabel) {
+      edgeLabel.childNodes[0].textContent = isWave ? 'Flankenschärfe ' : 'Edge Contrast / Form ';
+    }
+
+    // vizMode selector nur für Noise-Modi sinnvoll
+    const vizRow = document.querySelector('label[for-viz]');
+    const vizSel = document.getElementById('vizMode');
+    if (vizSel) vizSel.closest('div') && (vizSel.style.display = isWave ? 'none' : '');
   }
   function applyConfig(cfg) {
     currentCfg = { ...cfg };
@@ -1032,20 +1190,7 @@
   }
 
   function enforceStartupDefaults(isOnline) {
-    // Startup policy: always begin in standard Noise Field + Wind (Linear).
-    document.getElementById('vizMode').value = "0";
-    document.getElementById('mType').value = "0";
-
-    if (isOnline) {
-      // Sends `type=0` to firmware via existing handler.
-      u('type', '0');
-    } else {
-      syncCfgFromUI();
-      showControls();
-      render();
-    }
-
-    // Autostart policy: start motion immediately.
+    // Autostart: sofort loslegen
     if (!r) {
       toggle();
     } else {
