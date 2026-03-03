@@ -1099,14 +1099,12 @@ const char index_html[] PROGMEM = R"rawliteral(
       const t = parseInt(v, 10);
       syncCfgFromUI();
       render();
-      // Firmware currently supports only 0..2.
-      // Preview modes 3+ stay local in edit.html until firmware support is added.
-      if (boardOnline && Number.isFinite(t) && t <= 2) {
+      if (boardOnline && Number.isFinite(t)) {
         fetch("/set?type=" + t).then(ok).catch(err);
-      } else {
+      } else if (!boardOnline) {
         const s = document.getElementById('status');
         s.className = "status";
-        s.innerText = boardOnline ? "Preview-only pattern (not sent to firmware)." : "Offline preview mode (type not sent).";
+        s.innerText = "Offline preview mode (type not sent).";
       }
       return;
     }
@@ -1180,6 +1178,7 @@ const char index_html[] PROGMEM = R"rawliteral(
       lamp: document.getElementById('lamp').value
     };
     selected.forEach(k => payload[k] = map[k]);
+    payload.mType = document.getElementById('mType').value;
     localStorage.setItem(`e4_slot_${idx}`, JSON.stringify(payload));
     markSlot(idx);
   }
@@ -1206,6 +1205,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     if (data.edgec !== undefined) { document.getElementById('edgec').value = data.edgec; u('edgec', data.edgec/100); }
     if (data.fan !== undefined) { document.getElementById('fan').value = data.fan; u('fan', data.fan); }
     if (data.lamp !== undefined) { document.getElementById('lamp').value = data.lamp; u('lamp', data.lamp); }
+    if (data.mType !== undefined) { document.getElementById('mType').value = data.mType; u('type', data.mType); showControls(); }
     markSlot(idx);
   }
 
@@ -1343,12 +1343,14 @@ const char index_html[] PROGMEM = R"rawliteral(
       offlineToggle.value = 0;
       offlineVal.innerText = "OFF";
       applyConfig(cfg);
+      if (localStorage.getItem('e4_slot_1')) loadSlot(1);
       enforceStartupDefaults(true);
     }).catch(() => {
       boardOnline = false;
       offlineToggle.value = 1;
       offlineVal.innerText = "ON";
       applyConfig(offlineCfg);
+      if (localStorage.getItem('e4_slot_1')) loadSlot(1);
       enforceStartupDefaults(false);
     });
     updatePickUI();
