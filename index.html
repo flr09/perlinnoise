@@ -937,7 +937,8 @@
   function loadSlot(idx) {
     const raw = localStorage.getItem(`e4_slot_${idx}`);
     if (!raw) return;
-    const data = JSON.parse(raw);
+    let data;
+    try { data = JSON.parse(raw); } catch(e) { localStorage.removeItem(`e4_slot_${idx}`); return; }
     if (data.speed !== undefined) { document.getElementById('speed').value = data.speed; u('speed', data.speed/100); }
     if (data.angle !== undefined) { document.getElementById('angle').value = data.angle; u('angle', data.angle); }
     if (data.rad !== undefined) { document.getElementById('rad').value = data.rad; u('rad', data.rad); }

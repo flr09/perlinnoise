@@ -211,6 +211,20 @@ struct Config {
 Config webCfg;
 portMUX_TYPE cfgMux = portMUX_INITIALIZER_UNLOCKED;
 
+String jsonEscape(const String& s) {
+  String out;
+  out.reserve(s.length());
+  for (int i = 0; i < (int)s.length(); i++) {
+    char c = s[i];
+    if      (c == '"')  out += "\\\"";
+    else if (c == '\\') out += "\\\\";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\r') out += "\\r";
+    else                out += c;
+  }
+  return out;
+}
+
 // Function to load configuration from NVS
 void loadConfig() {
   preferences.begin("e4-config", false); // Open Preferences with namespace "e4-config"
@@ -1186,7 +1200,8 @@ const char index_html[] PROGMEM = R"rawliteral(
   function loadSlot(idx) {
     const raw = localStorage.getItem(`e4_slot_${idx}`);
     if (!raw) return;
-    const data = JSON.parse(raw);
+    let data;
+    try { data = JSON.parse(raw); } catch(e) { localStorage.removeItem(`e4_slot_${idx}`); return; }
     if (data.speed !== undefined) { document.getElementById('speed').value = data.speed; u('speed', data.speed/100); }
     if (data.angle !== undefined) { document.getElementById('angle').value = data.angle; u('angle', data.angle); }
     if (data.rad !== undefined) { document.getElementById('rad').value = data.rad; u('rad', data.rad); }
@@ -1547,7 +1562,7 @@ void setup() {
   server.on("/set", HTTP_GET, [](AsyncWebServerRequest *req){
     portENTER_CRITICAL(&cfgMux);
     if(req->hasParam("run")) webCfg.running = req->getParam("run")->value().toInt();
-    if(req->hasParam("type")) webCfg.moveType = req->getParam("type")->value().toInt();
+    if(req->hasParam("type")) webCfg.moveType = constrain(req->getParam("type")->value().toInt(), 0, 5);
     if(req->hasParam("speed")) webCfg.speed = req->getParam("speed")->value().toFloat();
     if(req->hasParam("angle")) webCfg.angle = req->getParam("angle")->value().toFloat();
     if(req->hasParam("rad")) webCfg.radius = req->getParam("rad")->value().toFloat();
@@ -1655,7 +1670,7 @@ void setup() {
     }
     json += "]";
 
-    json += ",\"wifi_ssid\":\"" + cfg.wifi_ssid + "\""; // Add Wi-Fi SSID for debugging
+    json += ",\"wifi_ssid\":\"" + jsonEscape(cfg.wifi_ssid) + "\""; // Add Wi-Fi SSID for debugging
     json += "}";
     req->send(200, "application/json", json);
   });
@@ -1742,10 +1757,16 @@ void loop() {
 
           if (cfg.moveType == 3) { // Sinus
             val = sinf(phase);
-          } else if (cfg.moveType == 4) { // Sägezahn
-            val = 2.0f * fmodf(phase / (2.0f * PI), 1.0f) - 1.0f;
-          } else if (cfg.moveType == 5) { // Rechteck
-            val = sinf(phase) >= 0.0f ? 1.0f : -1.0f;
+          } else if (cfg.moveType == 4) { // Sägezahn (zShape = Kurve/Exponent)
+            float t = fmodf(phase / (2.0f * PI), 1.0f);
+            if (t < 0.0f) t += 1.0f;
+            float exp = fmaxf(0.1f, expf(cfg.zShape * 0.25f));
+            val = powf(t, exp) * 2.0f - 1.0f;
+          } else if (cfg.moveType == 5) { // Rechteck (zShape = Duty-Cycle)
+            float t = fmodf(phase / (2.0f * PI), 1.0f);
+            if (t < 0.0f) t += 1.0f;
+            float duty = fmaxf(0.05f, fminf(0.95f, 0.5f + cfg.zShape * 0.08f));
+            val = t < duty ? 1.0f : -1.0f;
           }
           target = (long)(val * maxSteps * cfg.contrast);
 
