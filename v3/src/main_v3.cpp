@@ -51,8 +51,15 @@ struct TestState {
   float currentMaxSpd = 4000;
   float currentAccel = 2000;
   bool enabled[4] = {true, true, true, true};
+  
+  // Bug #11 & #5/6/7 Fix: Homing & Test Flags
+  volatile int pendingHome = -1; // -1: none, 0-3: motor, 4: all
+  volatile int pendingTest = -1; // -1: none, 0-3: motor
+  volatile bool pendingStop = false;
+  String logBuffer = "";
 };
 TestState ts;
+portMUX_TYPE stepperMux = portMUX_INITIALIZER_UNLOCKED;
 
 // --- UI CONTENT ---
 const char index_html[] PROGMEM = R"rawliteral(
@@ -176,25 +183,96 @@ void setSpreadCycle(int i, bool enable) {
 
 void homeMotor(int i) {
   if (i < 0 || i > 3) return;
+  ts.logBuffer += "Homing Motor " + String(i) + "...\\n";
   setSpreadCycle(i, true);
+  
+  portENTER_CRITICAL(&stepperMux);
   steppers[i]->setSpeed(1500);
+  portEXIT_CRITICAL(&stepperMux);
+
   long start = millis();
-  while (digitalRead(TACHO_PIN) == HIGH && (millis() - start < 15000)) {
+  const long maxSteps = 3200 * 10; // 10 Revs max
+  long taken = 0;
+
+  while (digitalRead(TACHO_PIN) == HIGH && (millis() - start < 15000) && taken < maxSteps) {
+    portENTER_CRITICAL(&stepperMux);
     steppers[i]->runSpeed();
+    portEXIT_CRITICAL(&stepperMux);
+    taken++;
     yield();
   }
+  
+  portENTER_CRITICAL(&stepperMux);
   steppers[i]->setCurrentPosition(0);
-  steppers[i]->moveTo(800); // Park at 180 deg
-  while(steppers[i]->distanceToGo() != 0) { steppers[i]->run(); yield(); }
+  // Park at 180 deg (1600 steps at 3200 steps/rev)
+  steppers[i]->moveTo(1600); 
+  portEXIT_CRITICAL(&stepperMux);
+
+  while(true) {
+    portENTER_CRITICAL(&stepperMux);
+    bool done = (steppers[i]->distanceToGo() == 0);
+    steppers[i]->run();
+    portEXIT_CRITICAL(&stepperMux);
+    if(done) break;
+    yield();
+  }
   setSpreadCycle(i, false);
+  ts.logBuffer += "Motor " + String(i) + " homed and parked.\\n";
+}
+
+void runMotorParkour(int i) {
+  if (i < 0 || i > 3) return;
+  ts.logBuffer += "Starting Parkour for Motor " + String(i) + "...\\n";
+  homeMotor(i);
+  
+  // Example Stress Test: Rapid 360 back and forth
+  for(int cycle=1; cycle<=3; cycle++) {
+    ts.logBuffer += "Cycle " + String(cycle) + "...\\n";
+    portENTER_CRITICAL(&stepperMux);
+    steppers[i]->moveTo(0); // Go back to trigger
+    portEXIT_CRITICAL(&stepperMux);
+    while(steppers[i]->distanceToGo() != 0) { steppers[i]->run(); yield(); }
+    
+    portENTER_CRITICAL(&stepperMux);
+    steppers[i]->moveTo(3200); // Full 360
+    portEXIT_CRITICAL(&stepperMux);
+    while(steppers[i]->distanceToGo() != 0) { steppers[i]->run(); yield(); }
+  }
+  ts.logBuffer += "Parkour complete.\\n";
 }
 
 // --- TASKS ---
 void TaskCore1(void * pvParameters) {
   for(;;) {
+    // 1. Handle Homing Request
+    if (ts.pendingHome != -1) {
+      int m = ts.pendingHome;
+      ts.pendingHome = -1;
+      if (m == 4) { // Home All
+        for (int i=0; i<4; i++) homeMotor(i);
+      } else {
+        homeMotor(m);
+      }
+    }
+
+    // 2. Handle Stress Test Request
+    if (ts.pendingTest != -1) {
+      int m = ts.pendingTest;
+      ts.pendingTest = -1;
+      runMotorParkour(m);
+    }
+
+    // 3. Standard Run
+    portENTER_CRITICAL(&stepperMux);
+    if (ts.pendingStop) {
+      for(int i=0; i<4; i++) steppers[i]->stop();
+      ts.pendingStop = false;
+    }
     for(int i=0; i<4; i++) {
       if(ts.enabled[i]) steppers[i]->run();
     }
+    portEXIT_CRITICAL(&stepperMux);
+    
     vTaskDelay(1);
   }
 }
@@ -204,9 +282,25 @@ void setup() {
   pinMode(ENABLE_PIN, OUTPUT); digitalWrite(ENABLE_PIN, LOW);
   pinMode(TACHO_PIN, INPUT_PULLUP);
   
+  WiFi.setHostname("perlin-v3");
   WiFi.begin(DEFAULT_SSID, DEFAULT_PASS);
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-  MDNS.begin("perlin-v3");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) { 
+    delay(500); Serial.print("."); 
+  }
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nWiFi Failed. Starting AP 'perlin-v3-setup'...");
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP("perlin-v3-setup", "12345678");
+  } else {
+    Serial.println("\nWiFi Connected. IP: " + WiFi.localIP().toString());
+    MDNS.begin("perlin-v3");
+  }
+
+  ArduinoOTA.setHostname("perlin-v3");
+  ArduinoOTA.setPassword("12345678");
+  ArduinoOTA.begin();
   
   SERIAL_PORT.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
   auto initTMC = [](TMC2209Stepper &d) { d.begin(); d.toff(5); d.rms_current(600); d.microsteps(16); d.pwm_autoscale(true); };
@@ -214,10 +308,16 @@ void setup() {
 
   server.on("/", [](AsyncWebServerRequest *r){ r->send_P(200, "text/html", index_html); });
   server.on("/status", [](AsyncWebServerRequest *r){
-    String j = "{\"hit\":" + String(digitalRead(TACHO_PIN)==LOW?"true":"false") + ",\"m\":[";
+    String j = "{\"hit\":" + String(digitalRead(TACHO_PIN)==LOW?"true":"false");
+    j += ",\"log\":\"" + ts.logBuffer + "\",\"m\":[";
+    ts.logBuffer = ""; // Clear buffer after sending
     for(int i=0; i<4; i++) {
-      float deg = (steppers[i]->currentPosition() % 1600) * 360.0 / 1600.0;
-      j += "{\"p\":"+String(deg,1)+",\"s\":"+String(steppers[i]->speed())+",\"e\":"+String(ts.enabled[i]?"true":"false")+"}";
+      portENTER_CRITICAL(&stepperMux);
+      long pos = steppers[i]->currentPosition();
+      float spd = steppers[i]->speed();
+      portEXIT_CRITICAL(&stepperMux);
+      float deg = (pos % 3200) * 360.0 / 3200.0;
+      j += "{\"p\":"+String(deg,1)+",\"s\":"+String(spd)+",\"e\":"+String(ts.enabled[i]?"true":"false")+"}";
       if(i<3) j+=",";
     }
     j += "]}";
@@ -225,20 +325,34 @@ void setup() {
   });
 
   server.on("/cmd", [](AsyncWebServerRequest *r){
+    if(!r->hasParam("a")) { r->send(400, "text/plain", "Missing a"); return; }
     String a = r->getParam("a")->value();
-    int m = r->getParam("m")->value().toInt();
-    if(a=="home") homeMotor(m);
+    int m = r->hasParam("m") ? r->getParam("m")->value().toInt() : 0;
+    
+    if(a=="home") ts.pendingHome = m;
+    if(a=="homeall") ts.pendingHome = 4;
+    if(a=="test") ts.pendingTest = m;
     if(a=="pwr") { ts.enabled[m] = !ts.enabled[m]; }
-    if(a=="stop") { for(int i=0; i<4; i++) steppers[i]->stop(); }
-    if(a=="goto") { for(int i=0; i<4; i++) steppers[i]->moveTo(m * 1600 / 360); }
+    if(a=="stop") { ts.pendingStop = true; }
+    if(a=="goto") { 
+      portENTER_CRITICAL(&stepperMux);
+      steppers[0]->moveTo(m * 3200 / 360); 
+      steppers[1]->moveTo(m * 3200 / 360); 
+      steppers[2]->moveTo(m * 3200 / 360); 
+      steppers[3]->moveTo(m * 3200 / 360); 
+      portEXIT_CRITICAL(&stepperMux);
+    }
     r->send(200, "text/plain", "OK");
   });
 
   server.on("/set", [](AsyncWebServerRequest *r){
+    if(!r->hasParam("k") || !r->hasParam("v")) { r->send(400, "text/plain", "Missing k/v"); return; }
     String k = r->getParam("k")->value();
     float v = r->getParam("v")->value().toFloat();
+    portENTER_CRITICAL(&stepperMux);
     if(k=="speed") { ts.currentMaxSpd = v; for(int i=0; i<4; i++) steppers[i]->setMaxSpeed(v); }
     if(k=="accel") { ts.currentAccel = v; for(int i=0; i<4; i++) steppers[i]->setAcceleration(v); }
+    portEXIT_CRITICAL(&stepperMux);
     r->send(200, "text/plain", "OK");
   });
 
