@@ -9,7 +9,15 @@
 #include "SimplexNoise.h"
 #include <Preferences.h>
 #include <ArduinoOTA.h>
+#include <AsyncElegantOTA.h>
 #include <vector>
+
+// --- VERSION & METADATA ---
+// #change: Added version metadata and change log entries for traceable debugging.
+// #author: Codex
+// #time: 2026-02-05 18:47:48 CET
+// #version: 0.2.4
+static const char* FW_VERSION = "0.4.9";
 
 // --- WIFI CREDENTIALS ---
 const char* ota_ssid = "perlin";
@@ -19,25 +27,96 @@ const char* ota_password = "12345678";
 TaskHandle_t PerlinTask;
 void PerlinLoop(void * pvParameters);
 
-// --- FAVORITES SYSTEM ---
+// --- HARDWARE PINS ---
+#define R_SENSE 0.11f
+#define ENABLE_PIN 25
+#define SERIAL_PORT Serial2
+#define UART_RX 21
+#define UART_TX 22
+
+#define TEMP_SENSOR_PIN 36 
+#define HOTEND_OUTPUT_PIN 2 // E0/Hotend MOSFET output (LAMP)
+#define BED_OUTPUT_PIN 13   // Bed MOSFET output (FAN)
+#define LAMP_PIN HOTEND_OUTPUT_PIN
+#define FAN_PIN BED_OUTPUT_PIN
+
+#define X_STEP 27
+#define X_DIR  26
+#define Y_STEP 33
+#define Y_DIR  32
+#define Z_STEP 14
+#define Z_DIR  12
+#define E_STEP 16
+#define E_DIR  17
+
+#define TACHO_PIN 15 // Z-MIN / PROBE Header
+
+// --- CONFIG & STRUCTURES ---
+struct MotorOffset {
+  float x;
+  float y;
+};
+
+struct Config {
+  bool running = true;
+  int moveType = 0;        // 0=Linear, 1=Circle, 2=Figure8, 3=Sine, 4=Saw, 5=Square
+  float speed = 0.12;      // Fluggeschwindigkeit
+
+  float angle = 45.0;      // Richtung (Linear)
+  float radius = 50.0;     // Radius (Kreis/Acht)
+
+  float framesize = 0.01;  // "Ausschnitt" (Frequenz/Zoom)
+  float contrast = 1.94;   // "Hügelgröße" (Amplitude)
+  float zShape = 1.0;      // "Form" (Gamma/Sharpness). 1.0=Normal, >1=Spitz, <0=Invertiert
+
+  float rangeDeg = 300.0;
+  float motorSpacingCm = 25.0; 
+
+  MotorOffset motorOffsets[4] = {
+    { -37.5, 0.0 }, { -12.5, 0.0 }, { 12.5, 0.0 }, { 37.5, 0.0 }
+  };
+
+  String wifi_ssid = "";
+  String wifi_password = "";
+
+  int fanSpeed = 0;
+  int lampBrightness = 0;
+};
+
+Config webCfg;
+portMUX_TYPE cfgMux = portMUX_INITIALIZER_UNLOCKED;
+
 struct Fav {
   float motors[4];
   String name;
 };
 std::vector<Fav> favs;
-float favBias = 0.2; // 20% Chance für Favoriten-Ansteuerung
+float favBias = 0.2; 
 
-// #change: Added version metadata and change log entries for traceable debugging.
-// #author: Codex
-// #time: 2026-02-05 18:47:48 CET
-// #version: 0.2.4
-static const char* FW_VERSION = "0.4.9";
+// --- TMC DRIVERS & STEPPERS ---
+TMC2209Stepper driverZ(&SERIAL_PORT, R_SENSE, 0);
+TMC2209Stepper driverX(&SERIAL_PORT, R_SENSE, 1);
+TMC2209Stepper driverE(&SERIAL_PORT, R_SENSE, 2);
+TMC2209Stepper driverY(&SERIAL_PORT, R_SENSE, 3);
 
-// #aus
-// Usability Suggestion:
-// Externalizing HTML to LittleFS for easier updates is generally a good practice for larger projects.
-// However, for initial setup, embedding it as PROGMEM is simpler and ensures it's always available.
-// #aus
+AccelStepper stX(AccelStepper::DRIVER, X_STEP, X_DIR);
+AccelStepper stY(AccelStepper::DRIVER, Y_STEP, Y_DIR);
+AccelStepper stZ(AccelStepper::DRIVER, Z_STEP, Z_DIR);
+AccelStepper stE(AccelStepper::DRIVER, E_STEP, E_DIR);
+AccelStepper* steppers[4] = {&stX, &stY, &stZ, &stE};
+
+// --- GLOBAL OBJECTS ---
+SimplexNoise sn;
+AsyncWebServer server(80);
+DNSServer dnsServer;
+Preferences preferences;
+bool apMode = false;
+
+double flightX = 0;
+double flightY = 0;
+double timeAccumulator = 0;
+
+// --- HTML CONTENT ---
 const char INSTALL_HTML[] PROGMEM = R"rawliteral(
 <!-- #change: Added installer version marker and traceable change metadata. -->
 <!-- #author: Codex -->
@@ -120,164 +199,6 @@ const char INSTALL_HTML[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-
-// --- HARDWARE ---
-#define R_SENSE 0.11f
-#define ENABLE_PIN 25
-#define SERIAL_PORT Serial2
-#define UART_RX 21
-#define UART_TX 22
-
-// #beschreibung: Zusätzliche Pins für Temperatursensor, Lüfter und Lampe definiert.
-// #author: Gemini CLI Agent
-// #time: 2026-02-05 15:20:00 (Approximate)
-// #version: 0.4.2
-#define TEMP_SENSOR_PIN 36 // Analog-fähiger Pin für den Temperatursensor (TE0)
-// #change: Machine output mapping clarified as requested:
-// Lamp -> HOTEND connector, Fan -> BED connector.
-// #author: Codex
-// #time: 2026-02-10 22:30:00 CET
-// #version: 0.4.8
-#define HOTEND_OUTPUT_PIN 2 // E0/Hotend MOSFET output
-#define BED_OUTPUT_PIN 13   // Bed MOSFET output
-#define LAMP_PIN HOTEND_OUTPUT_PIN
-#define FAN_PIN BED_OUTPUT_PIN
-
-// Motor Pins
-#define X_STEP 27
-#define X_DIR  26
-#define Y_STEP 33
-#define Y_DIR  32
-#define Z_STEP 14
-#define Z_DIR  12
-#define E_STEP 16
-#define E_DIR  17
-
-// --- TMC ADRESSEN (E4 Layout: Z=0, X=1, E=2, Y=3) ---
-TMC2209Stepper driverZ(&SERIAL_PORT, R_SENSE, 0);
-TMC2209Stepper driverX(&SERIAL_PORT, R_SENSE, 1);
-TMC2209Stepper driverE(&SERIAL_PORT, R_SENSE, 2);
-TMC2209Stepper driverY(&SERIAL_PORT, R_SENSE, 3);
-
-AccelStepper stX(AccelStepper::DRIVER, X_STEP, X_DIR);
-AccelStepper stY(AccelStepper::DRIVER, Y_STEP, Y_DIR);
-AccelStepper stZ(AccelStepper::DRIVER, Z_STEP, Z_DIR);
-AccelStepper stE(AccelStepper::DRIVER, E_STEP, E_DIR);
-AccelStepper* steppers[4] = {&stX, &stY, &stZ, &stE};
-
-SimplexNoise sn;
-AsyncWebServer server(80);
-DNSServer dnsServer;
-bool apMode = false;
-
-// --- CONFIG ---
-
-Preferences preferences; // Global Preferences object for NVS
-
-struct MotorOffset {
-  float x;
-  float y;
-};
-
-struct Config {
-  bool running = true;
-  int moveType = 0;        // 0=Linear, 1=Circle, 2=Figure8
-  float speed = 0.12;      // Fluggeschwindigkeit
-
-  // Pfad Parameter
-  float angle = 45.0;      // Richtung (Linear)
-  float radius = 50.0;     // Radius (Kreis/Acht)
-
-  // DIE 3 NEUEN NOISE REGLER
-  float framesize = 0.01;  // "Ausschnitt" (Frequenz/Zoom)
-  float contrast = 1.94;   // "Hügelgröße" (Amplitude)
-  float zShape = 1.0;      // "Form" (Gamma/Sharpness). 1.0=Normal, >1=Spitz, <0=Invertiert
-
-  // Max Hub der Motoren in Grad (UI-regelbar)
-  // #change: Range and spacing are now user-adjustable at runtime.
-  // #author: Codex
-  // #time: 2026-02-05 18:47:48 CET
-  // #version: 0.2.4
-  float rangeDeg = 300.0;
-  float motorSpacingCm = 25.0; // This will now be a "preset" for the individual offsets
-
-  // #beschreibung: Individuelle X/Y-Offsets pro Motor zur feineren Steuerung der Noise-Abtastung hinzugefügt.
-  // #author: Gemini CLI Agent
-  // #time: 2026-02-05 16:20:00 (Approximate)
-  // #version: 0.4.6
-  MotorOffset motorOffsets[4] = {
-    { -37.5, 0.0 }, { -12.5, 0.0 }, { 12.5, 0.0 }, { 37.5, 0.0 }
-  };
-
-  // #aus
-  // Usability Suggestion:
-  // Store Wi-Fi credentials in the Config struct for easier management and persistence.
-  // Using String for these is acceptable for small projects, but char arrays might be more memory efficient
-  // for very constrained environments or if security is a higher concern.
-  // #aus
-  String wifi_ssid = "";
-  String wifi_password = "";
-
-  // #beschreibung: Konfigurationsvariablen für Lüftergeschwindigkeit und Lampenhelligkeit hinzugefügt.
-  // #author: Gemini CLI Agent
-  // #time: 2026-02-05 15:30:00 (Approximate)
-  // #version: 0.4.2
-  int fanSpeed = 0;
-  int lampBrightness = 0;
-};
-
-Config webCfg;
-portMUX_TYPE cfgMux = portMUX_INITIALIZER_UNLOCKED;
-
-String jsonEscape(const String& s) {
-  String out;
-  out.reserve(s.length());
-  for (int i = 0; i < (int)s.length(); i++) {
-    char c = s[i];
-    if      (c == '"')  out += "\\\"";
-    else if (c == '\\') out += "\\\\";
-    else if (c == '\n') out += "\\n";
-    else if (c == '\r') out += "\\r";
-    else                out += c;
-  }
-  return out;
-}
-
-// Function to load configuration from NVS
-void loadConfig() {
-  preferences.begin("e4-config", false); // Open Preferences with namespace "e4-config"
-  webCfg.wifi_ssid = preferences.getString("ssid", "");
-  webCfg.wifi_password = preferences.getString("pass", "");
-  preferences.end();
-  Serial.println("Config loaded.");
-  Serial.print("SSID: ");
-  Serial.println(webCfg.wifi_ssid);
-}
-
-// Function to save configuration to NVS
-void saveConfig() {
-  preferences.begin("e4-config", false);
-  preferences.putString("ssid", webCfg.wifi_ssid);
-  preferences.putString("pass", webCfg.wifi_password);
-  preferences.end();
-  Serial.println("Config saved.");
-}
-
-// Globale Flugbahn-Variablen
-double flightX = 0;
-double flightY = 0;
-double timeAccumulator = 0;
-
-// --- HTML ---
-// #aus
-// Usability Suggestion:
-// Consider externalizing the HTML into a separate .html file and serving it using LittleFS (SPIFFS).
-// This makes the HTML easier to edit, maintain, and allows for more complex web interfaces without recompiling the C++ code.
-// #aus
-// #change: Added UI controls and /config-driven state sync for runtime tuning.
-// #author: Codex
-// #time: 2026-02-05 18:47:48 CET
-// #version: 0.2.4
 const char index_html[] PROGMEM = R"rawliteral(
 <!-- #change: Added edit UI for runtime config viewing and control. -->
 <!-- #author: Codex -->
@@ -377,7 +298,9 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="stoprow">
           <button id="btn" onclick="toggle()">START SYSTEM</button>
           <button id="btn_zero" onclick="setZero()" style="background:#ff9800; margin-top: 10px;">ALIGN (SET 0°)</button>
+          <a href="/update" style="color: #777; font-size: 0.7em; text-decoration: none; margin-top: 15px; display: block;">&bull; Funk-Flash (Web Update) &bull;</a>
         </div>
+
       </div>
       <div id="right-column">
         <label>Movement Pattern</label>
@@ -1424,18 +1347,89 @@ const char index_html[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-// --- DRIVER INITIALIZATION ---
+// --- MOTOR HELPER FUNCTIONS ---
+void setSpreadCycle(int i, bool enable) {
+  if (i == 0) driverX.en_spreadCycle(enable);
+  else if (i == 1) driverY.en_spreadCycle(enable);
+  else if (i == 2) driverZ.en_spreadCycle(enable);
+  else if (i == 3) driverE.en_spreadCycle(enable);
+}
+
+void homeMotor(int i) {
+  if (i < 0 || i > 3) return;
+  Serial.printf("Homing Motor %d...\n", i);
+  steppers[i]->setSpeed(1000);
+  while (digitalRead(TACHO_PIN) == HIGH) {
+    steppers[i]->runSpeed();
+    yield();
+  }
+  steppers[i]->setCurrentPosition(0);
+  steppers[i]->moveTo(200); 
+  while (steppers[i]->distanceToGo() != 0) {
+    steppers[i]->run();
+    yield();
+  }
+  Serial.printf("Motor %d homed.\n", i);
+}
+
+void runMotorTest(int motorIndex) {
+  if (motorIndex < 0 || motorIndex > 3) return;
+  homeMotor(motorIndex);
+  int testAccel = 2000;
+  int testSpeed = 4000;
+  while (testSpeed <= 12000) {
+    Serial.printf("Test: Accel=%d, Speed=%d\n", testAccel, testSpeed);
+    steppers[motorIndex]->setAcceleration(testAccel);
+    steppers[motorIndex]->setMaxSpeed(testSpeed);
+    steppers[motorIndex]->move(1600);
+    while (steppers[motorIndex]->distanceToGo() != 0) {
+      steppers[motorIndex]->run();
+      yield();
+    }
+    testAccel += 1000;
+    testSpeed += 2000;
+    vTaskDelay(500 / portTICK_PERIOD_MS);
+  }
+}
+
+// --- CONFIG PERSISTENCE ---
+String jsonEscape(const String& s) {
+  String out;
+  out.reserve(s.length());
+  for (int i = 0; i < (int)s.length(); i++) {
+    char c = s[i];
+    if (c == '"') out += "\\\"";
+    else if (c == '\\') out += "\\\\";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\r') out += "\\r";
+    else out += c;
+  }
+  return out;
+}
+
+void loadConfig() {
+  preferences.begin("e4-config", false);
+  webCfg.wifi_ssid = preferences.getString("ssid", "");
+  webCfg.wifi_password = preferences.getString("pass", "");
+  preferences.end();
+}
+
+void saveConfig() {
+  preferences.begin("e4-config", false);
+  preferences.putString("ssid", webCfg.wifi_ssid);
+  preferences.putString("pass", webCfg.wifi_password);
+  preferences.end();
+}
+
+// --- SETUP & LOOP ---
 void setupDrivers() {
   pinMode(FAN_PIN, OUTPUT);
   pinMode(LAMP_PIN, OUTPUT);
-  Serial.printf("Output mapping: LAMP->HOTEND(GPIO %d), FAN->BED(GPIO %d)\n", LAMP_PIN, FAN_PIN);
-
   auto initTMC = [](TMC2209Stepper &d) {
     d.begin(); d.toff(5); d.rms_current(600); d.microsteps(16);
     d.en_spreadCycle(false); d.pwm_autoscale(true);
   };
   initTMC(driverX); initTMC(driverY); initTMC(driverZ); initTMC(driverE);
-
   for(int i=0; i<4; i++) {
     steppers[i]->setMaxSpeed(8000);
     steppers[i]->setAcceleration(4000);
@@ -1447,10 +1441,15 @@ void setup() {
   Serial.println("\n--- E4 Simplex Shaper v2 Starting ---");
   Serial.print("FW Version: "); Serial.println(FW_VERSION);
 
-  // WLAN Setup
+  loadConfig();
+
   WiFi.mode(WIFI_STA);
-  WiFi.begin(ota_ssid, ota_password);
-  Serial.print("Connecting to WiFi...");
+  if (webCfg.wifi_ssid.length() > 0) {
+    WiFi.begin(webCfg.wifi_ssid.c_str(), webCfg.wifi_password.c_str());
+  } else {
+    WiFi.begin(ota_ssid, ota_password);
+  }
+
   unsigned long startAttempt = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
     delay(500); Serial.print(".");
@@ -1465,82 +1464,119 @@ void setup() {
     apMode = true;
   }
 
-  // OTA Setup
   ArduinoOTA.setHostname("perlin-bench");
   ArduinoOTA.setPassword("12345678");
   ArduinoOTA.begin();
-
-  // MDNS
+  AsyncElegantOTA.begin(&server, "admin", "12345678");
   MDNS.begin("perlin");
 
   SERIAL_PORT.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
   pinMode(ENABLE_PIN, OUTPUT);
   digitalWrite(ENABLE_PIN, LOW);
+  pinMode(TACHO_PIN, INPUT_PULLUP);
 
   setupDrivers();
 
-  // Web Server Endpoints
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *req){
-    req->send_P(200, "text/html", index_html);
+    if (apMode) req->send_P(200, "text/html", INSTALL_HTML);
+    else req->send_P(200, "text/html", index_html);
   });
-  
+
   server.on("/config", HTTP_GET, [](AsyncWebServerRequest *req){
     portENTER_CRITICAL(&cfgMux);
     Config cfg = webCfg;
     portEXIT_CRITICAL(&cfgMux);
-    
-    String json = "{";
-    json += "\"running\":" + String(cfg.running ? "true" : "false");
-    json += ",\"type\":" + String(cfg.moveType);
-    json += ",\"speed\":" + String(cfg.speed, 2);
-    json += ",\"angle\":" + String(cfg.angle, 1);
-    json += ",\"rad\":" + String(cfg.radius, 1);
-    json += ",\"frame\":" + String(cfg.framesize, 4);
-    json += ",\"cont\":" + String(cfg.contrast, 2);
-    json += ",\"z\":" + String(cfg.zShape, 2);
-    json += ",\"range\":" + String(cfg.rangeDeg, 1);
-    json += ",\"mspace\":" + String(cfg.motorSpacingCm, 1);
-    json += ",\"fan\":" + String(cfg.fanSpeed);
-    json += ",\"lamp\":" + String(cfg.lampBrightness);
-    json += ",\"offsets\":[";
+    String json; json.reserve(512);
+    json += "{\"running\":" + String(cfg.running ? 1 : 0);
+    json += ",\"moveType\":" + String(cfg.moveType);
+    json += ",\"speed\":" + String(cfg.speed, 4);
+    json += ",\"angle\":" + String(cfg.angle, 2);
+    json += ",\"radius\":" + String(cfg.radius, 2);
+    json += ",\"framesize\":" + String(cfg.framesize, 4);
+    json += ",\"contrast\":" + String(cfg.contrast, 3);
+    json += ",\"zShape\":" + String(cfg.zShape, 3);
+    json += ",\"rangeDeg\":" + String(cfg.rangeDeg, 2);
+    json += ",\"motorSpacingCm\":" + String(cfg.motorSpacingCm, 2);
+    json += ",\"fanSpeed\":" + String(cfg.fanSpeed);
+    json += ",\"lampBrightness\":" + String(cfg.lampBrightness);
+    json += ",\"motorOffsets\":[";
     for (int i = 0; i < 4; i++) {
       json += "{\"x\":" + String(cfg.motorOffsets[i].x, 2) + ",\"y\":" + String(cfg.motorOffsets[i].y, 2) + "}";
       if (i < 3) json += ",";
     }
-    json += "]";
-    json += "}";
+    json += "],\"wifi_ssid\":\"" + jsonEscape(cfg.wifi_ssid) + "\"}";
     req->send(200, "application/json", json);
   });
 
-  server.on("/u", HTTP_GET, [](AsyncWebServerRequest *req){
+  server.on("/set", HTTP_GET, [](AsyncWebServerRequest *req){
     portENTER_CRITICAL(&cfgMux);
-    if(req->hasParam("run")) webCfg.running = (req->getParam("run")->value() == "true");
-    if(req->hasParam("type")) webCfg.moveType = req->getParam("type")->value().toInt();
+    if(req->hasParam("run")) webCfg.running = req->getParam("run")->value().toInt();
+    if(req->hasParam("type")) webCfg.moveType = constrain(req->getParam("type")->value().toInt(), 0, 5);
     if(req->hasParam("speed")) webCfg.speed = req->getParam("speed")->value().toFloat();
     if(req->hasParam("angle")) webCfg.angle = req->getParam("angle")->value().toFloat();
     if(req->hasParam("rad")) webCfg.radius = req->getParam("rad")->value().toFloat();
-    if(req->hasParam("frame")) webCfg.framesize = req->getParam("frame")->value().toFloat();
-    if(req->hasParam("cont")) webCfg.contrast = req->getParam("cont")->value().toFloat();
-    if(req->hasParam("z")) webCfg.zShape = req->getParam("z")->value().toFloat();
     if(req->hasParam("range")) webCfg.rangeDeg = req->getParam("range")->value().toFloat();
     if(req->hasParam("mspace")) webCfg.motorSpacingCm = req->getParam("mspace")->value().toFloat();
+    if(req->hasParam("frame")) webCfg.framesize = req->getParam("frame")->value().toFloat();
+    if(req->hasParam("cont")) webCfg.contrast = req->getParam("cont")->value().toFloat();
+    if(req->hasParam("shape")) webCfg.zShape = req->getParam("shape")->value().toFloat();
     if(req->hasParam("fan")) webCfg.fanSpeed = req->getParam("fan")->value().toInt();
     if(req->hasParam("lamp")) webCfg.lampBrightness = req->getParam("lamp")->value().toInt();
+    for (int i = 0; i < 4; i++) {
+      String mx = "m" + String(i + 1) + "x";
+      String my = "m" + String(i + 1) + "y";
+      if (req->hasParam(mx)) webCfg.motorOffsets[i].x = req->getParam(mx)->value().toFloat();
+      if (req->hasParam(my)) webCfg.motorOffsets[i].y = req->getParam(my)->value().toFloat();
+    }
     portEXIT_CRITICAL(&cfgMux);
     req->send(200, "text/plain", "OK");
   });
 
-  server.onNotFound([](AsyncWebServerRequest *req){ req->redirect("/"); });
-  server.begin();
+  server.on("/setzero", HTTP_GET, [](AsyncWebServerRequest *req){
+    for (int i = 0; i < 4; i++) steppers[i]->setCurrentPosition(0);
+    req->send(200, "text/plain", "OK");
+  });
 
-  // Task auf Core 1 starten
+  server.on("/wifisave", HTTP_POST, [](AsyncWebServerRequest *req){
+    if(req->hasParam("ssid", true)) webCfg.wifi_ssid = req->getParam("ssid", true)->value();
+    if(req->hasParam("password", true)) webCfg.wifi_password = req->getParam("password", true)->value();
+    saveConfig();
+    req->send(200, "text/plain", "OK");
+    delay(2000); ESP.restart();
+  });
+
+  server.on("/test", HTTP_GET, [](AsyncWebServerRequest *req){
+    if(req->hasParam("m")) {
+      int m = req->getParam("m")->value().toInt();
+      runMotorTest(m);
+      req->send(200, "text/plain", "Started Test.");
+    } else req->send(400, "text/plain", "Missing m.");
+  });
+
+  server.onNotFound([](AsyncWebServerRequest *req){
+    if (apMode) req->send_P(200, "text/html", INSTALL_HTML);
+    else req->redirect("/");
+  });
+
+  server.begin();
   xTaskCreatePinnedToCore(PerlinLoop, "PerlinTask", 10000, NULL, 1, &PerlinTask, 1);
 }
 
 void loop() {
   if (apMode) dnsServer.processNextRequest();
   ArduinoOTA.handle();
-  delay(1); 
+
+  static unsigned long lastExtrasTime = 0;
+  if (millis() - lastExtrasTime > 500) {
+    lastExtrasTime = millis();
+    portENTER_CRITICAL(&cfgMux);
+    int fSpeed = webCfg.fanSpeed;
+    int lBright = webCfg.lampBrightness;
+    portEXIT_CRITICAL(&cfgMux);
+    analogWrite(FAN_PIN, fSpeed);
+    analogWrite(LAMP_PIN, lBright);
+  }
+  vTaskDelay(1);
 }
 
 void PerlinLoop(void * pvParameters) {
@@ -1555,46 +1591,64 @@ void PerlinLoop(void * pvParameters) {
         motors_stopped = false;
         Serial.println("Core 1: Motors running.");
       }
-
       static unsigned long lastMotionCalcTime = 0;
-      if (millis() - lastMotionCalcTime >= 10) {
+      const unsigned int motionCalcInterval = 10;
+      if (millis() - lastMotionCalcTime >= motionCalcInterval) {
         lastMotionCalcTime = millis();
+        float dt = motionCalcInterval / 1000.0f;
         
-        timeAccumulator += cfg.speed;
-        
-        // --- PFAD BERECHNUNG ---
-        if (cfg.moveType == 0) { // Linear
-          float rad = cfg.angle * (PI / 180.0);
-          flightX = timeAccumulator * cos(rad);
-          flightY = timeAccumulator * sin(rad);
-        } else if (cfg.moveType == 1) { // Circle
-          flightX = cfg.radius * cos(timeAccumulator * 0.1);
-          flightY = cfg.radius * sin(timeAccumulator * 0.1);
-        } else if (cfg.moveType == 2) { // Figure 8
-          flightX = cfg.radius * sin(timeAccumulator * 0.1);
-          flightY = cfg.radius * sin(timeAccumulator * 0.1 * 2) * 0.5;
-        }
+        if (cfg.moveType == 0) {
+          float rad = cfg.angle * PI / 180.0f;
+          flightX += cos(rad) * cfg.speed * dt * 10.0;
+          flightY += sin(rad) * cfg.speed * dt * 10.0;
+          const double wrapLimit = 1000000.0;
+          flightX = fmod(flightX, wrapLimit); flightY = fmod(flightY, wrapLimit);
+        } else if (cfg.moveType <= 2) {
+          timeAccumulator += cfg.speed * dt;
+          if (cfg.moveType == 1) {
+            flightX = cfg.radius * cos(timeAccumulator);
+            flightY = cfg.radius * sin(timeAccumulator);
+          } else if (cfg.moveType == 2) {
+            flightX = cfg.radius * cos(timeAccumulator);
+            flightY = (cfg.radius * 0.5) * sin(timeAccumulator * 2.0);
+          }
+        } else timeAccumulator += cfg.speed * dt;
 
-        // --- MOTOR UPDATES ---
+        float stepsPerDegree = (200.0f * 16.0f) / 360.0f;
+        float maxSteps = cfg.rangeDeg * stepsPerDegree;
+
         for (int i = 0; i < 4; i++) {
-          double noiseX = (flightX + cfg.motorOffsets[i].x) * cfg.framesize;
-          double noiseY = (flightY + cfg.motorOffsets[i].y) * cfg.framesize;
-          
-          double rawVal = sn.noise(noiseX, noiseY);
-          rawVal = rawVal * cfg.contrast;
-          
-          // Z-Shape Anwendung
-          double finalVal;
-          if (cfg.zShape >= 0) finalVal = pow(abs(rawVal), cfg.zShape + 1.0) * (rawVal >= 0 ? 1 : -1);
-          else finalVal = (1.0 - pow(1.0 - abs(rawVal), 1.0 - cfg.zShape)) * (rawVal >= 0 ? 1 : -1);
-          
-          long targetPos = (long)(finalVal * (cfg.rangeDeg / 360.0) * 1600.0); // Beispiel Mapping
-          steppers[i]->moveTo(targetPos);
+          float val = 0.0f;
+          if (cfg.moveType >= 3) {
+            float phaseSpread = (cfg.motorSpacingCm / 100.0f) * 2.0f * PI;
+            float phase = timeAccumulator + i * phaseSpread;
+            if (cfg.moveType == 3) val = sinf(phase);
+            else if (cfg.moveType == 4) {
+              float t = fmodf(phase / (2.0f * PI), 1.0f); if (t < 0.0f) t += 1.0f;
+              float exp = fmaxf(0.1f, expf(cfg.zShape * 0.25f));
+              val = powf(t, exp) * 2.0f - 1.0f;
+            } else if (cfg.moveType == 5) {
+              float t = fmodf(phase / (2.0f * PI), 1.0f); if (t < 0.0f) t += 1.0f;
+              float duty = fmaxf(0.05f, fminf(0.95f, 0.5f + cfg.zShape * 0.08f));
+              val = t < duty ? 1.0f : -1.0f;
+            }
+          } else {
+            float sampleX = (flightX + cfg.motorOffsets[i].x) * cfg.framesize;
+            float sampleY = (flightY + cfg.motorOffsets[i].y) * cfg.framesize;
+            float n = sn.noise(sampleX, sampleY);
+            float nNorm = (n + 1.0f) / 2.0f;
+            float exponent = abs(cfg.zShape); if (exponent < 0.1) exponent = 0.1;
+            float nShaped = pow(nNorm, exponent);
+            if (cfg.zShape < 0) nShaped = 1.0f - nShaped;
+            val = (nShaped * 2.0f) - 1.0f;
+          }
+          long target = (long)(val * maxSteps * cfg.contrast);
+          long maxStepsL = (long)maxSteps;
+          if (target > maxStepsL) target = maxStepsL; if (target < -maxStepsL) target = -maxStepsL;
+          steppers[i]->moveTo(target);
         }
       }
-      
       for(int i=0; i<4; i++) steppers[i]->run();
-
     } else {
       if (!motors_stopped) {
         motors_stopped = true;
@@ -1602,309 +1656,6 @@ void PerlinLoop(void * pvParameters) {
         Serial.println("Core 1: Motors stopped.");
       }
     }
-    
-    // Kleiner Delay um den Watchdog glücklich zu machen
     vTaskDelay(1);
   }
 }
-    WiFi.disconnect();
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(webCfg.wifi_ssid.c_str(), webCfg.wifi_password.c_str());
-
-    req->send(200, "text/plain", "OK"); // Send OK response to browser
-    Serial.println("Wi-Fi settings updated and saved. Board will attempt to connect.");
-    Serial.println("Rebooting in 5 seconds to apply new Wi-Fi settings...");
-    delay(5000);
-    ESP.restart(); // Reboot to ensure clean Wi-Fi connection
-  });
-
-  // #beschreibung: Endpunkt für die "Set Zero"-Funktion hinzugefügt, um die aktuelle Motorposition als Nullpunkt zu setzen.
-  // #author: Gemini CLI Agent
-  // #time: 2026-02-05 15:10:00 (Approximate)
-  // #version: 0.4.1
-  server.on("/setzero", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("Setting current motor positions to ZERO.");
-    for (int i = 0; i < 4; i++) {
-      steppers[i]->setCurrentPosition(0);
-    }
-    request->send(200, "text/plain", "OK");
-  });
-
-  server.on("/set", HTTP_GET, [](AsyncWebServerRequest *req){
-    portENTER_CRITICAL(&cfgMux);
-    if(req->hasParam("run")) webCfg.running = req->getParam("run")->value().toInt();
-    if(req->hasParam("type")) webCfg.moveType = constrain(req->getParam("type")->value().toInt(), 0, 5);
-    if(req->hasParam("speed")) webCfg.speed = req->getParam("speed")->value().toFloat();
-    if(req->hasParam("angle")) webCfg.angle = req->getParam("angle")->value().toFloat();
-    if(req->hasParam("rad")) webCfg.radius = req->getParam("rad")->value().toFloat();
-    if(req->hasParam("range")) webCfg.rangeDeg = req->getParam("range")->value().toFloat();
-    // #change: Allow runtime adjustment of motor spacing from the UI.
-    // #author: Codex
-    // #time: 2026-02-05 18:47:48 CET
-    // #version: 0.2.4
-    if(req->hasParam("mspace")) webCfg.motorSpacingCm = req->getParam("mspace")->value().toFloat();
-    
-    // Die 3 neuen Parameter
-    if(req->hasParam("frame")) webCfg.framesize = req->getParam("frame")->value().toFloat();
-    if(req->hasParam("cont")) webCfg.contrast = req->getParam("cont")->value().toFloat();
-    if(req->hasParam("shape")) webCfg.zShape = req->getParam("shape")->value().toFloat();
-
-    // #beschreibung: Handler für Lüfter- und Lampen-Parameter im /set-Endpunkt hinzugefügt.
-    // #author: Gemini CLI Agent
-    // #time: 2026-02-05 15:40:00 (Approximate)
-    // #version: 0.4.2
-    if(req->hasParam("fan")) webCfg.fanSpeed = req->getParam("fan")->value().toInt();
-    if(req->hasParam("lamp")) webCfg.lampBrightness = req->getParam("lamp")->value().toInt();
-
-    // #beschreibung: Handler für die individuellen Motor-Offset-Parameter im /set-Endpunkt hinzugefügt.
-    // #author: Gemini CLI Agent
-    // #time: 2026-02-05 16:35:00 (Approximate)
-    // #version: 0.4.6
-    for (int i = 0; i < 4; i++) {
-      String mx = "m" + String(i + 1) + "x";
-      String my = "m" + String(i + 1) + "y";
-      if (req->hasParam(mx)) {
-        webCfg.motorOffsets[i].x = req->getParam(mx)->value().toFloat();
-      }
-      if (req->hasParam(my)) {
-        webCfg.motorOffsets[i].y = req->getParam(my)->value().toFloat();
-      }
-    }
-    
-    portEXIT_CRITICAL(&cfgMux);
-    req->send(200, "text/plain", "OK");
-  });
-
-  // #change: Added /config endpoint so the UI can initialize from actual device state.
-  // #author: Codex
-  // #time: 2026-02-05 18:15:30 CET
-  // #version: 0.2.2
-  // #beschreibung: Enhanced /config endpoint to include `wifi_ssid` for debugging network state from UI.
-  // #author: Gemini CLI Agent
-  // #time: 2026-02-05 14:00:00 (Approximate)
-  // #version: 0.3.0
-  // #beschreibung: Kommentar zur Task-Pinning-Optimierung hinzugefügt.
-  // #author: Gemini CLI Agent
-  // #time: 2026-02-05 16:50:00 (Approximate)
-  // #version: 0.4.7
-  // Für eine weitergehende Optimierung könnte die Motorsteuerungslogik in einen
-  // eigenen FreeRTOS-Task ausgelagert werden, der auf Core 1 läuft, während der
-  // Webserver und das Wi-Fi auf Core 0 bleiben.
-  // Beispiel:
-  // xTaskCreatePinnedToCore(
-  //   motorLoop,          /* Function to implement the task */
-  //   "MotorControl",     /* Name of the task */
-  //   10000,              /* Stack size in words */
-  //   NULL,               /* Task input parameter */
-  //   1,                  /* Priority of the task */
-  //   &motorTaskHandle,   /* Task handle. */
-  //   1);                 /* Core where the task should run */
-  server.on("/config", HTTP_GET, [](AsyncWebServerRequest *req){
-    portENTER_CRITICAL(&cfgMux);
-    Config cfg = webCfg;
-    portEXIT_CRITICAL(&cfgMux);
-
-    String json;
-    json.reserve(256);
-    json += "{";
-    json += "\"running\":" + String(cfg.running ? 1 : 0);
-    json += ",\"moveType\":" + String(cfg.moveType);
-    json += ",\"speed\":" + String(cfg.speed, 4);
-    json += ",\"angle\":" + String(cfg.angle, 2);
-    json += ",\"radius\":" + String(cfg.radius, 2);
-    json += ",\"framesize\":" + String(cfg.framesize, 4);
-    json += ",\"contrast\":" + String(cfg.contrast, 3);
-    json += ",\"zShape\":" + String(cfg.zShape, 3);
-    json += ",\"rangeDeg\":" + String(cfg.rangeDeg, 2);
-    // #change: Expose motor spacing in /config for UI initialization.
-    // #author: Codex
-    // #time: 2026-02-05 18:47:48 CET
-    // #version: 0.2.4
-    json += ",\"motorSpacingCm\":" + String(cfg.motorSpacingCm, 2);
-    // #beschreibung: Lüfter- und Lampen-Werte zum /config-Endpunkt hinzugefügt.
-    // #author: Gemini CLI Agent
-    // #time: 2026-02-05 15:45:00 (Approximate)
-    // #version: 0.4.2
-    json += ",\"fanSpeed\":" + String(cfg.fanSpeed);
-    json += ",\"lampBrightness\":" + String(cfg.lampBrightness);
-    
-    // #beschreibung: Serialisierung der individuellen Motor-Offsets zum /config-Endpunkt hinzugefügt.
-    // #author: Gemini CLI Agent
-    // #time: 2026-02-05 16:40:00 (Approximate)
-    // #version: 0.4.6
-    json += ",\"motorOffsets\":[";
-    for (int i = 0; i < 4; i++) {
-      json += "{\"x\":" + String(cfg.motorOffsets[i].x, 2) + ",\"y\":" + String(cfg.motorOffsets[i].y, 2) + "}";
-      if (i < 3) {
-        json += ",";
-      }
-    }
-    json += "]";
-
-    json += ",\"wifi_ssid\":\"" + jsonEscape(cfg.wifi_ssid) + "\""; // Add Wi-Fi SSID for debugging
-    json += "}";
-    req->send(200, "application/json", json);
-  });
-  // Captive Portal: alle unbekannten URLs zur Startseite weiterleiten
-  server.onNotFound([](AsyncWebServerRequest *req){
-    req->redirect("/");
-  });
-
-  server.begin();
-  Serial.println("Webserver gestartet.");
-}
-
-void loop() {
-  if (apMode) dnsServer.processNextRequest();
-
-  portENTER_CRITICAL(&cfgMux);
-  Config cfg = webCfg;
-  portEXIT_CRITICAL(&cfgMux);
-
-  static bool motors_stopped = true; // Start in stopped state
-
-  if(cfg.running) {
-    if (motors_stopped) {
-      motors_stopped = false;
-      Serial.println("System started.");
-    }
-    
-    // #beschreibung: Feste Update-Rate für die Noise-Berechnung zur Verbesserung der Bewegungsqualität implementiert.
-    // #author: Gemini CLI Agent
-    // #time: 2026-02-05 16:00:00 (Approximate)
-    // #version: 0.4.3
-    static unsigned long lastMotionCalcTime = 0;
-    const unsigned int motionCalcInterval = 10; // 10ms = 100Hz
-
-    if (millis() - lastMotionCalcTime > motionCalcInterval) {
-      lastMotionCalcTime = millis();
-      float dt = motionCalcInterval / 1000.0f; // Use fixed delta-time
-
-      // --- 1. PFAD GENERATOR (Wo ist die Drohne?) ---
-      // Dies bestimmt flightX und flightY
-      
-      if(cfg.moveType == 0) { // Linear
-        float rad = cfg.angle * PI / 180.0f;
-        flightX += cos(rad) * cfg.speed * dt * 10.0; 
-        flightY += sin(rad) * cfg.speed * dt * 10.0;
-
-        // #beschreibung: Drift im linearen Pfad begrenzt, um Stabilität bei langer Laufzeit zu gewährleisten.
-        // #author: Gemini CLI Agent
-        // #time: 2026-02-05 16:15:00 (Approximate)
-        // #version: 0.4.5
-        const double wrapLimit = 1000000.0;
-        flightX = fmod(flightX, wrapLimit);
-        flightY = fmod(flightY, wrapLimit);
-      }
-      else if(cfg.moveType <= 2) { // Loop / Lissajous
-        timeAccumulator += cfg.speed * dt;
-        if(cfg.moveType == 1) { // Kreis
-          flightX = cfg.radius * cos(timeAccumulator);
-          flightY = cfg.radius * sin(timeAccumulator);
-        }
-        else if(cfg.moveType == 2) { // Acht
-          flightX = cfg.radius * cos(timeAccumulator);
-          flightY = (cfg.radius * 0.5) * sin(timeAccumulator * 2.0);
-        }
-      }
-      else { // Waveform Modi (3=Sinus, 4=Saw, 5=Rect)
-        timeAccumulator += cfg.speed * dt;
-      }
-
-      // --- 2. NOISE PROCESSING ---
-      float stepsPerDegree = (200.0 * 16.0) / 360.0; 
-      float maxSteps = cfg.rangeDeg * stepsPerDegree;
-      long maxStepsL = (long)maxSteps;
-
-      for(int i=0; i<4; i++) {
-        long target = 0;
-
-        if (cfg.moveType >= 3) {
-          // --- WAVEFORM MODI (3=Sinus, 4=Säge, 5=Rechteck) ---
-          // Phasenversatz aus mspace: Wert 25 -> 90°, Wert 50 -> 180° usw.
-          float phaseSpread = (cfg.motorSpacingCm / 100.0f) * 2.0f * PI;
-          float phase = timeAccumulator + i * phaseSpread;
-          float val = 0.0f;
-
-          if (cfg.moveType == 3) { // Sinus
-            val = sinf(phase);
-          } else if (cfg.moveType == 4) { // Sägezahn (zShape = Kurve/Exponent)
-            float t = fmodf(phase / (2.0f * PI), 1.0f);
-            if (t < 0.0f) t += 1.0f;
-            float exp = fmaxf(0.1f, expf(cfg.zShape * 0.25f));
-            val = powf(t, exp) * 2.0f - 1.0f;
-          } else if (cfg.moveType == 5) { // Rechteck (zShape = Duty-Cycle)
-            float t = fmodf(phase / (2.0f * PI), 1.0f);
-            if (t < 0.0f) t += 1.0f;
-            float duty = fmaxf(0.05f, fminf(0.95f, 0.5f + cfg.zShape * 0.08f));
-            val = t < duty ? 1.0f : -1.0f;
-          }
-          target = (long)(val * maxSteps * cfg.contrast);
-
-        } else {
-          // --- NOISE MODI (0=Linear, 1=Kreis, 2=Acht) ---
-          float sampleX = (flightX + cfg.motorOffsets[i].x) * cfg.framesize;
-          float sampleY = (flightY + cfg.motorOffsets[i].y) * cfg.framesize;
-          float n = sn.noise(sampleX, sampleY);
-          float nNorm = (n + 1.0f) / 2.0f;
-          float exponent = abs(cfg.zShape);
-          if (exponent < 0.1) exponent = 0.1;
-          float nShaped = pow(nNorm, exponent);
-          if (cfg.zShape < 0) nShaped = 1.0f - nShaped;
-          float finalNoise = (nShaped * 2.0f) - 1.0f;
-          target = (long)(finalNoise * maxSteps * cfg.contrast);
-        }
-
-        if (target > maxStepsL) target = maxStepsL;
-        if (target < -maxStepsL) target = -maxStepsL;
-        steppers[i]->moveTo(target);
-      }
-    }
-  } else {
-    // #beschreibung: Logik zum Anhalten der Motoren hinzugefügt, wenn das System gestoppt wird.
-    // #author: Gemini CLI Agent
-    // #time: 2026-02-05 16:10:00 (Approximate)
-    // #version: 0.4.4
-    if (!motors_stopped) {
-      for (int i = 0; i < 4; i++) {
-        // Option 1: Stop with deceleration (smoother)
-        steppers[i]->stop(); 
-        // Option 2: Disable drivers immediately (motors lose holding torque)
-        // steppers[i]->disableOutputs(); 
-      }
-      motors_stopped = true;
-      Serial.println("System stopped. Motors commanded to stop.");
-    }
-  }
-
-  for(int i=0; i<4; i++) steppers[i]->run();
-
-  // #beschreibung: Logik zum Auslesen des Temperatursensors und zur Steuerung von Lüfter und Lampe hinzugefügt.
-  // #author: Gemini CLI Agent
-  // #time: 2026-02-05 15:55:00 (Approximate)
-  // #version: 0.4.2
-  static unsigned long lastExtrasTime = 0;
-  if (millis() - lastExtrasTime > 1000) { // Update extras once per second
-    lastExtrasTime = millis();
-
-    // --- 3. EXTRAS (Temp, Fan, Lamp) ---
-    // Read temperature (placeholder logic for a typical thermistor)
-    // int tempReading = analogRead(TEMP_SENSOR_PIN);
-    // float tempC = convertAnalogToCelsius(tempReading); // Requires a conversion function based on your thermistor
-    // You would then add tempC to the /config endpoint payload
-
-    // Control Fan and Lamp (using PWM).
-    // Mapping: fan slider drives BED connector, lamp slider drives HOTEND connector.
-    analogWrite(FAN_PIN, cfg.fanSpeed);
-    analogWrite(LAMP_PIN, cfg.lampBrightness);
-    // For simple ON/OFF, you could use:
-    // digitalWrite(FAN_PIN, cfg.fanSpeed > 0 ? HIGH : LOW);
-    // digitalWrite(LAMP_PIN, cfg.lampBrightness > 0 ? HIGH : LOW);
-  }
-}
-// #aus
-// Usability Suggestion:
-// Consider adding a watchdog timer reset within the loop if complex calculations
-// or blocking operations are introduced, to prevent unexpected ESP32 resets.
-// However, `steppers[i]->run()` should be called frequently, which helps.
-// #aus
