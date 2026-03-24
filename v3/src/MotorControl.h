@@ -6,7 +6,7 @@
 #include <AccelStepper.h>
 
 // --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.1.1-MODULAR"
+#define FW_VERSION "3.2.0"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
