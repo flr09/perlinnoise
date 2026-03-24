@@ -65,13 +65,11 @@ void addLog(String msg) {
 }
 
 void applyDriverSettings(uint16_t runMA) {
-    float hF = min(0.5f, max(0.22f, 200.0f / (float)runMA));
-    driverX.rms_current(runMA, hF);
+    driverX.rms_current(runMA, 0.25f);
     driverX.iholddelay(10);
     driverX.SGTHRS(sys.cal[0].sgThrs > 0 ? sys.cal[0].sgThrs : MOTOR_SGTHRS_DEFAULT);
     uint32_t tpwm = sys.cal[0].tpwmThrs > 0 ? sys.cal[0].tpwmThrs : rpmToTpwmthrs(200);
     driverX.TPWMTHRS(tpwm);
-    driverX.TCOOLTHRS(rpmToTpwmthrs(50));
     driverX.pwm_autoscale(true);
 }
 
@@ -97,30 +95,35 @@ void setMotorPower(int i, bool on) {
     sys.m[i].enabled = on;
     if (on) {
         digitalWrite(ENABLE_PIN, LOW); // ENABLE BRIDGES
+        driverX.begin();               // HARD RE-INIT UART
         driverX.toff(5);               // ENABLE CHOPPER
         applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
-        addLog("M0 ON (Energized)");
+        addLog("M0 ON");
     } else {
-        driverX.toff(0);               // DISABLE CHOPPER
-        digitalWrite(ENABLE_PIN, HIGH); // DISABLE BRIDGES (Loose)
-        addLog("M0 OFF (Loose)");
+        driverX.toff(0);
+        digitalWrite(ENABLE_PIN, HIGH); // DISABLE BRIDGES
+        addLog("M0 OFF");
     }
 }
 
 void initMotors() {
     loadCalibration();
     SERIAL_PORT.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
-    
     pinMode(ENABLE_PIN, OUTPUT);
-    digitalWrite(ENABLE_PIN, LOW); // ALWAYS ENABLE HARDWARE BY DEFAULT
-
-    driverX.begin(); 
-    driverX.toff(5); // START CHOPPER
-    applyDriverSettings(MOTOR_CURRENT_DEFAULT);
-    
+    setMotorPower(0, true); // START ENERGIZED
     pinMode(TACHO_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(TACHO_PIN), tachoISR, CHANGE);
     steppers[0]->setMaxSpeed(4000); steppers[0]->setAcceleration(2000);
+}
+
+bool waitForSensorRobust(bool state, unsigned long timeoutMs) {
+    unsigned long start = millis();
+    while (digitalRead(TACHO_PIN) != state) {
+        if (millis() - start > timeoutMs) return false;
+        steppers[0]->runSpeed();
+        yield();
+    }
+    return true;
 }
 
 void homeMotor(int i) {
@@ -128,14 +131,18 @@ void homeMotor(int i) {
     setMotorPower(0, true);
     addLog("Homing M0...");
     driverX.en_spreadCycle(true);
-    lastSensorPos = -1;
     steppers[0]->setSpeed(1200);
-    while (lastSensorPos == -1) { steppers[0]->runSpeed(); yield(); }
+    if (!waitForSensorRobust(LOW, 15000)) { addLog("Err: Home Timeout"); return; }
+    
     steppers[0]->setSpeed(-400);
-    while (digitalRead(TACHO_PIN) == LOW) { steppers[0]->runSpeed(); yield(); }
+    waitForSensorRobust(HIGH, 3000);
+    steppers[0]->setSpeed(100);
+    waitForSensorRobust(LOW, 3000);
+
     steppers[0]->setCurrentPosition(0);
     steppers[0]->moveTo(sys.cal[0].triggerCenter);
-    while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); yield(); }
+    unsigned long mS = millis();
+    while(steppers[0]->distanceToGo() != 0 && millis()-mS < 5000) { steppers[0]->run(); yield(); }
     driverX.en_spreadCycle(false);
     addLog("M0 Home.");
 }
@@ -143,19 +150,28 @@ void homeMotor(int i) {
 void characterizeSensor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
-    addLog("Mapping M0 (ISR)...");
+    addLog("Mapping M0...");
     driverX.en_spreadCycle(true);
+    
+    // CW Search
     lastSensorPos = -1; steppers[0]->setSpeed(150);
-    while(lastSensorPos == -1) { steppers[0]->runSpeed(); yield(); }
-    long sCW = lastSensorPos;
-    while(digitalRead(TACHO_PIN) == LOW) { steppers[0]->runSpeed(); yield(); }
+    if (!waitForSensorRobust(LOW, 15000)) { addLog("Err: Mapping fail"); return; }
+    long sCW = lastSensorPos != -1 ? lastSensorPos : steppers[0]->currentPosition();
+    
+    // CW Exit
+    waitForSensorRobust(HIGH, 5000);
     long eCW = steppers[0]->currentPosition();
+    
+    // CCW Approach
     steppers[0]->move(3200); while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); yield(); }
     lastSensorPos = -1; steppers[0]->setSpeed(-150);
-    while(lastSensorPos == -1) { steppers[0]->runSpeed(); yield(); }
-    long eCCW = lastSensorPos;
-    while(digitalRead(TACHO_PIN) == LOW) { steppers[0]->runSpeed(); yield(); }
+    waitForSensorRobust(LOW, 15000);
+    long eCCW = lastSensorPos != -1 ? lastSensorPos : steppers[0]->currentPosition();
+    
+    // CCW Exit
+    waitForSensorRobust(HIGH, 5000);
     long sCCW = steppers[0]->currentPosition();
+
     sys.cal[0].triggerCenter = ((sCW+eCW)/2 + (sCCW+eCCW)/2) / 2;
     sys.cal[0].valid = true; saveCalibration(0);
     addLog("M0 Center: " + String(sys.cal[0].triggerCenter));
@@ -176,7 +192,7 @@ void learnSGProfile(int i) {
     }
     sys.cal[0].sgThrs = (sgSum / 4) * 0.6;
     saveCalibration(0);
-    addLog("SGTHRS set to " + String(sys.cal[0].sgThrs));
+    addLog("SGTHRS: " + String(sys.cal[0].sgThrs));
 }
 
 void runSpeedTest(int i) {
@@ -224,7 +240,7 @@ void runInertiaTest(int i) {
 
 void runCoastTest(int i) {
     setMotorPower(0, true);
-    addLog("Coast Test M0...");
+    addLog("Coast M0...");
     steppers[0]->setMaxSpeed(rpmToSps(400)); steppers[0]->setAcceleration(5000);
     steppers[0]->move(400); while(steppers[0]->distanceToGo()!=0) { steppers[0]->run(); yield(); }
     long pS = steppers[0]->currentPosition(); steppers[0]->setSpeed(rpmToSps(400));
@@ -235,7 +251,7 @@ void runCoastTest(int i) {
 void updateMotors() {
     if (sys.pendingStop) { steppers[0]->stop(); sys.pendingStop = false; }
     if (sys.m[0].enabled) {
-        digitalWrite(ENABLE_PIN, LOW); // DOUBLE CHECK HARDWARE ENABLE
+        digitalWrite(ENABLE_PIN, LOW); // HARDWARE ENABLE
         steppers[0]->run();
     }
 }
