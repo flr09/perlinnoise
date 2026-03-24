@@ -145,7 +145,208 @@ v3.3.0: TPWMTHRS@200RPM, Messung bei 3-75RPM → alles StealthChop → SG 0-16
 
 ---
 
-## Bug-Report v3.3.6 (aktueller Codestand)
+## Bug-Report v3.3.x — ISR + Dual-Core Umbau (aktueller Codestand)
+
+> **Kontext für den nächsten Entwickler:**
+> Die Idee war gut: Tacho-Pulse per ISR zählen (kein Polling), UART-Reads (SG, CS) auf Core 0 auslagern damit Core 1 den Schrittgenerator störungsfrei betreiben kann. Die Architektur stimmt. In der Umsetzung sind aber mehrere Fehler entstanden, die dazu führen dass im Grunde gar nichts mehr korrekt funktioniert.
+
+### Architektur-Intent (korrekt)
+
+```
+Core 0  (WiFi/Web)   → updateTelemCache() alle 200ms  (UART, langsam, unkritisch)
+Core 1  (MotorTask)  → AccelStepper run(), Tests       (zeitkritisch, kein UART)
+ISR     (Core 1)     → pulseCount++  bei FALLING       (sofort, kein AccelStepper-Aufruf)
+```
+
+### Was davon wirklich gebaut wurde
+
+```
+Core 0  (WiFi/Web)   → updateTelemCache() ← WIRD NIE AUFGERUFEN   ← BUG X1
+Core 1  (MotorTask)  → AccelStepper run(), Tests                   ✓
+ISR     (Core 1)     → pulseCount++                                ✓ (fast)
+```
+
+---
+
+### 🔴 X1 — `updateTelemCache()` wird nirgends aufgerufen → Telemetrie immer Null
+
+**Problem:** `tCache` (sg, cs, stall, ola, olb) wird nie aktualisiert. Alle Telemetrie-Spalten zeigen 0. Der ganze TelemCache-Ansatz ist richtig konzipiert, aber nie verdrahtet.
+
+**Fix:** In `setup()` einen Task auf Core 0 anlegen:
+```cpp
+xTaskCreatePinnedToCore([](void*){
+    for(;;) { updateTelemCache(); vTaskDelay(pdMS_TO_TICKS(200)); }
+}, "TelemCache", 2048, NULL, 1, NULL, 0); // Core 0!
+```
+Das ist die eine Zeile die fehlt. Dadurch laufen UART-Reads auf Core 0 und blockieren nie den Schrittgenerator auf Core 1.
+
+---
+
+### 🔴 X2 — `measureActualRpm()`: Pulse werden während der Einlaufphase gezählt
+
+**Problem:**
+```cpp
+float measureActualRpm(float cmdSps, uint32_t windowMs) {
+    portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
+    steppers[0]->setSpeed(cmdSps);
+    // ← kein Warten! Motor läuft erst an
+    unsigned long start = millis();
+    while(millis() - start < windowMs) { steppers[0]->runSpeed(); yield(); }
+    // Pulses aus Anlaufphase + Messphase gemischt → RPM zu niedrig
+```
+`runSpeed()` startet sofort bei `cmdSps` — aber der Motor kann nicht schlagartig beschleunigen. In den ersten ~300–500ms ist die echte Drehzahl deutlich unter `cmdSps`. Diese Pulse werden mitgezählt. Ergebnis: `measureActualRpm` liefert bei jedem Aufruf zu niedrige Werte → `actualRpm < rpm * 0.7f` → sofort FAIL → Parcour bricht nach dem ersten Schritt ab.
+
+**Fix:** Einlaufzeit vor dem Pulse-Reset:
+```cpp
+float measureActualRpm(float cmdSps, uint32_t windowMs) {
+    steppers[0]->setSpeed(cmdSps);
+    unsigned long settle = millis();
+    while(millis() - settle < 400) { steppers[0]->runSpeed(); yield(); } // einlaufen
+    portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux); // DANN nullen
+    unsigned long start = millis();
+    while(millis() - start < windowMs) { steppers[0]->runSpeed(); yield(); }
+    ...
+```
+
+---
+
+### 🔴 X3 — `learnSGProfile()`: SG-Samples während Beschleunigung/Verzögerung
+
+**Problem:**
+```cpp
+steppers[0]->setMaxSpeed(sps); steppers[0]->setAcceleration(sps*4);
+steppers[0]->move(6400);
+while(steppers[0]->distanceToGo() != 0) {
+    steppers[0]->run();
+    if(abs(steppers[0]->speed()) > sps*0.8f) { // soll "nur bei Vollspeed" samplen
+        sgSum += driverX.SG_RESULT();
+```
+Mit `Acceleration = sps*4` erreicht der Motor bei `move(6400)` die Vollgeschwindigkeit nach etwa 800 Schritten — und bremst ab Schritt 5600 wieder ab. Bei 6400 Schritten gibt es nur ca. 4800 Schritte Konstantfahrt. Die Bedingung `speed() > sps*0.8f` hilft, aber `speed()` ist AccelSteppers berechneter Soll-Takt, nicht die echte Motordrehzahl. UART-Reads (`driverX.SG_RESULT()`) mitten in der Beschleunigungsphase liefern instabile Werte.
+
+**Fix:** `runSpeed()` statt `move()` für die SG-Messung, mit Einlaufzeit:
+```cpp
+steppers[0]->setSpeed(sps);
+unsigned long settle = millis();
+while(millis() - settle < 800) { steppers[0]->runSpeed(); yield(); } // einlaufen
+// dann 1.5s lang SG samplen
+```
+
+---
+
+### 🔴 X4 — `setMotorPower()` ruft `driverX.begin()` bei jedem Aufruf → Register-Reset
+
+**Problem:**
+```cpp
+void setMotorPower(int i, bool on) {
+    if (on) {
+        driverX.begin(); // ← setzt ALLE TMC2209-Register zurück!
+        driverX.toff(5);
+        applyDriverSettings(...); // re-setzt sie dann wieder
+```
+`homeMotor`, `characterizeSensor`, `learnSGProfile`, `runSpeedTest`, `runCoastTest`, `runInertiaTest` rufen alle `setMotorPower(0, true)` am Anfang auf. Das bedeutet: der TMC2209 wird vor jeder Funktion komplett zurückgesetzt und dann neu konfiguriert. Das kostet ~20ms UART-Writes und verursacht kurzen Momenten ohne Strom/Chopper.
+
+**Fix:** `driverX.begin()` nur einmal in `initMotors()`. In `setMotorPower` nur ENABLE_PIN und toff steuern:
+```cpp
+void setMotorPower(int i, bool on) {
+    if (i != 0) return;
+    sys.m[i].enabled = on;
+    if (on) {
+        driverX.toff(5);          // Chopper an
+        digitalWrite(ENABLE_PIN, LOW);
+    } else {
+        driverX.toff(0);          // Chopper aus
+        digitalWrite(ENABLE_PIN, HIGH);
+    }
+}
+// initMotors() ruft einmalig driverX.begin() + applyDriverSettings()
+```
+
+---
+
+### 🔴 X5 — `/telemetry` fehlt CORS-Header → `telemetry_viewer.html` funktioniert nicht
+
+**Problem:**
+```cpp
+server.on("/telemetry", HTTP_GET, [](AsyncWebServerRequest *r){
+    AsyncWebServerResponse *res = r->beginResponse(200, "text/csv", telemCSV);
+    res->addHeader("Content-Disposition", "attachment; filename=\"parcour.csv\"");
+    // FEHLT: res->addHeader("Access-Control-Allow-Origin", "*");
+    r->send(res);
+});
+```
+Der `telemetry_viewer.html` ist eine lokale HTML-Datei die per `fetch()` auf `http://perlin-v3.local/telemetry` zugreift. Browser blocken Cross-Origin-Anfragen ohne CORS-Header → "Fetch failed".
+
+**Fix:** Eine Zeile ergänzen:
+```cpp
+res->addHeader("Access-Control-Allow-Origin", "*");
+```
+
+---
+
+### 🟡 X6 — CSV-Format geändert → `telemetry_viewer.html` zeigt leere Spalten
+
+**Problem:** Aktuelles CSV hat 10 Spalten:
+```
+ts_ms,phase,val,pos_steps,spd_sps,sg_result,cs_actual,stall,ola,olb
+```
+Der `telemetry_viewer.html` erwartet 14 Spalten (inkl. `cur_a`, `cur_b`, `otpw`, `ot`). Fehlen diese, zeigen die entsprechenden Charts leer. Außerdem hat `TelemCache` diese Felder gar nicht mehr.
+
+**Fix:** Entweder `TelemCache` um `cur_a`, `cur_b`, `otpw`, `ot` ergänzen und CSV zurück auf 14 Spalten bringen, oder `telemetry_viewer.html` an das neue 10-Spalten-Format anpassen.
+
+---
+
+### 🟡 X7 — Versionsstring inkonsistent (HTML ≠ FW_VERSION)
+
+```
+MotorControl.h:  FW_VERSION "3.3.6"
+main_v3.cpp:     "v3.3.9 (Robust Fix)"  ← hardcoded im HTML
+                 "v3.3.7 (ISR + High-Speed Merged)"  ← im Log-Div
+```
+Drei verschiedene Versionsstrings. Bei Debugging unklar welche Version wirklich geflasht ist.
+
+**Fix:** Nur `FW_VERSION` aus dem Header verwenden, im HTML per JS setzen wie in den früheren Versionen:
+```html
+<span id="fwVer">V3 ...</span>
+```
+```js
+if(s.fw) document.getElementById('fwVer').innerText = 'V3 ' + s.fw;
+```
+Und `/status` muss `"fw":"` + `FW_VERSION` + `"` zurückgeben.
+
+---
+
+### 🟡 X8 — `/cmd?a=pwr` ruft `setMotorPower` direkt auf Core 0 (ohne Mutex)
+
+**Problem:** Der WebServer läuft auf Core 0. `setMotorPower` greift auf `sys.m[0].enabled`, `driverX`, und `ENABLE_PIN` zu — alles was auch Core 1 (TaskCore1 → `updateMotors`) gleichzeitig liest/schreibt. Kein Mutex schützt diesen Zugriff.
+
+In der Praxis selten ein Problem (Button-Drücke sind selten), aber technisch eine Daten-Race.
+
+**Fix:** Power-Befehle über `pendingPower`-Flag in SystemState, nicht direkt:
+```cpp
+// Core 0 (WebServer):
+else if(a=="pwr") sys.pendingPower = !sys.m[m].enabled;
+// Core 1 (TaskCore1):
+if (sys.pendingPower >= 0) { setMotorPower(0, sys.pendingPower); sys.pendingPower = -1; }
+```
+
+---
+
+### Zusammenfassung der neuen Bugs
+
+| # | Schwere | Problem | Auswirkung | Fix-Aufwand |
+|---|---------|---------|------------|-------------|
+| X1 | 🔴 | `updateTelemCache()` nie aufgerufen | Telemetrie immer 0 | 1 Zeile in setup() |
+| X2 | 🔴 | `measureActualRpm()` keine Einlaufzeit | Parcour bricht sofort ab | +3 Zeilen |
+| X3 | 🔴 | `learnSGProfile()` SG bei Beschl./Bremsen | SGTHRS falsch gelernt | runSpeed() statt move() |
+| X4 | 🔴 | `begin()` bei jedem setMotorPower() | Register-Reset vor jeder Funktion | begin() aus setMotorPower() raus |
+| X5 | 🔴 | CORS-Header fehlt | telemetry_viewer.html funktioniert nicht | 1 Zeile |
+| X6 | 🟡 | CSV 10 statt 14 Spalten | Charts im Viewer leer | Format angleichen |
+| X7 | 🟡 | 3 verschiedene Versionsstrings | Debugging-Verwirrung | FW_VERSION verwenden |
+| X8 | 🟡 | setMotorPower ohne Mutex von Core 0 | Theoretische Race Condition | pendingPower-Flag |
+
+**Reihenfolge für Reparatur:** X1 → X2 → X4 → X5 → X3 → X6 → X7
+
+
 
 ### 🔴 Kritisch
 
