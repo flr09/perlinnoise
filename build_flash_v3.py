@@ -20,6 +20,10 @@ ENV         = "fysetc_e4_v3"
 VERSION     = "3.2.0"
 COM_PORT    = "COM4"
 
+# PlatformIO via venv (WSL)
+_venv_pio = PROJECT_DIR / ".venv" / "bin" / "python3"
+PIO_CMD   = [str(_venv_pio), "-m", "platformio"] if _venv_pio.exists() else ["pio"]
+
 BIN_SRC     = PROJECT_DIR / ".pio" / "build" / ENV / "firmware.bin"
 V3_DIR      = PROJECT_DIR / "v3"
 
@@ -35,7 +39,7 @@ def run(cmd, **kwargs):
 
 def build():
     print(f"\n[BUILD] env={ENV} ...")
-    run(["pio", "run", "-e", ENV])
+    run(PIO_CMD + ["run", "-e", ENV])
     print("[BUILD] OK")
 
 
@@ -59,13 +63,13 @@ def copy_bin():
 
 def flash_usb():
     print(f"\n[FLASH] USB {COM_PORT} ...")
-    run(["pio", "run", "-e", ENV, "--upload-port", COM_PORT, "-t", "upload"])
+    run(PIO_CMD + ["run", "-e", ENV, "--upload-port", COM_PORT, "-t", "upload"])
     print("[FLASH] Fertig - Board startet neu.")
 
 
 def flash_ota():
     print(f"\n[OTA]   perlin-v3.local ...")
-    run(["pio", "run", "-e", f"{ENV}_ota", "-t", "upload"])
+    run(PIO_CMD + ["run", "-e", f"{ENV}_ota", "-t", "upload"])
     print("[OTA]   Fertig - Board startet neu.")
 
 
