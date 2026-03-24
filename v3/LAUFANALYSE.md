@@ -79,6 +79,72 @@ v3.3.0: SG_RESULT  0 – 16  (SPEED-Phase, 300 RPM, nach TPWMTHRS-Lernlauf)
 
 ---
 
+## Root-Cause Analyse: „Motor dreht 50 RPM, Log sagt Try 3200 RPM"
+
+### Bug 1 – PARCOUR_RPM_START zu hoch (open-loop Schrittgenerator)
+
+**Symptom:** Log zeigt „Try 3200 RPM", Motor dreht sichtbar mit ~50 RPM.
+
+**Ursache:** AccelStepper ist ein offener Regelkreis. `setMaxSpeed(rpmToSps(3200))` = 170667 sps wird befohlen, der Motor kann physisch max ~440 RPM = 23467 sps. Der Schrittgenerator zählt die *befohlenen* Schritte — der Motor dreht so schnell er kann, verliert Schritte und bleibt irgendwo stehen. Der Schrittzähler ist danach bedeutungslos.
+
+```
+PARCOUR_RPM_START = 1000  → rpmToSps(1000) = 53333 sps
+Motor max physisch:          ~440 RPM        = 23467 sps
+→ Motor läuft bei ~440 RPM, verliert Schritte, Zähler zeigt 53333 sps
+→ Nächste Iteration: 1100 RPM (da kein Fehler erkannt)
+→ Nach ~20 Iterationen: Try 3200 RPM
+```
+
+### Bug 2 – Drift-Check pos%3200 lieferte immer 0
+
+**Symptom:** Motor verliert 80% der Schritte, Test meldet trotzdem Erfolg.
+
+**Ursache:** Drift-Check war `abs(currentPosition() % 3200)`. Bei `move(6400)` (= 2 Umdrehungen):
+```
+6400 % 3200 = 0  → drift = 0 → immer als OK gewertet
+```
+Die Prüfung hat niemals einen echten Schrittausfall erkannt.
+
+### Bug 3 – learnSGProfile maß in StealthChop (falsche SG-Werte)
+
+**Symptom:** SG_RESULT nach v3.3.0 schlechter als v3.2.0 (0–16 statt 2–46).
+
+**Ursache:** Messpunkte waren 200–4000 sps = **3,75–75 RPM**. TPWMTHRS war auf 200 RPM gesetzt → alle Messpunkte lagen in StealthChop. Im StealthChop-Modus liefert SG_RESULT inhärent niedrige Werte (motor-internal compensation, kein echter Laststrom). SGTHRS wurde als 60% von ~10 = **6** gelernt → fast jeder Sample triggerte Stall-Flag.
+
+```
+v3.2.0: kein TPWMTHRS → alles SpreadCycle → SG 2-46
+v3.3.0: TPWMTHRS@200RPM, Messung bei 3-75RPM → alles StealthChop → SG 0-16
+```
+
+---
+
+## v3.4.0 — Fixes
+
+**Datum:** 2026-03-24
+**Änderungen:**
+
+| Fix | Vorher | Nachher |
+|-----|--------|---------|
+| RPM-Start | 1000 RPM fest | dynamisch: 80% von cal.maxRpm, min 200 RPM |
+| RPM-Validierung | pos%3200 (immer 0) | Tacho-Pulse zählen (measureActualRpm) |
+| Modus | Auto StealthChop↔SpreadCycle | SpreadCycle explizit erzwungen |
+| SG-Messung | 200-4000 sps (3-75 RPM, StealthChop) | 100-400 RPM, SpreadCycle explizit |
+| TPWMTHRS | 200 RPM Grenze | 100 RPM (StealthChop nur bei Stillstand) |
+| TelemCache | UART direkt in Schrittschleife | Cache getrennt, alle 300ms refresht |
+
+**`measureActualRpm(cmdSps, windowMs)`:**
+- Fährt Motor bei `cmdSps` via `runSpeed()` (konstante Geschwindigkeit)
+- Zählt HIGH→LOW Flanken am TACHO_PIN über `windowMs` (= eine Umdrehung pro Puls)
+- `actualRpm = revCount * 60000 / windowMs`
+- Validierung: `ok = actualRpm >= cmdRpm * 0.65f`
+
+**Erwartetes Verhalten nach v3.4.0:**
+- Erster Lauf (keine Kalibration): Start bei 200 RPM, schrittweise hoch bis Motor versagt
+- Folgender Lauf: Start bei 80% des gelernten Max → schnellerer Parcour
+- Log zeigt: `Ist=440 Soll=440 (100%)` statt `Try 3200 RPM`
+
+---
+
 ## Nächste Schritte (priorisiert)
 
 ### 1. TPWMTHRS verifizieren

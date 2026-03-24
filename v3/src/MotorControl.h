@@ -6,7 +6,7 @@
 #include <AccelStepper.h>
 
 // --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.3.0"
+#define FW_VERSION "3.3.5"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
@@ -33,8 +33,9 @@
 #define MOTOR_SGTHRS_DEFAULT    50
 
 // --- PARCOUR RPM BEREICH ---
-#define PARCOUR_RPM_START   1000.0f
-#define PARCOUR_RPM_MAX    10000.0f
+// Startpunkt wird in runSpeedTest dynamisch gesetzt (80% von cal.maxRpm oder 200 RPM Minimum)
+#define PARCOUR_RPM_START    200.0f  // Fallback wenn noch kein maxRpm bekannt
+#define PARCOUR_RPM_MAX     5000.0f  // Realistischer Maximalwert für NEMA14 Pancake
 #define PARCOUR_RPM_STEP     100.0f
 #define PARCOUR_RPM_FINE      10.0f
 
