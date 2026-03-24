@@ -28,9 +28,15 @@
 
 // --- MOTOR LIMITS (motors/pancake/datasheet.md) ---
 #define MOTOR_CURRENT_MIN_MA   300
-#define MOTOR_CURRENT_MAX_MA   900   // 36BYG1204: ~0.92A Nenn, max 0.90A RMS für Sicherheit
+#define MOTOR_CURRENT_MAX_MA   900   // 36BYG1204: ~0.92A Nenn, max 0.90A RMS
 #define MOTOR_CURRENT_DEFAULT  650   // Orbiter-Empfehlung: 0.85A RMS Startpunkt
 #define MOTOR_SGTHRS_DEFAULT    50
+
+// --- PARCOUR RPM BEREICH ---
+#define PARCOUR_RPM_START   1000.0f
+#define PARCOUR_RPM_MAX    10000.0f
+#define PARCOUR_RPM_STEP     100.0f
+#define PARCOUR_RPM_FINE      10.0f
 
 // --- MOTOR STATE & CONFIG ---
 struct MotorState {

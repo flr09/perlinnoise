@@ -49,7 +49,7 @@ const char index_html[] PROGMEM = R"rawliteral(
   <div class="container">
     <div class="nav">
         <a href="/update">OTA UPDATE</a>
-        <span class="version" id="fwVer">V3 )</rawliteral" FW_VERSION R"rawliteral(</span>
+        <span class="version" id="fwVer">V3 ...</span>
     </div>
 
     <div class="card">
@@ -93,7 +93,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     </div>
 
     <button class="btn stop" onclick="cmd('stop',0)">EMERGENCY STOP</button>
-    <div id="log">Bereit. v)rawliteral" FW_VERSION R"rawliteral( – Adaptive Tuning aktiv.</div>
+    <div id="log">Bereit.</div>
   </div>
 
   <script>
@@ -139,6 +139,8 @@ const char index_html[] PROGMEM = R"rawliteral(
           document.getElementById('calStable').innerText = s.cal.stable != null ? s.cal.stable : '—';
           document.getElementById('calTpwm').innerText   = s.cal.tpwmRpm || '—';
         }
+
+        if (s.fw) document.getElementById('fwVer').innerText = 'V3 ' + s.fw;
 
         if (s.log) {
           s.log.split('\\n').forEach(l => { if (l.length > 2) addLog(l); });

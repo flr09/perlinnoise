@@ -104,19 +104,25 @@ void applyDriverSettings(uint16_t runMA) {
 }
 
 // --- CALIBRATION PERSISTENCE ---
+// NVS-Namespace mit Struct-Größe als Versionscheck:
+// Ändert sich CalibrationData, ändert sich die Größe → anderer Key → keine Garbage-Daten.
+#define NVS_NS "cal" // Namespace (max 15 Zeichen)
+
 void saveCalibration(int i) {
-    prefs.begin("calib", false);
-    String key = "m" + String(i);
+    prefs.begin(NVS_NS, false);
+    String key = "m" + String(i) + "_" + String(sizeof(CalibrationData));
     prefs.putBytes(key.c_str(), &sys.cal[i], sizeof(CalibrationData));
     prefs.end();
 }
 
 void loadCalibration() {
-    prefs.begin("calib", true);
+    prefs.begin(NVS_NS, true);
     for (int i = 0; i < 4; i++) {
-        String key = "m" + String(i);
-        if (prefs.isKey(key.c_str()))
+        String key = "m" + String(i) + "_" + String(sizeof(CalibrationData));
+        size_t stored = prefs.getBytesLength(key.c_str());
+        if (stored == sizeof(CalibrationData))
             prefs.getBytes(key.c_str(), &sys.cal[i], sizeof(CalibrationData));
+        // sonst: Defaults bleiben erhalten (struct-Initialisierung)
     }
     prefs.end();
 }
@@ -296,11 +302,12 @@ void runSpeedTest(int i) {
     uint8_t thrs = sys.cal[0].sgThrs > 0 ? sys.cal[0].sgThrs : MOTOR_SGTHRS_DEFAULT;
     driverX.SGTHRS(thrs);
 
-    float rpm = 300.0f, lastGood = rpm;
+    float rpm = PARCOUR_RPM_START, lastGood = rpm;
     bool failed = false, currentBoosted = false;
-    addLog("Parcour M0 (" + String(cur) + "mA SGTHRS=" + String(thrs) + ")");
+    addLog("Parcour M0 " + String(rpm,0) + "-" + String(PARCOUR_RPM_MAX,0)
+           + "RPM (" + String(cur) + "mA SGTHRS=" + String(thrs) + ")");
 
-    while (rpm <= 2500.0f && !failed) {
+    while (rpm <= PARCOUR_RPM_MAX && !failed) {
         addLog("Try " + String(rpm, 0) + " RPM");
         steppers[0]->setMaxSpeed(rpmToSps(rpm));
         steppers[0]->setAcceleration(rpmToSps(rpm) * 4);
@@ -339,19 +346,19 @@ void runSpeedTest(int i) {
             }
         } else {
             lastGood = rpm;
-            rpm += 100.0f;
+            rpm += PARCOUR_RPM_STEP;
         }
     }
 
     // Feintuning nach Grobfehler (nur wenn aktiviert)
     if (failed && !sys.parcour.doFine) {
         addLog("Fine-Tuning deaktiviert.");
-        failed = false; // nicht als Gesamtfehler werten
+        failed = false;
     }
     if (failed) {
-        rpm = lastGood + 10.0f; failed = false;
-        addLog("Fine-tuning...");
-        while (rpm < (lastGood + 100.0f) && !failed) {
+        rpm = lastGood + PARCOUR_RPM_FINE; failed = false;
+        addLog("Fine-tuning ab " + String(rpm,0) + " RPM...");
+        while (rpm < (lastGood + PARCOUR_RPM_STEP) && !failed) {
             steppers[0]->setMaxSpeed(rpmToSps(rpm));
             steppers[0]->move(3200);
             while (steppers[0]->distanceToGo() != 0) {
@@ -362,7 +369,7 @@ void runSpeedTest(int i) {
             setSpreadCycle(0, true); steppers[0]->setSpeed(200);
             waitForSensor(0, LOW, 5000);
             if (abs(steppers[0]->currentPosition() % 3200) > 60) failed = true;
-            else { lastGood = rpm; rpm += 10.0f; }
+            else { lastGood = rpm; rpm += PARCOUR_RPM_FINE; }
             setSpreadCycle(0, false);
         }
     }
