@@ -35,6 +35,11 @@ const char index_html[] PROGMEM = R"rawliteral(
     .mask-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
     .tog { padding: 10px; border-radius: 4px; border: 1px solid #444; cursor: pointer; font-size: 0.8em; text-align: center; background: #2e7d32; color: #fff; }
     .tog.off { background: #333; color: #666; border-color: #333; }
+    .angle-ring { display: flex; justify-content: space-around; align-items: center; margin-top: 12px; padding: 8px; background: #111; border-radius: 6px; }
+    .angle-mark { text-align: center; }
+    .angle-mark .dot { width: 18px; height: 18px; border-radius: 50%; background: #222; border: 2px solid #444; margin: 0 auto 4px; transition: all 0.15s; }
+    .angle-mark .dot.active { background: #ff9800; border-color: #ff9800; box-shadow: 0 0 10px #ff9800; }
+    .angle-mark span { font-size: 0.75em; color: #888; }
   </style>
 </head>
 <body>
@@ -55,6 +60,12 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px;">
             <div>Winkel: <span class="val" id="pos0">0.0</span>°</div>
             <div>Speed: <span class="val" id="spd0">0</span> sps</div>
+        </div>
+        <div class="angle-ring">
+          <div class="angle-mark"><div class="dot" id="a90"></div><span>90°</span></div>
+          <div class="angle-mark"><div class="dot" id="a180"></div><span>180°</span></div>
+          <div class="angle-mark"><div class="dot" id="a270"></div><span>270°</span></div>
+          <div class="angle-mark"><div class="dot" id="a360"></div><span>360°</span></div>
         </div>
         <div style="margin-top:20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
           <button class="btn on" id="pwr0" onclick="cmd('pwr', 0)">POWER ON</button>
@@ -94,8 +105,14 @@ const char index_html[] PROGMEM = R"rawliteral(
 
     setInterval(() => {
       fetch('/status').then(r => r.json()).then(s => {
-        document.getElementById('pos0').innerText = s.m[0].p.toFixed(1);
+        const deg = s.m[0].p;
+        document.getElementById('pos0').innerText = deg.toFixed(1);
         document.getElementById('spd0').innerText = Math.round(s.m[0].s);
+        // Angle markers: light up within ±8° of 90/180/270/360
+        [90,180,270,360].forEach(t => {
+          const diff = Math.min(Math.abs(deg - t), Math.abs(deg - t + 360), Math.abs(deg - t - 360));
+          document.getElementById('a'+t).classList.toggle('active', diff < 8);
+        });
         document.getElementById('led0').className = s.hit ? 'led hit' : 'led';
         const pBtn = document.getElementById('pwr0');
         pBtn.innerText = s.m[0].e ? 'POWER ON' : 'POWER OFF';
@@ -145,10 +162,12 @@ void setup() {
         
         long pos = 0; float spd = 0;
         if(stepper) { pos = stepper->getCurrentPosition(); spd = stepper->getCurrentSpeedInMilliHz() / 1000.0f; }
-        
+        // Normalize angle to 0–360 (handles negative positions from CCW motion)
+        long sr = (long)stepsPerRev;
+        float angleDeg = ((pos % sr + sr) % sr) * 360.0f / sr;
         String j = "{\"hit\":" + String(digitalRead(TACHO_PIN)==LOW?"true":"false");
         j += ",\"fw\":\"" + String(FW_VERSION) + "\",\"log\":\"" + logData + "\"";
-        j += ",\"m\":[{\"p\":"+String((pos%stepsPerRev)*360.0/stepsPerRev,1)+",\"s\":"+String(spd)+",\"e\":"+String(sys.m[0].enabled?"true":"false")+"}]}";
+        j += ",\"m\":[{\"p\":" + String(angleDeg, 1) + ",\"s\":" + String(spd) + ",\"e\":" + String(sys.m[0].enabled?"true":"false") + "}]}";
         r->send(200, "application/json", j);
     });
     server.on("/cmd", [](AsyncWebServerRequest *r){

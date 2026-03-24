@@ -27,12 +27,9 @@ uint32_t rpmToTpwmthrs(float rpm) {
 
 // --- ATOMIC ISR ---
 volatile uint32_t pulseCount = 0;
-volatile long isrCapturedPos = -1;
-void IRAM_ATTR tachoISR() { 
-    if (digitalRead(TACHO_PIN) == LOW) { 
-        pulseCount++; 
-        if (stepper) isrCapturedPos = stepper->getCurrentPosition();
-    } 
+// ISR: only increment counter — no stepper calls (not ISR-safe in FastAccelStepper)
+void IRAM_ATTR tachoISR() {
+    if (digitalRead(TACHO_PIN) == LOW) { pulseCount++; }
 }
 
 uint32_t getPulseCount() {
@@ -69,7 +66,8 @@ void recordTelemetry(const char* phase, float val) {
 }
 
 void updateTelemCache() {
-    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    // 100ms: applyDriverSettings writes ~8 UART registers, takes up to 16ms
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         tCache.sg = driverX.SG_RESULT();
         tCache.cs = driverX.cs_actual();
         uint32_t msc = driverX.MSCURACT();
@@ -256,10 +254,8 @@ void learnSGProfile(int i) {
         while(millis() - start < 2000) {
             stepper->runForward();
             if (millis() - lastSG >= 50) {
-                if (xSemaphoreTake(uartMutex, 0) == pdTRUE) {
-                    sgSum += (float)driverX.SG_RESULT(); samples++;
-                    xSemaphoreGive(uartMutex);
-                }
+                // Use cache — no direct UART read from Core 1
+                sgSum += (float)tCache.sg; samples++;
                 lastSG = millis();
             }
             yield();
@@ -286,16 +282,20 @@ void runSpeedTest(int i) {
     while(rpm <= PARCOUR_RPM_MAX && !failed) {
         addLog("Try " + String(rpm,0) + " RPM");
         stepper->setSpeedInHz(rpmToSps(rpm));
+        stepper->runForward();
+        // Settle: let motor reach speed before counting
+        unsigned long settle = millis();
+        while(millis() - settle < 500) yield();
         portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
+        // Adaptive window: 3 full revolutions, min 500ms
+        uint32_t win = max(500u, (uint32_t)(3.0f * 60000.0f / rpm));
         unsigned long start = millis();
-        unsigned long lC = 0;
-        while(millis() - start < 2000) {
-            stepper->runForward();
+        while(millis() - start < win) {
             recordTelemetry("SPEED", rpm);
-            if (millis() - lC > 500) { updateTelemCache(); lC = millis(); }
             yield();
         }
-        float actualRpm = (float)getPulseCount() * 60000.0f / 2000.0f;
+        stepper->stopMove();
+        float actualRpm = (float)getPulseCount() * 60000.0f / (float)win;
         addLog("Ist=" + String(actualRpm,0));
         if (actualRpm < rpm * 0.7f) {
             if (cur + 100 <= MOTOR_CURRENT_MAX_MA) {
