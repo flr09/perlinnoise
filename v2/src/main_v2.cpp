@@ -9,7 +9,7 @@
 #include "SimplexNoise.h"
 #include <Preferences.h>
 #include <ArduinoOTA.h>
-#include <AsyncElegantOTA.h>
+#include <ElegantOTA.h>
 #include <vector>
 
 // --- VERSION & METADATA ---
@@ -19,9 +19,10 @@
 // #version: 0.2.4
 static const char* FW_VERSION = "0.4.9";
 
-// --- WIFI CREDENTIALS ---
-const char* ota_ssid = "perlin";
-const char* ota_password = "12345678";
+// --- WIFI CREDENTIALS (HARDCODED FALLBACK) ---
+#include "wifi_settings.h"
+const char* default_ssid = DEFAULT_SSID;
+const char* default_password = DEFAULT_PASS;
 
 // --- DUAL CORE TASKS ---
 TaskHandle_t PerlinTask;
@@ -68,9 +69,12 @@ struct Config {
   float framesize = 0.01;  // "Ausschnitt" (Frequenz/Zoom)
   float contrast = 1.94;   // "Hügelgröße" (Amplitude)
   float zShape = 1.0;      // "Form" (Gamma/Sharpness). 1.0=Normal, >1=Spitz, <0=Invertiert
+  float edgeC = 1.0;       // Edge Contrast / Sharpening (0.0 - 2.0)
+  int dynMode = 1;         // Dynamics Profile (0=Slow, 1=Medium, 2=Fast)
 
   float rangeDeg = 300.0;
   float motorSpacingCm = 25.0; 
+  float mapZoom = 1.0;
 
   MotorOffset motorOffsets[4] = {
     { -37.5, 0.0 }, { -12.5, 0.0 }, { 12.5, 0.0 }, { 37.5, 0.0 }
@@ -111,6 +115,10 @@ AsyncWebServer server(80);
 DNSServer dnsServer;
 Preferences preferences;
 bool apMode = false;
+volatile bool shouldRestart = false; // Bug #1 Fix: Restart-Flag
+unsigned long restartTimer = 0;
+bool motorTestActive = false;        // Bug #2 Fix: Non-blocking Test
+int motorTestTarget = -1;
 
 double flightX = 0;
 double flightY = 0;
@@ -151,11 +159,15 @@ const char INSTALL_HTML[] PROGMEM = R"rawliteral(
     <p>Connect your E4 board to your local Wi-Fi network.</p>
     <form action="/wifisave" method="post">
       <label for="ssid">SSID:</label>
-      <input type="text" id="ssid" name="ssid" required><br>
+      <input type="text" id="ssid" name="ssid" required placeholder="gv netz"><br>
       <label for="pass">Password:</label>
-      <input type="password" id="pass" name="password"><br>
-      <button type="submit">Save & Connect</button>
+      <div style="position:relative; width: 100%;">
+        <input type="password" id="pass" name="password" style="width: calc(100% - 22px); padding-right: 40px;">
+        <span id="togglePass" style="position:absolute; right:20px; top:18px; cursor:pointer; color:#aaa; font-size: 1.2em;">👁️</span>
+      </div>
+      <button type="submit" style="margin-top: 20px;">Save & Connect</button>
     </form>
+    <button onclick="clearWiFi()" style="background-color: #f44336; margin-top: 10px;">Forget WiFi & Restart</button>
     <div id="status" class="status"></div>
     <div style="margin-top:10px; font-size:0.75em; color:#888;">Installer v0.2.3</div>
   </div>
@@ -164,6 +176,26 @@ const char INSTALL_HTML[] PROGMEM = R"rawliteral(
     // #author: Gemini CLI Agent
     // #time: 2026-02-05 14:15:00 (Approximate)
     // #version: 0.3.0
+    
+    const passInput = document.getElementById('pass');
+    const togglePass = document.getElementById('togglePass');
+    if (togglePass) {
+      togglePass.addEventListener('click', function() {
+        const type = passInput.getAttribute('type') === 'password' ? 'text' : 'password';
+        passInput.setAttribute('type', type);
+        this.textContent = type === 'password' ? '👁️' : '🔒';
+      });
+    }
+
+    function clearWiFi() {
+      if(confirm("Stored WiFi credentials will be deleted. The board will restart into Setup Mode. Proceed?")) {
+        fetch('/wificlear').then(r => r.text()).then(data => {
+          document.getElementById('status').className = "status success";
+          document.getElementById('status').innerText = data;
+        });
+      }
+    }
+
     document.querySelector('form').addEventListener('submit', function(event) {
       event.preventDefault();
       const form = event.target;
@@ -207,6 +239,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML>
 <html>
 <head>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>E4 Config Editor</title>
   <style>
@@ -258,6 +291,10 @@ const char index_html[] PROGMEM = R"rawliteral(
     @keyframes blinkRed { 0%, 100% { filter: brightness(1.0); } 50% { filter: brightness(1.8); } }
     @keyframes pulseRed { 0%, 100% { filter: brightness(1.0); } 50% { filter: brightness(1.6); } 100% { filter: brightness(1.0); } }
 
+    .nav { background: #222; padding: 10px; margin-bottom: 20px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
+    .nav a { color: #ff9800; text-decoration: none; font-weight: bold; font-size: 0.9em; }
+    .nav .version { color: #666; font-size: 0.8em; }
+
     @media (max-width: 900px) {
       .main-layout {
         grid-template-columns: 1fr;
@@ -271,6 +308,11 @@ const char index_html[] PROGMEM = R"rawliteral(
 </head>
 <body>
   <div class="container">
+    <div class="nav">
+      <a href="/update">FIRMWARE UPDATE</a>
+      <a href="http://perlin-v3.local/" style="background: #444; padding: 5px 10px; border-radius: 4px; border: 1px solid #ff9800;">🧪 MOTOR TEST LAB</a>
+      <span class="version">v0.4.9 (Modular)</span>
+    </div>
     <h2>E4 Config Editor</h2>
     <div class="main-layout">
       <div id="left-column">
@@ -298,7 +340,8 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="stoprow">
           <button id="btn" onclick="toggle()">START SYSTEM</button>
           <button id="btn_zero" onclick="setZero()" style="background:#ff9800; margin-top: 10px;">ALIGN (SET 0°)</button>
-          <a href="/update" style="color: #777; font-size: 0.7em; text-decoration: none; margin-top: 15px; display: block;">&bull; Funk-Flash (Web Update) &bull;</a>
+          <a href="/update" style="color: #777; font-size: 0.7em; text-decoration: none; margin-top: 15px; display: inline-block; margin-right: 10px;">&bull; Funk-Flash &bull;</a>
+          <a href="/install" style="color: #777; font-size: 0.7em; text-decoration: none; margin-top: 15px; display: inline-block;">&bull; WiFi Setup &bull;</a>
         </div>
 
       </div>
@@ -1158,7 +1201,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     }
     if (data.cont !== undefined) { document.getElementById('cont').value = data.cont; u('cont', data.cont/100); }
     if (data.shape !== undefined) { document.getElementById('shape').value = data.shape; u('shape', data.shape/10); }
-    if (data.edgec !== undefined) { document.getElementById('edgec').value = data.edgec; u('edgec', data.edgec/100); }
+    if (data.edgec !== undefined) { document.getElementById('edgec').value = data.edgec; u('edgec', data.edgec); }
     if (data.fan !== undefined) { document.getElementById('fan').value = data.fan; u('fan', data.fan); }
     if (data.lamp !== undefined) { document.getElementById('lamp').value = data.lamp; u('lamp', data.lamp); }
     if (data.mType !== undefined) { document.getElementById('mType').value = data.mType; u('type', data.mType); showControls(); }
@@ -1246,13 +1289,17 @@ const char index_html[] PROGMEM = R"rawliteral(
     document.getElementById('mspace').value = Math.round(cfg.motorSpacingCm);
     document.getElementById('dyn').value = (cfg.dynMode !== undefined) ? cfg.dynMode : 1;
     document.getElementById('frame').value = Math.round(cfg.framesize * 1000);
-    // BUGFIX-NOTE: default to 1.0x equivalent to avoid collapsed spacing on startup.
-    document.getElementById('mapzoom').value = 10;
+    document.getElementById('mapzoom').value = (cfg.mapZoom !== undefined) ? Math.round(cfg.mapZoom * 10) : 10;
     document.getElementById('cont').value = Math.round(cfg.contrast * 100);
     document.getElementById('shape').value = Math.round(cfg.zShape * 10);
-    document.getElementById('edgec').value = 100;
+    document.getElementById('edgec').value = (cfg.edgeC !== undefined) ? Math.round(cfg.edgeC * 100) : 100;
     document.getElementById('fan').value = cfg.fanSpeed || 0;
     document.getElementById('lamp').value = cfg.lampBrightness || 0;
+
+    // Bug #6: Sync motorOffsets if provided
+    if (cfg.motorOffsets) {
+      currentCfg.motorOffsets = cfg.motorOffsets;
+    }
 
     u('speed', cfg.speed);
     u('angle', cfg.angle);
@@ -1261,10 +1308,10 @@ const char index_html[] PROGMEM = R"rawliteral(
     u('mspace', cfg.motorSpacingCm);
     u('dyn', (cfg.dynMode !== undefined) ? cfg.dynMode : 1);
     u('frame', cfg.framesize);
-    u('mapzoom', 10);
+    u('mapzoom', (cfg.mapZoom !== undefined) ? cfg.mapZoom : 1.0);
     u('cont', cfg.contrast);
     u('shape', cfg.zShape);
-    u('edgec', 1.0);
+    u('edgec', (cfg.edgeC !== undefined) ? cfg.edgeC * 100 : 100);
     u('fan', cfg.fanSpeed || 0);
     u('lamp', cfg.lampBrightness || 0);
 
@@ -1358,20 +1405,36 @@ void setSpreadCycle(int i, bool enable) {
 void homeMotor(int i) {
   if (i < 0 || i > 3) return;
   Serial.printf("Homing Motor %d...\n", i);
-  steppers[i]->setSpeed(1000);
-  while (digitalRead(TACHO_PIN) == HIGH) {
+  setSpreadCycle(i, true); // Mehr Kraft für Homing
+
+  const long maxHomingSteps = 1600 * 10; // Max 10 Umdrehungen Sicherheit
+  long stepsTaken = 0;
+
+  steppers[i]->setSpeed(1200);
+  while (digitalRead(TACHO_PIN) == HIGH && stepsTaken < maxHomingSteps) {
     steppers[i]->runSpeed();
-    yield();
+    stepsTaken++;
+    if (stepsTaken % 100 == 0) yield();
   }
+
+  if (stepsTaken >= maxHomingSteps) {
+    Serial.printf("Motor %d Homing FAILED (Timeout).\n", i);
+    setSpreadCycle(i, false);
+    return;
+  }
+
   steppers[i]->setCurrentPosition(0);
-  steppers[i]->moveTo(200); 
+  Serial.printf("Motor %d Trigger found. Parking at 180 deg...\n", i);
+
+  // Wegparken (180 Grad = 800 Steps bei 16 Microsteps)
+  steppers[i]->moveTo(800); 
   while (steppers[i]->distanceToGo() != 0) {
     steppers[i]->run();
     yield();
   }
-  Serial.printf("Motor %d homed.\n", i);
+  setSpreadCycle(i, false);
+  Serial.printf("Motor %d homed and parked.\n", i);
 }
-
 void runMotorTest(int motorIndex) {
   if (motorIndex < 0 || motorIndex > 3) return;
   homeMotor(motorIndex);
@@ -1408,17 +1471,19 @@ String jsonEscape(const String& s) {
 }
 
 void loadConfig() {
-  preferences.begin("e4-config", false);
-  webCfg.wifi_ssid = preferences.getString("ssid", "");
-  webCfg.wifi_password = preferences.getString("pass", "");
-  preferences.end();
+  if (preferences.begin("e4-config", true)) { // Nur lesend öffnen (Bug #8)
+    webCfg.wifi_ssid = preferences.getString("ssid", "");
+    webCfg.wifi_password = preferences.getString("pass", "");
+    preferences.end();
+  }
 }
 
 void saveConfig() {
-  preferences.begin("e4-config", false);
-  preferences.putString("ssid", webCfg.wifi_ssid);
-  preferences.putString("pass", webCfg.wifi_password);
-  preferences.end();
+  if (preferences.begin("e4-config", false)) { // Schreibend öffnen
+    preferences.putString("ssid", webCfg.wifi_ssid);
+    preferences.putString("pass", webCfg.wifi_password);
+    preferences.end();
+  }
 }
 
 // --- SETUP & LOOP ---
@@ -1443,11 +1508,14 @@ void setup() {
 
   loadConfig();
 
+  WiFi.setHostname("perlin-bench");
   WiFi.mode(WIFI_STA);
   if (webCfg.wifi_ssid.length() > 0) {
+    Serial.print("Connecting to saved WiFi: "); Serial.println(webCfg.wifi_ssid);
     WiFi.begin(webCfg.wifi_ssid.c_str(), webCfg.wifi_password.c_str());
   } else {
-    WiFi.begin(ota_ssid, ota_password);
+    Serial.print("Connecting to default WiFi: "); Serial.println(default_ssid);
+    WiFi.begin(default_ssid, default_password);
   }
 
   unsigned long startAttempt = millis();
@@ -1456,19 +1524,30 @@ void setup() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi connected. IP: " + WiFi.localIP().toString());
+    Serial.println("\n========================================");
+    Serial.println("  PERLIN-BENCH ONLINE");
+    Serial.print("  IP: "); Serial.println(WiFi.localIP().toString());
+    Serial.println("  URL: http://perlin-bench.local");
+    Serial.println("========================================\n");
+    ArduinoOTA.setHostname("perlin-bench");
+    ArduinoOTA.setPassword("12345678");
+    ArduinoOTA.begin();
+    MDNS.begin("perlin-bench"); 
   } else {
     Serial.println("\nWiFi failed. Starting AP 'perlin-setup'...");
+    WiFi.disconnect(true); // Bug #3 Fix
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+    WiFi.mode(WIFI_AP); 
+    delay(100);
     WiFi.softAP("perlin-setup", "12345678");
+    delay(500); 
     dnsServer.start(53, "*", WiFi.softAPIP());
     apMode = true;
+    Serial.print("AP IP: "); Serial.println(WiFi.softAPIP());
   }
 
-  ArduinoOTA.setHostname("perlin-bench");
-  ArduinoOTA.setPassword("12345678");
-  ArduinoOTA.begin();
-  AsyncElegantOTA.begin(&server, "admin", "12345678");
-  MDNS.begin("perlin");
+  ElegantOTA.begin(&server, "admin", "12345678");
 
   SERIAL_PORT.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
   pinMode(ENABLE_PIN, OUTPUT);
@@ -1482,12 +1561,25 @@ void setup() {
     else req->send_P(200, "text/html", index_html);
   });
 
+  server.on("/install", HTTP_GET, [](AsyncWebServerRequest *req){
+    req->send_P(200, "text/html", INSTALL_HTML);
+  });
+
+  server.on("/wificlear", HTTP_GET, [](AsyncWebServerRequest *req){
+    preferences.begin("e4-config", false);
+    preferences.clear();
+    preferences.end();
+    req->send(200, "text/plain", "WiFi cleared. Restarting...");
+    shouldRestart = true;
+    restartTimer = millis();
+  });
+
   server.on("/config", HTTP_GET, [](AsyncWebServerRequest *req){
     portENTER_CRITICAL(&cfgMux);
     Config cfg = webCfg;
     portEXIT_CRITICAL(&cfgMux);
-    String json; json.reserve(512);
-    json += "{\"running\":" + String(cfg.running ? 1 : 0);
+    String json; json.reserve(1024); // Ausreichend Platz reservieren (Bug #2)
+    json = "{\"running\":" + String(cfg.running ? 1 : 0);
     json += ",\"moveType\":" + String(cfg.moveType);
     json += ",\"speed\":" + String(cfg.speed, 4);
     json += ",\"angle\":" + String(cfg.angle, 2);
@@ -1495,8 +1587,11 @@ void setup() {
     json += ",\"framesize\":" + String(cfg.framesize, 4);
     json += ",\"contrast\":" + String(cfg.contrast, 3);
     json += ",\"zShape\":" + String(cfg.zShape, 3);
+    json += ",\"edgeC\":" + String(cfg.edgeC, 3);
+    json += ",\"dynMode\":" + String(cfg.dynMode);
     json += ",\"rangeDeg\":" + String(cfg.rangeDeg, 2);
     json += ",\"motorSpacingCm\":" + String(cfg.motorSpacingCm, 2);
+    json += ",\"mapZoom\":" + String(cfg.mapZoom, 2);
     json += ",\"fanSpeed\":" + String(cfg.fanSpeed);
     json += ",\"lampBrightness\":" + String(cfg.lampBrightness);
     json += ",\"motorOffsets\":[";
@@ -1512,16 +1607,19 @@ void setup() {
     portENTER_CRITICAL(&cfgMux);
     if(req->hasParam("run")) webCfg.running = req->getParam("run")->value().toInt();
     if(req->hasParam("type")) webCfg.moveType = constrain(req->getParam("type")->value().toInt(), 0, 5);
-    if(req->hasParam("speed")) webCfg.speed = req->getParam("speed")->value().toFloat();
-    if(req->hasParam("angle")) webCfg.angle = req->getParam("angle")->value().toFloat();
-    if(req->hasParam("rad")) webCfg.radius = req->getParam("rad")->value().toFloat();
-    if(req->hasParam("range")) webCfg.rangeDeg = req->getParam("range")->value().toFloat();
-    if(req->hasParam("mspace")) webCfg.motorSpacingCm = req->getParam("mspace")->value().toFloat();
-    if(req->hasParam("frame")) webCfg.framesize = req->getParam("frame")->value().toFloat();
-    if(req->hasParam("cont")) webCfg.contrast = req->getParam("cont")->value().toFloat();
-    if(req->hasParam("shape")) webCfg.zShape = req->getParam("shape")->value().toFloat();
-    if(req->hasParam("fan")) webCfg.fanSpeed = req->getParam("fan")->value().toInt();
-    if(req->hasParam("lamp")) webCfg.lampBrightness = req->getParam("lamp")->value().toInt();
+    if(req->hasParam("speed")) webCfg.speed = constrain(req->getParam("speed")->value().toFloat(), 0.0f, 2.0f);
+    if(req->hasParam("angle")) webCfg.angle = constrain(req->getParam("angle")->value().toFloat(), 0.0f, 360.0f);
+    if(req->hasParam("rad")) webCfg.radius = constrain(req->getParam("rad")->value().toFloat(), 1.0f, 500.0f);
+    if(req->hasParam("range")) webCfg.rangeDeg = constrain(req->getParam("range")->value().toFloat(), 30.0f, 360.0f);
+    if(req->hasParam("mspace")) webCfg.motorSpacingCm = constrain(req->getParam("mspace")->value().toFloat(), 5.0f, 100.0f);
+    if(req->hasParam("mapzoom")) webCfg.mapZoom = constrain(req->getParam("mapzoom")->value().toFloat(), 0.1f, 50.0f);
+    if(req->hasParam("frame")) webCfg.framesize = constrain(req->getParam("frame")->value().toFloat(), 0.0001f, 0.5f);
+    if(req->hasParam("cont")) webCfg.contrast = constrain(req->getParam("cont")->value().toFloat(), 0.1f, 5.0f);
+    if(req->hasParam("shape")) webCfg.zShape = constrain(req->getParam("shape")->value().toFloat(), -10.0f, 10.0f);
+    if(req->hasParam("edgec")) webCfg.edgeC = constrain(req->getParam("edgec")->value().toFloat() / 100.0f, 0.0f, 2.0f);
+    if(req->hasParam("dyn")) webCfg.dynMode = constrain(req->getParam("dyn")->value().toInt(), 0, 2);
+    if(req->hasParam("fan")) webCfg.fanSpeed = constrain(req->getParam("fan")->value().toInt(), 0, 255);
+    if(req->hasParam("lamp")) webCfg.lampBrightness = constrain(req->getParam("lamp")->value().toInt(), 0, 255);
     for (int i = 0; i < 4; i++) {
       String mx = "m" + String(i + 1) + "x";
       String my = "m" + String(i + 1) + "y";
@@ -1533,8 +1631,9 @@ void setup() {
   });
 
   server.on("/setzero", HTTP_GET, [](AsyncWebServerRequest *req){
-    for (int i = 0; i < 4; i++) steppers[i]->setCurrentPosition(0);
-    req->send(200, "text/plain", "OK");
+    Serial.println("Requested Homing Sequence for all motors.");
+    for (int i = 0; i < 4; i++) homeMotor(i);
+    req->send(200, "text/plain", "Homing Sequence Complete.");
   });
 
   server.on("/wifisave", HTTP_POST, [](AsyncWebServerRequest *req){
@@ -1542,14 +1641,16 @@ void setup() {
     if(req->hasParam("password", true)) webCfg.wifi_password = req->getParam("password", true)->value();
     saveConfig();
     req->send(200, "text/plain", "OK");
-    delay(2000); ESP.restart();
+    // Bug #1 Fix: Restart verzögert in loop() ausführen
+    shouldRestart = true;
+    restartTimer = millis();
   });
 
   server.on("/test", HTTP_GET, [](AsyncWebServerRequest *req){
     if(req->hasParam("m")) {
-      int m = req->getParam("m")->value().toInt();
-      runMotorTest(m);
-      req->send(200, "text/plain", "Started Test.");
+      motorTestTarget = req->getParam("m")->value().toInt();
+      motorTestActive = true; // Bug #2 Fix: Flag setzen
+      req->send(200, "text/plain", "Test Suite started. Check Serial.");
     } else req->send(400, "text/plain", "Missing m.");
   });
 
@@ -1559,12 +1660,24 @@ void setup() {
   });
 
   server.begin();
-  xTaskCreatePinnedToCore(PerlinLoop, "PerlinTask", 10000, NULL, 1, &PerlinTask, 1);
+  xTaskCreatePinnedToCore(PerlinLoop, "PerlinTask", 20000, NULL, 1, &PerlinTask, 1);
 }
 
 void loop() {
   if (apMode) dnsServer.processNextRequest();
   ArduinoOTA.handle();
+  ElegantOTA.loop();
+
+  // Bug #1: Sicherer Restart außerhalb des Callbacks
+  if (shouldRestart && (millis() - restartTimer > 2000)) {
+    ESP.restart();
+  }
+
+  // Bug #2: Motor Test außerhalb des Callbacks
+  if (motorTestActive) {
+    runMotorTest(motorTestTarget);
+    motorTestActive = false;
+  }
 
   static unsigned long lastExtrasTime = 0;
   if (millis() - lastExtrasTime > 500) {
@@ -1612,7 +1725,11 @@ void PerlinLoop(void * pvParameters) {
             flightX = cfg.radius * cos(timeAccumulator);
             flightY = (cfg.radius * 0.5) * sin(timeAccumulator * 2.0);
           }
-        } else timeAccumulator += cfg.speed * dt;
+        } else {
+          timeAccumulator += cfg.speed * dt;
+          // Bug #7: Limit growth to prevent float precision issues
+          if (timeAccumulator > 10000.0f) timeAccumulator -= 10000.0f;
+        }
 
         float stepsPerDegree = (200.0f * 16.0f) / 360.0f;
         float maxSteps = cfg.rangeDeg * stepsPerDegree;
@@ -1622,6 +1739,7 @@ void PerlinLoop(void * pvParameters) {
           if (cfg.moveType >= 3) {
             float phaseSpread = (cfg.motorSpacingCm / 100.0f) * 2.0f * PI;
             float phase = timeAccumulator + i * phaseSpread;
+            
             if (cfg.moveType == 3) val = sinf(phase);
             else if (cfg.moveType == 4) {
               float t = fmodf(phase / (2.0f * PI), 1.0f); if (t < 0.0f) t += 1.0f;
@@ -1632,22 +1750,54 @@ void PerlinLoop(void * pvParameters) {
               float duty = fmaxf(0.05f, fminf(0.95f, 0.5f + cfg.zShape * 0.08f));
               val = t < duty ? 1.0f : -1.0f;
             }
+            
+            // Soft-clipping via edgeC (interpreted as softness in Wave mode)
+            float softness = fmaxf(0.0f, 2.0f - cfg.edgeC);
+            if (softness > 0.05f) {
+              float k = 3.0f / softness;
+              val = tanhf(val * k) / tanhf(k);
+            }
           } else {
-            float sampleX = (flightX + cfg.motorOffsets[i].x) * cfg.framesize;
-            float sampleY = (flightY + cfg.motorOffsets[i].y) * cfg.framesize;
+            // --- NOISE MODI (0=Linear, 1=Kreis, 2=Acht) ---
+            float offsetX = (i - 1.5f) * cfg.motorSpacingCm;
+            float sampleX = (flightX + offsetX) * cfg.framesize;
+            float sampleY = (flightY) * cfg.framesize;
             float n = sn.noise(sampleX, sampleY);
+            
+            // Apply Noise Shaping (applyShape equivalent)
             float nNorm = (n + 1.0f) / 2.0f;
-            float exponent = abs(cfg.zShape); if (exponent < 0.1) exponent = 0.1;
-            float nShaped = pow(nNorm, exponent);
+            float exponent = abs(cfg.zShape); if (exponent < 0.1f) exponent = 0.1f;
+            float nShaped = powf(nNorm, exponent);
             if (cfg.zShape < 0) nShaped = 1.0f - nShaped;
-            val = (nShaped * 2.0f) - 1.0f;
+            float finalNoise = (nShaped * 2.0f) - 1.0f;
+            
+            float edge = 1.0f - abs(finalNoise);
+            float edgeMix = fmaxf(0.0f, fminf(2.0f, cfg.edgeC));
+            float edgeBoost = (edge * 2.0f - 1.0f) * edgeMix;
+            val = finalNoise + edgeBoost;
           }
-          long target = (long)(val * maxSteps * cfg.contrast);
+
+          // Dynamic Profile Scaling
+          float goalScale = (cfg.dynMode == 0) ? 0.5f : (cfg.dynMode == 2 ? 1.5f : 1.0f);
+          long target = (long)(val * maxSteps * cfg.contrast * goalScale);
           long maxStepsL = (long)maxSteps;
           if (target > maxStepsL) target = maxStepsL; if (target < -maxStepsL) target = -maxStepsL;
           steppers[i]->moveTo(target);
         }
       }
+      
+      // Update motor dynamics if profile changed
+      static int lastDynMode = -1;
+      if (cfg.dynMode != lastDynMode) {
+        lastDynMode = cfg.dynMode;
+        float sScale = (cfg.dynMode == 0) ? 0.5f : (cfg.dynMode == 2 ? 2.0f : 1.0f);
+        float aScale = (cfg.dynMode == 0) ? 0.3f : (cfg.dynMode == 2 ? 3.0f : 1.0f);
+        for(int i=0; i<4; i++) {
+          steppers[i]->setMaxSpeed(8000.0f * sScale);
+          steppers[i]->setAcceleration(4000.0f * aScale);
+        }
+      }
+
       for(int i=0; i<4; i++) steppers[i]->run();
     } else {
       if (!motors_stopped) {

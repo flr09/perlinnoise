@@ -11,6 +11,30 @@ Fokus dieses ersten Stands:
 - den aktuellen Motorcode in `perlinnoise` einordnen
 - die Idee bewerten, einen 3-Pin-Endstop als globalen Stop fuer alle 4 Motoren zu nutzen
 
+## Hardware & Verkabelung (V2)
+
+### Hall-Sensoren (Homing)
+Das System nutzt **NPN NO (Normally Open)** Induktiv-/Hall-Sensoren an einem gemeinsamen Bus.
+
+*   **Sensor-Typ:** NPN NO (Schaltet nach GND bei Trigger).
+*   **Anschluss:** `Z-MIN` Header (GPIO 15 / `TACHO_PIN`).
+*   **Board-Orientierung:** "E4" Schriftzug richtigherum lesbar, Endstop-Header an der unteren Kante.
+
+**Pinbelegung Z-MIN (von links nach rechts):**
+1.  **Signal (S)** -> GPIO 15 (Interner Pull-Up aktiv)
+2.  **GND (-)**
+3.  **VCC (+)** -> 5V Versorgung
+
+**Kabelfarben Zuordnung:**
+*   **SCHWARZ (Signal)** -> Pin 1 (Links)
+*   **BLAU (GND)** -> Pin 2 (Mitte)
+*   **BRAUN (VCC/5V)** -> Pin 3 (Rechts)
+
+### Logik-Check (NPN NO)
+*   **Nicht ausgelöst:** Pin ist `HIGH` (durch internen Pull-Up).
+*   **Ausgelöst (Magnet):** Pin wird durch den Sensor auf `LOW` (GND) gezogen.
+*   **Homing-Code:** `while (digitalRead(TACHO_PIN) == HIGH) { ... }` (Fahre solange kein Magnet da ist).
+
 ## V2-Randbedingungen aus der Idee
 
 - V2 hat pro Motor einen Hall-Sensor.
