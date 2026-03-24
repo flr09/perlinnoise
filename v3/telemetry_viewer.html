@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>V3 Telemetry Viewer</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #121212; color: #e0e0e0; font-family: sans-serif; padding: 16px; }
+
+    .nav {
+      display: flex; justify-content: space-between; align-items: center;
+      background: #003366; border-bottom: 2px solid #ff9800;
+      padding: 10px 16px; border-radius: 6px; margin-bottom: 16px;
+    }
+    .nav a { color: #fff; text-decoration: none; font-weight: bold; font-size: 0.9em; }
+    .nav .title { color: #ff9800; font-weight: bold; }
+
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+      background: #1e1e1e; padding: 12px; border-radius: 6px; margin-bottom: 16px;
+    }
+    .toolbar input[type=text] {
+      flex: 1; min-width: 200px; background: #333; border: 1px solid #555;
+      color: #eee; padding: 7px 10px; border-radius: 4px; font-size: 0.85em;
+    }
+    button {
+      background: #333; color: #eee; border: 1px solid #555;
+      padding: 7px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85em;
+    }
+    button:hover { background: #444; }
+    button.primary { background: #ff9800; color: #000; border-color: #ff9800; font-weight: bold; }
+    button.primary:hover { background: #ffa726; }
+    button.danger { background: #b71c1c; border-color: #b71c1c; }
+
+    #statusBar {
+      background: #1a1a2e; border: 1px solid #333; border-radius: 4px;
+      padding: 6px 12px; font-size: 0.8em; color: #aaa; margin-bottom: 12px;
+      min-height: 28px;
+    }
+    #statusBar.ok  { border-color: #4caf50; color: #4caf50; }
+    #statusBar.err { border-color: #f44336; color: #f44336; }
+
+    .summary-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px; margin-bottom: 16px;
+    }
+    .stat-card {
+      background: #1e1e1e; border-left: 4px solid #ff9800;
+      border-radius: 6px; padding: 10px 12px;
+    }
+    .stat-card .label { font-size: 0.7em; color: #888; text-transform: uppercase; }
+    .stat-card .value { font-size: 1.3em; font-family: monospace; color: #00ff00; }
+
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+
+    .chart-box {
+      background: #1e1e1e; border-radius: 8px; padding: 12px;
+    }
+    .chart-box h3 { font-size: 0.8em; color: #ff9800; margin-bottom: 8px; text-transform: uppercase; }
+
+    .paste-area {
+      margin-top: 16px; background: #1e1e1e; border-radius: 8px; padding: 12px;
+    }
+    .paste-area h3 { font-size: 0.8em; color: #888; margin-bottom: 6px; }
+    textarea {
+      width: 100%; height: 120px; background: #0a0a0a; color: #0f0;
+      border: 1px solid #333; border-radius: 4px; font-family: monospace;
+      font-size: 0.75em; padding: 8px; resize: vertical;
+    }
+
+    .flag-event { background: rgba(244,67,54,0.15); padding: 2px 6px; border-radius: 3px; margin: 2px 0; font-size: 0.75em; }
+    #flagLog { max-height: 120px; overflow-y: auto; margin-top: 8px; }
+  </style>
+</head>
+<body>
+
+<div class="nav">
+  <a href="http://perlin-v3.local/">← V3 LAB</a>
+  <span class="title">TELEMETRY VIEWER</span>
+  <span style="font-size:0.75em; color:#666;">v3 · offline ok</span>
+</div>
+
+<div class="toolbar">
+  <input type="text" id="espUrl" value="http://perlin-v3.local/telemetry" placeholder="ESP URL">
+  <button class="primary" onclick="fetchFromESP()">LOAD FROM ESP</button>
+  <button onclick="parsePaste()">PLOT PASTED CSV</button>
+  <button onclick="downloadCSV()">DOWNLOAD CSV</button>
+  <button class="danger" onclick="clearAll()">CLEAR</button>
+</div>
+
+<div id="statusBar">Bereit. CSV vom ESP laden oder unten einfuegen.</div>
+
+<div class="summary-grid" id="summaryGrid"></div>
+
+<div class="charts-grid">
+  <div class="chart-box">
+    <h3>Position (Steps)</h3>
+    <canvas id="chartPos"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>Speed (sps)</h3>
+    <canvas id="chartSpd"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>StallGuard Result (Last = Mehr Last)</h3>
+    <canvas id="chartSG"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>Motorstrom: CUR_A / CUR_B (cs_actual)</h3>
+    <canvas id="chartCurrent"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>cs_actual (Stromregelung)</h3>
+    <canvas id="chartCS"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>Flags: Stall / OT / OTPW / OL</h3>
+    <canvas id="chartFlags"></canvas>
+  </div>
+</div>
+
+<div class="chart-box" style="margin-top:12px;">
+  <h3>Flag-Ereignisse</h3>
+  <div id="flagLog">Keine Ereignisse.</div>
+</div>
+
+<div class="paste-area">
+  <h3>CSV einfuegen (von /telemetry oder Datei)</h3>
+  <textarea id="csvPaste" placeholder="ts_ms,phase,val,pos_steps,..."></textarea>
+</div>
+
+<script>
+let rawCSV = "";
+let charts = {};
+
+const COLS = {
+  ts:0, phase:1, val:2, pos:3, spd:4, sg:5, cs:6, cur_a:7, cur_b:8,
+  stall:9, otpw:10, ot:11, ola:12, olb:13
+};
+
+const PHASE_COLORS = {
+  SPEED: '#ff9800', DRIFT: '#29b6f6', FINE: '#ab47bc', ACCEL: '#ef5350'
+};
+
+function status(msg, cls='') {
+  const el = document.getElementById('statusBar');
+  el.textContent = msg; el.className = cls;
+}
+
+async function fetchFromESP() {
+  const url = document.getElementById('espUrl').value;
+  status('Lade von ' + url + ' ...', '');
+  try {
+    const r = await fetch(url);
+    if (!r.ok) { status('HTTP ' + r.status + ' — Kein Parcour-Ergebnis vorhanden.', 'err'); return; }
+    rawCSV = await r.text();
+    document.getElementById('csvPaste').value = rawCSV;
+    processCSV(rawCSV);
+  } catch(e) {
+    status('Verbindung fehlgeschlagen: ' + e.message, 'err');
+  }
+}
+
+function parsePaste() {
+  rawCSV = document.getElementById('csvPaste').value.trim();
+  processCSV(rawCSV);
+}
+
+function downloadCSV() {
+  if (!rawCSV) { status('Keine Daten vorhanden.', 'err'); return; }
+  const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+  const blob = new Blob([rawCSV], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'parcour_' + ts + '.csv';
+  a.click();
+}
+
+function clearAll() {
+  rawCSV = '';
+  document.getElementById('csvPaste').value = '';
+  document.getElementById('summaryGrid').innerHTML = '';
+  document.getElementById('flagLog').innerHTML = 'Keine Ereignisse.';
+  Object.values(charts).forEach(c => c.destroy());
+  charts = {};
+  status('Geloescht.', '');
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const header = lines[0].split(',').map(s => s.trim());
+  return lines.slice(1).map(l => {
+    const vals = l.split(',');
+    const row = {};
+    header.forEach((h,i) => row[h] = vals[i] ? vals[i].trim() : '');
+    return row;
+  }).filter(r => r.ts_ms !== undefined && r.ts_ms !== '');
+}
+
+function processCSV(text) {
+  const rows = parseCSV(text);
+  if (rows.length === 0) { status('CSV leer oder ungueltig.', 'err'); return; }
+  status(`${rows.length} Samples geladen — ${new Date().toLocaleTimeString()}`, 'ok');
+
+  const ts    = rows.map(r => (parseInt(r.ts_ms)/1000).toFixed(2));
+  const pos   = rows.map(r => parseInt(r.pos_steps));
+  const spd   = rows.map(r => parseInt(r.spd_sps));
+  const sg    = rows.map(r => parseInt(r.sg_result));
+  const cs    = rows.map(r => parseInt(r.cs_actual));
+  const cur_a = rows.map(r => parseInt(r.cur_a));
+  const cur_b = rows.map(r => parseInt(r.cur_b));
+  const stall = rows.map(r => parseInt(r.stall));
+  const otpw  = rows.map(r => parseInt(r.otpw));
+  const ot    = rows.map(r => parseInt(r.ot));
+  const ola   = rows.map(r => parseInt(r.ola));
+  const olb   = rows.map(r => parseInt(r.olb));
+
+  const phases = rows.map(r => r.phase);
+  const bgColors = phases.map(p => (PHASE_COLORS[p] || '#888') + '88');
+
+  // Summary
+  const maxSpd = Math.max(...spd); const minSG = Math.min(...sg); const maxSG = Math.max(...sg);
+  const stallCount = stall.filter(v=>v>0).length;
+  const otpwCount  = otpw.filter(v=>v>0).length;
+  const durationS  = (parseInt(rows[rows.length-1].ts_ms)/1000).toFixed(1);
+  const maxRpm = rows.filter(r=>r.phase==='SPEED').map(r=>parseFloat(r.val));
+  const topRpm = maxRpm.length ? Math.max(...maxRpm) : 0;
+  const maxAccel = rows.filter(r=>r.phase==='ACCEL').map(r=>parseFloat(r.val));
+  const topAccel = maxAccel.length ? Math.max(...maxAccel) : 0;
+
+  renderSummary([
+    ['Dauer', durationS + ' s'],
+    ['Samples', rows.length],
+    ['Max Speed', maxSpd + ' sps'],
+    ['Top RPM', topRpm + ' RPM'],
+    ['Top Accel', topAccel > 0 ? topAccel + ' sps²' : '—'],
+    ['SG Range', minSG + '–' + maxSG],
+    ['Stall Events', stallCount],
+    ['OTPW Events', otpwCount],
+  ]);
+
+  // Flag log
+  const flagLog = [];
+  rows.forEach((r,i) => {
+    if (+r.stall) flagLog.push({t:ts[i], msg:'STALL @ ' + ts[i] + 's  ' + r.phase + ' ' + r.val + ' RPM/sps²'});
+    if (+r.otpw)  flagLog.push({t:ts[i], msg:'OTPW (Uebertemp. Warnung) @ ' + ts[i] + 's'});
+    if (+r.ot)    flagLog.push({t:ts[i], msg:'OT (Uebertemp.) @ ' + ts[i] + 's'});
+    if (+r.ola)   flagLog.push({t:ts[i], msg:'Open Load A @ ' + ts[i] + 's'});
+    if (+r.olb)   flagLog.push({t:ts[i], msg:'Open Load B @ ' + ts[i] + 's'});
+  });
+  const fl = document.getElementById('flagLog');
+  fl.innerHTML = flagLog.length === 0
+    ? '<span style="color:#4caf50">Keine Flags ausgeloest.</span>'
+    : flagLog.map(e=>`<div class="flag-event">${e.msg}</div>`).join('');
+
+  const cfg = {
+    type:'line', options:{
+      animation:false, responsive:true,
+      plugins:{ legend:{ labels:{ color:'#aaa', boxWidth:12, font:{size:11} } } },
+      scales:{
+        x:{ ticks:{ color:'#666', maxTicksLimit:10, font:{size:10} }, grid:{ color:'#222' } },
+        y:{ ticks:{ color:'#aaa', font:{size:10} }, grid:{ color:'#2a2a2a' } }
+      }
+    }
+  };
+
+  function mk(id, datasets) {
+    if (charts[id]) charts[id].destroy();
+    charts[id] = new Chart(document.getElementById(id), {
+      ...cfg,
+      data:{ labels:ts, datasets }
+    });
+  }
+
+  mk('chartPos', [{
+    label:'Position (steps)', data:pos, borderColor:'#ff9800',
+    backgroundColor:'transparent', pointRadius:0, borderWidth:1.5, tension:0.2
+  }]);
+
+  mk('chartSpd', [{
+    label:'Speed (sps)', data:spd, borderColor:'#29b6f6',
+    backgroundColor:'transparent', pointRadius:0, borderWidth:1.5, tension:0.2
+  }]);
+
+  mk('chartSG', [{
+    label:'SG_RESULT', data:sg, borderColor:'#66bb6a',
+    backgroundColor:'rgba(102,187,106,0.08)', pointRadius:0, borderWidth:1.5, fill:true, tension:0.1
+  }]);
+
+  mk('chartCurrent', [
+    { label:'CUR_A', data:cur_a, borderColor:'#ef5350', backgroundColor:'transparent', pointRadius:0, borderWidth:1.5 },
+    { label:'CUR_B', data:cur_b, borderColor:'#ab47bc', backgroundColor:'transparent', pointRadius:0, borderWidth:1.5 }
+  ]);
+
+  mk('chartCS', [{
+    label:'cs_actual', data:cs, borderColor:'#ffa726',
+    backgroundColor:'rgba(255,167,38,0.08)', pointRadius:0, borderWidth:1.5, fill:true
+  }]);
+
+  mk('chartFlags', [
+    { label:'Stall',   data:stall, borderColor:'#f44336', backgroundColor:'transparent', pointRadius:0, borderWidth:2, stepped:true },
+    { label:'OTPW',    data:otpw,  borderColor:'#ff9800', backgroundColor:'transparent', pointRadius:0, borderWidth:2, stepped:true },
+    { label:'OLA',     data:ola,   borderColor:'#ffd54f', backgroundColor:'transparent', pointRadius:0, borderWidth:1.5, stepped:true },
+    { label:'OLB',     data:olb,   borderColor:'#fff176', backgroundColor:'transparent', pointRadius:0, borderWidth:1.5, stepped:true },
+  ]);
+}
+
+function renderSummary(items) {
+  document.getElementById('summaryGrid').innerHTML = items.map(([l,v]) =>
+    `<div class="stat-card"><div class="label">${l}</div><div class="value">${v}</div></div>`
+  ).join('');
+}
+
+// Auto-load on open if URL has ?esp=...
+window.addEventListener('load', () => {
+  const p = new URLSearchParams(location.search);
+  if (p.has('esp')) {
+    document.getElementById('espUrl').value = p.get('esp');
+    fetchFromESP();
+  }
+});
+</script>
+</body>
+</html>

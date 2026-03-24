@@ -78,4 +78,12 @@ void emergencyStop();
 void saveCalibration(int i);
 void loadCalibration();
 
+// --- TELEMETRY ---
+#define TELEM_INTERVAL_MS 200
+#define TELEM_MAX_BYTES   52000
+extern String telemCSV;
+extern unsigned long telemStart;
+void clearTelemetry();
+void recordTelemetry(const char* phase, float val);
+
 #endif

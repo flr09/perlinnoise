@@ -18,6 +18,40 @@ AccelStepper* steppers[4] = {&stX, &stY, &stZ, &stE};
 
 float rpmToSps(float rpm) { return (rpm * 3200.0f) / 60.0f; }
 
+// --- TELEMETRY ---
+String telemCSV = "";
+unsigned long telemStart = 0;
+static unsigned long lastTelemMs = 0;
+
+void clearTelemetry() {
+    telemCSV = "ts_ms,phase,val,pos_steps,spd_sps,sg_result,cs_actual,cur_a,cur_b,stall,otpw,ot,ola,olb\n";
+    telemStart = millis();
+    lastTelemMs = 0;
+}
+
+void recordTelemetry(const char* phase, float val) {
+    unsigned long now = millis();
+    if (telemCSV.length() > TELEM_MAX_BYTES) return;
+    if (now - lastTelemMs < TELEM_INTERVAL_MS) return;
+    lastTelemMs = now;
+
+    long pos = steppers[0]->currentPosition();
+    int  spd = (int)steppers[0]->speed();
+    uint16_t sg = driverX.SG_RESULT();
+    uint8_t  cs = driverX.cs_actual();
+    uint32_t msc = driverX.MSCURACT();
+    int16_t cur_a = (int16_t)(msc & 0x1FF);        if (cur_a > 255) cur_a -= 512;
+    int16_t cur_b = (int16_t)((msc >> 16) & 0x1FF); if (cur_b > 255) cur_b -= 512;
+    uint8_t flags = (driverX.stallguard()?1:0) | (driverX.otpw()?2:0)
+                  | (driverX.ot()?4:0) | (driverX.ola()?8:0) | (driverX.olb()?16:0);
+
+    char line[128];
+    snprintf(line, sizeof(line), "%lu,%s,%.0f,%ld,%d,%u,%u,%d,%d,%d,%d,%d,%d,%d\n",
+        now - telemStart, phase, val, pos, spd, sg, cs, cur_a, cur_b,
+        (flags>>0)&1, (flags>>1)&1, (flags>>2)&1, (flags>>3)&1, (flags>>4)&1);
+    telemCSV += line;
+}
+
 void addLog(String msg) {
     portENTER_CRITICAL(&motorMux);
     sys.log += msg + "\\n";
@@ -44,17 +78,20 @@ void loadCalibration() {
 }
 
 void setMotorPower(int i, bool on) {
-    if (i != 0) return; // Only Motor X for now
+    if (i != 0) return;
     sys.m[i].enabled = on;
     if (on) {
-        driverX.toff(5); // Enable driver power
-        digitalWrite(ENABLE_PIN, LOW); // Global hardware enable active
+        // Full re-init: toff(0) may have left driver in undefined state
+        driverX.begin();
+        driverX.toff(5);
+        driverX.rms_current(600);
+        driverX.microsteps(16);
+        driverX.pwm_autoscale(true);
+        digitalWrite(ENABLE_PIN, LOW);
         addLog("M0 Power ON");
     } else {
-        driverX.toff(0); // Disable driver power
-        // If all motors off, set global pin HIGH (optional, but safer)
-        digitalWrite(ENABLE_PIN, HIGH); 
-        addLog("M0 Power OFF (Loose)");
+        digitalWrite(ENABLE_PIN, HIGH); // Hardware disable, coils de-energized
+        addLog("M0 Power OFF");
     }
 }
 
@@ -121,9 +158,10 @@ void characterizeSensor(int i) {
     if(!waitForSensor(0, HIGH, 5000)) { addLog("Err: CW End fail"); return; }
     long eCW = steppers[0]->currentPosition();
     
-    steppers[0]->move(-2000); while(steppers[0]->run());
+    // Full revolution forward to approach sensor from the other side (CCW)
+    steppers[0]->move(3200); while(steppers[0]->run()) { yield(); }
     steppers[0]->setSpeed(-150);
-    if(!waitForSensor(0, LOW, 10000)) { addLog("Err: CCW fail"); return; }
+    if(!waitForSensor(0, LOW, 25000)) { addLog("Err: CCW fail"); return; }
     long eCCW = steppers[0]->currentPosition();
     if(!waitForSensor(0, HIGH, 5000)) { addLog("Err: CCW End fail"); return; }
     long sCCW = steppers[0]->currentPosition();
@@ -139,34 +177,46 @@ void runSpeedTest(int i) {
     if (i != 0 || !sys.cal[0].valid) { addLog("Error: Calib M0 first!"); return; }
     if (!sys.m[0].enabled) setMotorPower(0, true);
     float rpm = 300.0f; float lastGood = rpm; bool failed = false;
+    clearTelemetry();
     addLog("Speed Parcours M0...");
-    
+
     while(rpm <= 2500.0f && !failed) {
         addLog("Try " + String(rpm,0) + " RPM");
         steppers[0]->setMaxSpeed(rpmToSps(rpm));
-        steppers[0]->setAcceleration(rpmToSps(rpm)*4); 
-        steppers[0]->move(6400); 
-        while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); yield(); }
-        
+        steppers[0]->setAcceleration(rpmToSps(rpm)*4);
+        steppers[0]->move(6400);
+        while(steppers[0]->distanceToGo() != 0) {
+            steppers[0]->run();
+            recordTelemetry("SPEED", rpm);
+            yield();
+        }
+
         setSpreadCycle(0, true);
         steppers[0]->setSpeed(200);
         unsigned long sS = millis(); bool found = false;
         while(millis() - sS < 5000) {
             if(digitalRead(TACHO_PIN) == LOW) { found = true; break; }
-            steppers[0]->runSpeed(); yield();
+            steppers[0]->runSpeed();
+            recordTelemetry("DRIFT", rpm);
+            yield();
         }
         long drift = abs(steppers[0]->currentPosition() % 3200);
         if (!found || drift > 60) { failed = true; addLog("FAIL at " + String(rpm,0)); }
         else { lastGood = rpm; rpm += 100.0f; }
         setSpreadCycle(0, false);
     }
-    
+
     if (failed) {
         rpm = lastGood + 10.0f; failed = false;
         addLog("Fine-tuning...");
         while(rpm < (lastGood + 100.0f) && !failed) {
             steppers[0]->setMaxSpeed(rpmToSps(rpm));
-            steppers[0]->move(3200); while(steppers[0]->run());
+            steppers[0]->move(3200);
+            while(steppers[0]->distanceToGo() != 0) {
+                steppers[0]->run();
+                recordTelemetry("FINE", rpm);
+                yield();
+            }
             setSpreadCycle(0, true); steppers[0]->setSpeed(200);
             waitForSensor(0, LOW, 5000);
             if (abs(steppers[0]->currentPosition() % 3200) > 60) failed = true;
@@ -191,9 +241,12 @@ void runInertiaTest(int i) {
         steppers[0]->setMaxSpeed(rpmToSps(testSpd));
         steppers[0]->setAcceleration(accel);
         long base = steppers[0]->currentPosition();
-        steppers[0]->moveTo(base + 3200); while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); yield(); }
-        steppers[0]->moveTo(base - 3200); while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); yield(); }
-        steppers[0]->moveTo(base); while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); yield(); }
+        steppers[0]->moveTo(base + 3200);
+        while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); recordTelemetry("ACCEL", accel); yield(); }
+        steppers[0]->moveTo(base - 3200);
+        while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); recordTelemetry("ACCEL", accel); yield(); }
+        steppers[0]->moveTo(base);
+        while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); recordTelemetry("ACCEL", accel); yield(); }
 
         setSpreadCycle(0, true); steppers[0]->setSpeed(200);
         waitForSensor(0, LOW, 5000);

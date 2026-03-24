@@ -142,6 +142,15 @@ void setup() {
         r->send(200, "text/plain", "OK");
     });
 
+    server.on("/telemetry", HTTP_GET, [](AsyncWebServerRequest *r){
+        if (telemCSV.length() < 50) { r->send(204, "text/plain", "No data yet - run parcour first"); return; }
+        String ts = String(millis());
+        AsyncWebServerResponse *res = r->beginResponse(200, "text/csv; charset=utf-8", telemCSV);
+        res->addHeader("Content-Disposition", "attachment; filename=\"parcour_" + ts + ".csv\"");
+        res->addHeader("Cache-Control", "no-store");
+        r->send(res);
+    });
+
     ElegantOTA.begin(&server, "admin", "12345678");
     ElegantOTA.setAutoReboot(true); // Fixed: Explicitly enable auto-reboot
     server.begin();

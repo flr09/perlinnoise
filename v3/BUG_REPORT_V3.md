@@ -45,7 +45,28 @@ Kombiniert zwei Phasen:
 
 ---
 
-## 4. Hardware-Status
+## 4. Telemetrie-System
+
+Waehrend des Parcours werden alle 200ms Messwerte vom TMC2209 und AccelStepper aufgezeichnet.
+
+**Erfasste Kanaele:**
+- `ts_ms` — Zeit seit Parcour-Start
+- `phase` — SPEED / DRIFT / FINE / ACCEL
+- `val` — aktueller Testwert (RPM oder sps²)
+- `pos_steps`, `spd_sps` — Position und Geschwindigkeit (AccelStepper)
+- `sg_result` — StallGuard (0=viel Last, 1023=keine Last)
+- `cs_actual` — tatsaechliche Stromregelung
+- `cur_a`, `cur_b` — Spulenstroemme (MSCURACT, -255…+255)
+- `stall`, `otpw`, `ot`, `ola`, `olb` — Flags
+
+**Abruf:** `http://perlin-v3.local/telemetry` (CSV-Download, Dateiname mit Timestamp)
+
+**Auswertung:** `v3/telemetry_viewer.html` — offline-faehige HTML-Datei, direkt im Browser oeffnen.
+Unterstuetzt: Load from ESP, CSV einfuegen, 6 synchronisierte Charts, Flag-Ereignis-Log, CSV-Download mit Datum/Uhrzeit im Dateinamen.
+
+---
+
+## 5. Hardware-Status
 - GPIO 15: Validiert (Pinzetten-Test & NPN-Sensor ok).
 - Pin-Belegung: Blau=GND, Schwarz=SIG, Rot=VCC.
 
