@@ -148,6 +148,7 @@ void setup() {
         AsyncWebServerResponse *res = r->beginResponse(200, "text/csv; charset=utf-8", telemCSV);
         res->addHeader("Content-Disposition", "attachment; filename=\"parcour_" + ts + ".csv\"");
         res->addHeader("Cache-Control", "no-store");
+        res->addHeader("Access-Control-Allow-Origin", "*");
         r->send(res);
     });
 
