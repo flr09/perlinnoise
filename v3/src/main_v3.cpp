@@ -157,6 +157,7 @@ void TaskCore1(void * pvParameters) {
         if (sys.pendingLearn  != -1) { int m = sys.pendingLearn;  sys.pendingLearn  = -1; learnSGProfile(m); }
         if (sys.pendingTest   != -1) {
             int m = sys.pendingTest; sys.pendingTest = -1;
+            clearTelemetry();
             if (sys.parcour.doSpeed) runSpeedTest(m);
             if (sys.parcour.doAccel) runInertiaTest(m);
             if (sys.parcour.doCoast) runCoastTest(m);

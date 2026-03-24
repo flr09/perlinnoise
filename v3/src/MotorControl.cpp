@@ -298,7 +298,6 @@ void runSpeedTest(int i) {
 
     float rpm = 300.0f, lastGood = rpm;
     bool failed = false, currentBoosted = false;
-    clearTelemetry();
     addLog("Parcour M0 (" + String(cur) + "mA SGTHRS=" + String(thrs) + ")");
 
     while (rpm <= 2500.0f && !failed) {
