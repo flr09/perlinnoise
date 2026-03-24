@@ -96,20 +96,28 @@ void setMotorPower(int i, bool on) {
     if (i != 0) return;
     sys.m[i].enabled = on;
     if (on) {
-        driverX.begin(); driverX.toff(5); applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
-        digitalWrite(ENABLE_PIN, LOW);
-        addLog("M0 ON");
+        digitalWrite(ENABLE_PIN, LOW); // ENABLE BRIDGES
+        driverX.toff(5);               // ENABLE CHOPPER
+        applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
+        addLog("M0 ON (Energized)");
     } else {
-        digitalWrite(ENABLE_PIN, HIGH);
-        addLog("M0 OFF");
+        driverX.toff(0);               // DISABLE CHOPPER
+        digitalWrite(ENABLE_PIN, HIGH); // DISABLE BRIDGES (Loose)
+        addLog("M0 OFF (Loose)");
     }
 }
 
 void initMotors() {
     loadCalibration();
     SERIAL_PORT.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
-    pinMode(ENABLE_PIN, OUTPUT); digitalWrite(ENABLE_PIN, LOW);
-    driverX.begin(); driverX.toff(5); applyDriverSettings(MOTOR_CURRENT_DEFAULT);
+    
+    pinMode(ENABLE_PIN, OUTPUT);
+    digitalWrite(ENABLE_PIN, LOW); // ALWAYS ENABLE HARDWARE BY DEFAULT
+
+    driverX.begin(); 
+    driverX.toff(5); // START CHOPPER
+    applyDriverSettings(MOTOR_CURRENT_DEFAULT);
+    
     pinMode(TACHO_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(TACHO_PIN), tachoISR, CHANGE);
     steppers[0]->setMaxSpeed(4000); steppers[0]->setAcceleration(2000);
@@ -117,6 +125,7 @@ void initMotors() {
 
 void homeMotor(int i) {
     if (i != 0) return;
+    setMotorPower(0, true);
     addLog("Homing M0...");
     driverX.en_spreadCycle(true);
     lastSensorPos = -1;
@@ -133,6 +142,7 @@ void homeMotor(int i) {
 
 void characterizeSensor(int i) {
     if (i != 0) return;
+    setMotorPower(0, true);
     addLog("Mapping M0 (ISR)...");
     driverX.en_spreadCycle(true);
     lastSensorPos = -1; steppers[0]->setSpeed(150);
@@ -154,6 +164,7 @@ void characterizeSensor(int i) {
 
 void learnSGProfile(int i) {
     if (i != 0) return;
+    setMotorPower(0, true);
     addLog("SG-Learn...");
     driverX.en_spreadCycle(true);
     uint32_t sps[] = {500, 1000, 2000, 4000};
@@ -170,6 +181,7 @@ void learnSGProfile(int i) {
 
 void runSpeedTest(int i) {
     if (i != 0 || !sys.cal[0].valid) return;
+    setMotorPower(0, true);
     float rpm = PARCOUR_RPM_START; bool failed = false;
     uint16_t cur = sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT;
     addLog("Speed Parcour M0...");
@@ -197,6 +209,7 @@ void runSpeedTest(int i) {
 
 void runInertiaTest(int i) {
     if (i != 0 || !sys.cal[0].valid) return;
+    setMotorPower(0, true);
     addLog("Inertia M0...");
     float acc = 1000; bool failed = false;
     while(acc <= 40000 && !failed) {
@@ -210,6 +223,7 @@ void runInertiaTest(int i) {
 }
 
 void runCoastTest(int i) {
+    setMotorPower(0, true);
     addLog("Coast Test M0...");
     steppers[0]->setMaxSpeed(rpmToSps(400)); steppers[0]->setAcceleration(5000);
     steppers[0]->move(400); while(steppers[0]->distanceToGo()!=0) { steppers[0]->run(); yield(); }
@@ -220,5 +234,8 @@ void runCoastTest(int i) {
 
 void updateMotors() {
     if (sys.pendingStop) { steppers[0]->stop(); sys.pendingStop = false; }
-    if (sys.m[0].enabled) steppers[0]->run();
+    if (sys.m[0].enabled) {
+        digitalWrite(ENABLE_PIN, LOW); // DOUBLE CHECK HARDWARE ENABLE
+        steppers[0]->run();
+    }
 }
