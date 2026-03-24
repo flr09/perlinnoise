@@ -28,8 +28,8 @@
 
 // --- MOTOR LIMITS (motors/pancake/datasheet.md) ---
 #define MOTOR_CURRENT_MIN_MA   300
-#define MOTOR_CURRENT_MAX_MA  1000   // Pancake ~0.92A Nenn; 1A = sicheres Limit
-#define MOTOR_CURRENT_DEFAULT  600
+#define MOTOR_CURRENT_MAX_MA   900   // 36BYG1204: ~0.92A Nenn, max 0.90A RMS für Sicherheit
+#define MOTOR_CURRENT_DEFAULT  650   // Orbiter-Empfehlung: 0.85A RMS Startpunkt
 #define MOTOR_SGTHRS_DEFAULT    50
 
 // --- MOTOR STATE & CONFIG ---
