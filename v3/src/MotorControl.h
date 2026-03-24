@@ -5,8 +5,8 @@
 #include <TMCStepper.h>
 #include <AccelStepper.h>
 
-// --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.4.2"
+// --- HARDWARE PINS ---
+#define FW_VERSION "3.4.5"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
@@ -29,13 +29,11 @@
 #define MOTOR_CURRENT_DEFAULT  650
 #define MOTOR_SGTHRS_DEFAULT    50
 
-// --- PARCOUR RPM BEREICH ---
-#define PARCOUR_RPM_START   300.0f
-#define PARCOUR_RPM_MAX    2500.0f
-#define PARCOUR_RPM_STEP     100.0f
-#define PARCOUR_RPM_FINE      10.0f
+// --- DYNAMIC STEPS ---
+extern uint16_t currentMicrosteps;
+extern uint16_t stepsPerRev;
 
-// --- MOTOR STATE & CONFIG ---
+// --- STRUCTURES ---
 struct MotorState {
     float posDeg = 0;
     float speed = 0;
@@ -74,12 +72,13 @@ struct SystemState {
     volatile int pendingTest    = -1;
     volatile int pendingCalib   = -1;
     volatile int pendingLearn   = -1;
-    volatile int pendingPower   = -1; // Fix X8
+    volatile int pendingPower   = -1;
     volatile bool pendingStop   = false;
 };
 
 extern SystemState sys;
 extern portMUX_TYPE motorMux;
+extern SemaphoreHandle_t uartMutex; // Fix: Mutex for UART
 
 // --- STEPPER OBJECTS ---
 extern TMC2209Stepper driverX;
@@ -96,6 +95,7 @@ void runCoastTest(int i);
 void runSpeedTest(int i);
 void runInertiaTest(int i);
 void setMotorPower(int i, bool on);
+void setMicrosteps(uint16_t ms);
 void addLog(String msg);
 
 // --- TELEMETRY ---

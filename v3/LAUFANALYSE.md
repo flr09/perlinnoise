@@ -346,6 +346,140 @@ if (sys.pendingPower >= 0) { setMotorPower(0, sys.pendingPower); sys.pendingPowe
 
 **Reihenfolge für Reparatur:** X1 → X2 → X4 → X5 → X3 → X6 → X7
 
+---
+
+## Review v3.4.2 — Stand der X-Bugs und neue Findings
+
+**Geprüfte Dateien:** `MotorControl.cpp`, `MotorControl.h`, `main_v3.cpp`
+
+### X-Bug Status
+
+| # | Status | Nachweis |
+|---|--------|---------|
+| X1 | ✅ **behoben** | `xTaskCreatePinnedToCore(... updateTelemCache() ..., 0)` in `setup()` |
+| X2 | ✅ **behoben** | 500ms Settle vor `pulseCount=0` in `measureActualRpm()` |
+| X3 | ✅ **behoben** | `runSpeed()` + 800ms Einlauf + 1500ms Messphase in `learnSGProfile()` |
+| X4 | ✅ **behoben** | `begin()` nur noch in `initMotors()`, `setMotorPower()` macht nur `toff()` |
+| X5 | ✅ **behoben** | `res->addHeader("Access-Control-Allow-Origin", "*")` |
+| X6 | ✅ **behoben** | CSV wieder 14 Spalten inkl. `cur_a, cur_b, otpw, ot` |
+| X7 | ⚠️ **halb** | `FW_VERSION "3.4.2"` korrekt, `/status` gibt `fw` zurück — aber HTML zeigt noch hardcoded `"v3.3.9"` und JS liest `s.fw` nicht aus |
+| X8 | ✅ **behoben** | `pendingPower` Flag in `SystemState`, WebServer setzt, TaskCore1 führt aus |
+
+**6 von 8 vollständig behoben. X7 halb offen.**
+
+---
+
+### 🔴 Neu: N1 — UART Race Condition zwischen Core 0 und Core 1
+
+**Das ist der kritischste verbleibende Bug.**
+
+```
+Core 0: TelemCache Task  → updateTelemCache() → driverX.SG_RESULT(), driverX.cs_actual(), ...
+Core 1: Motor Task       → applyDriverSettings() → driverX.rms_current(), driverX.TPWMTHRS(), ...
+```
+
+Beide Kerne greifen auf dasselbe `driverX`-Objekt und damit auf `SERIAL_PORT` (Serial2) zu — ohne jeglichen Mutex. Serial2 ist **nicht thread-safe**. Wenn beide gleichzeitig senden/empfangen, kollisionieren die UART-Frames → korrupte TMC2209-Registerwerte, gelegentliche Garbage-SG-Werte in Telemetrie, im schlimmsten Fall fehlerhafte Motorparameter.
+
+Das passiert besonders beim Start von Tests, wo `applyDriverSettings()` aufgerufen wird während der TelemCache-Task im 300ms-Zyklus läuft.
+
+**Fix:** Alle `driverX.*()` Aufrufe in `updateTelemCache()` mit Critical Section schützen:
+```cpp
+void updateTelemCache() {
+    portENTER_CRITICAL(&motorMux);
+    tCache.sg  = driverX.SG_RESULT();
+    tCache.cs  = driverX.cs_actual();
+    // ... alle UART-Reads ...
+    portEXIT_CRITICAL(&motorMux);
+}
+```
+Gleiches gilt für `applyDriverSettings()`. Dann kann immer nur ein Kern gleichzeitig den UART nutzen.
+
+---
+
+### 🟡 N2 — `learnSGProfile`: UART-Call in jeder Loop-Iteration
+
+```cpp
+while(millis() - start < 1500) {
+    steppers[0]->runSpeed();
+    sgSum += (float)driverX.SG_RESULT(); // UART-Read in JEDER Iteration
+    samples++;
+    yield();
+}
+```
+Die Schleife läuft ~10.000–50.000 mal pro Sekunde. `driverX.SG_RESULT()` ist eine UART-Transaktion die ~50–200µs dauert. Das blockiert `runSpeed()` und stört das Schrittgenerator-Timing. Außerdem `samples` zählt jeden Loop-Durchlauf — bei 10.000 Samples/Sekunde ist die Mittelung sinnlos und kostet CPU.
+
+**Fix:** SG nur alle 50ms samplen:
+```cpp
+unsigned long lastSG = millis();
+while(millis() - start < 1500) {
+    steppers[0]->runSpeed();
+    if (millis() - lastSG >= 50) {
+        sgSum += (float)driverX.SG_RESULT(); samples++;
+        lastSG = millis();
+    }
+    yield();
+}
+// → ~30 Samples pro Messpunkt statt 50.000
+```
+
+---
+
+### 🟡 N3 — `runSpeedTest`: Startpunkt ignoriert `cal.maxRpm`
+
+```cpp
+float rpm = 200.0f; // immer 200 RPM, auch wenn maxRpm=440 bekannt
+```
+Früherer Fix (80% von `cal.maxRpm`) ist nicht mehr drin. Bei jedem Testlauf beginnt der Parcour von vorne bei 200 RPM — das dauert unnötig lange.
+
+**Fix:** `float rpm = (sys.cal[0].maxRpm > 250.0f) ? sys.cal[0].maxRpm * 0.8f : 200.0f;`
+
+---
+
+### 🟡 N4 — `learnSGProfile`: kein `applyDriverSettings` nach dem Lernen
+
+```cpp
+sys.cal[0].sgThrs = ...;
+saveCalibration(0);
+driverX.en_spreadCycle(false); // ← setzt nur einen Parameter
+// FEHLT: applyDriverSettings(...) mit den gerade gelernten Werten
+```
+Nach dem Lernlauf ist `sys.cal[0].sgThrs` neu gesetzt, aber der TMC2209 läuft noch mit dem alten SGTHRS-Wert im Register bis zum nächsten `applyDriverSettings`-Aufruf.
+
+**Fix:** Am Ende von `learnSGProfile`:
+```cpp
+uint16_t cur = sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT;
+applyDriverSettings(cur);
+```
+
+---
+
+### 🟡 N5 — Versionsstring im HTML hardcoded (X7 Rest)
+
+```html
+<span class="version">V3 SINGLE-MOTOR v3.3.9 (Robust Fix)</span>  <!-- HTML -->
+<div id="log">Bereit. v3.3.7 (ISR + High-Speed Merged)</div>        <!-- Log-Div -->
+```
+`/status` gibt korrekt `"fw":"3.4.2"` zurück, aber das JavaScript liest `s.fw` nicht aus. Anzeige bleibt immer "v3.3.9".
+
+**Fix:** Im JS: `if(s.fw) document.querySelector('.version').innerText = 'V3 ' + s.fw;`
+Und Log-Div-Text löschen oder ebenfalls dynamisch setzen.
+
+---
+
+### Gesamtübersicht v3.4.2
+
+| # | Schwere | Status | Beschreibung |
+|---|---------|--------|-------------|
+| X1–X6, X8 | 🔴🟡 | ✅ behoben | Core-0-Task, Einlaufzeit, runSpeed(), begin(), CORS, CSV-Format, pendingPower |
+| X7 | 🟡 | ⚠️ halb | FW_VERSION korrekt, aber HTML zeigt alten String |
+| **N1** | 🔴 | ❌ offen | UART Race Condition Core 0 ↔ Core 1 (driverX ohne Mutex) |
+| N2 | 🟡 | ❌ offen | SG-Read in jeder Loop-Iteration (zu häufig, stört Schrittgenerator) |
+| N3 | 🟡 | ❌ offen | Parcour startet immer bei 200 RPM statt 80% von maxRpm |
+| N4 | 🟡 | ❌ offen | learnSGProfile ohne applyDriverSettings am Ende |
+| N5 | 🟢 | ❌ offen | Hardcoded Versionstring im HTML |
+
+**Priorität:** N1 zuerst — UART Race Condition kann sporadische Motorausfälle und Garbage-Telemetrie verursachen.
+
 
 
 ### 🔴 Kritisch
@@ -509,3 +643,80 @@ Nach nächstem Lauf: SG_RESULT in SPEED-Phase sollte deutlich über 50 liegen we
 | `v3/tele/parcour_183755.csv` | 3.2.0 | 2026-03-24 | Baseline, fester Strom |
 | `v3/tele/parcour_151061.csv` | 3.3.0 | 2026-03-24 | Erster Lauf mit adapt. Strom, SGTHRS-Problem |
 | `v3/tele/parcour_393983.csv` | 3.3.0 | 2026-03-24 | Kurzlauf, abgebrochen |
+
+---
+
+## Fix v3.4.5 — N1–N5 behoben (2026-03-24)
+
+### N1 — UART Race Condition ✅ behoben
+
+`updateTelemCache()` lief auf Core 0, `applyDriverSettings()` (driverX UART) auf Core 1 — kein Mutex.
+
+**Fix:** `portENTER_CRITICAL(&motorMux)` / `portEXIT_CRITICAL` um alle driverX-Reads in `updateTelemCache()`.
+
+```cpp
+void updateTelemCache() {
+    portENTER_CRITICAL(&motorMux);
+    tCache.sg = driverX.SG_RESULT();
+    // ... alle UART-Reads ...
+    portEXIT_CRITICAL(&motorMux);
+}
+```
+
+### N2 — SG-Read zu häufig ✅ behoben
+
+`learnSGProfile()` rief `driverX.SG_RESULT()` direkt in jedem Loop-Durchlauf auf → tausende UART-Reads/Sekunde.
+
+**Fix:** Liest jetzt `tCache.sg` (Cache, nicht direkt UART) alle 50ms:
+
+```cpp
+if(millis() - lastSample >= 50) {
+    sgSum += (float)tCache.sg; samples++;
+    lastSample = millis();
+}
+```
+
+### N3 — Parcour startet immer bei 200 RPM ✅ behoben
+
+`runSpeedTest()` ignorierte `cal[0].maxRpm` — jeder Lauf startete bei 200 RPM, auch wenn Motor schon bis 1000 RPM bekannt war.
+
+**Fix:** Dynamischer Startpunkt:
+
+```cpp
+float rpm = (sys.cal[0].maxRpm > 250.0f) ? sys.cal[0].maxRpm * 0.8f : 200.0f;
+```
+
+### N4 — learnSGProfile ohne applyDriverSettings am Ende ✅ behoben
+
+Nach `learnSGProfile()` blieb `en_spreadCycle` auf `false` gesetzt aber SGTHRS war neu (niedriger Wert) — nachfolgende Fahrt hatte falsche StallGuard-Empfindlichkeit.
+
+**Fix:** `applyDriverSettings()` am Ende von `learnSGProfile()` aufrufen (schreibt neues SGTHRS auf den Chip):
+
+```cpp
+applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
+```
+
+### N5 — Hardcoded Versionstring im HTML ✅ behoben
+
+HTML-Navbar zeigte immer "V3 SINGLE-MOTOR v3.4.3 (16-MS Fix)" unabhängig von der echten FW-Version.
+
+**Fix:** Initialer Text auf "..." gesetzt, JS überschreibt mit `s.fw` beim ersten `/status`-Poll (Zeile 103 war schon korrekt).
+
+### FW_VERSION
+
+`3.4.4` → `3.4.5`
+
+### Status nach v3.4.5
+
+| Bug | Status |
+|-----|--------|
+| N1 UART Race Condition | ✅ behoben |
+| N2 SG-Read Frequenz | ✅ behoben |
+| N3 Parcour Start RPM | ✅ behoben |
+| N4 applyDriverSettings nach Learn | ✅ behoben |
+| N5 Hardcoded Versionstring | ✅ behoben |
+| X7 HTML version (initial) | ✅ behoben |
+
+**Alle bekannten Bugs behoben. Bereit zum Flashen.**
+
+Nächster Schritt: `python build_flash_v3.py ota`

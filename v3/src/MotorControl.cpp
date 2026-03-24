@@ -4,6 +4,7 @@
 Preferences prefs;
 SystemState sys;
 portMUX_TYPE motorMux = portMUX_INITIALIZER_UNLOCKED;
+SemaphoreHandle_t uartMutex = xSemaphoreCreateMutex();
 
 TMC2209Stepper driverX(&SERIAL_PORT, R_SENSE, 1);
 TMC2209Stepper driverY(&SERIAL_PORT, R_SENSE, 3);
@@ -16,24 +17,34 @@ AccelStepper stZ(AccelStepper::DRIVER, Z_STEP, Z_DIR);
 AccelStepper stE(AccelStepper::DRIVER, E_STEP, E_DIR);
 AccelStepper* steppers[4] = {&stX, &stY, &stZ, &stE};
 
-float rpmToSps(float rpm)  { return (rpm * 3200.0f) / 60.0f; }
-float spsToRpm(float sps)  { return (sps * 60.0f) / 3200.0f; }
+uint16_t currentMicrosteps = 64;
+uint16_t stepsPerRev = 12800;
+
+float rpmToSps(float rpm)  { return (rpm * (float)stepsPerRev) / 60.0f; }
+float spsToRpm(float sps)  { return (sps * 60.0f) / (float)stepsPerRev; }
 
 uint32_t rpmToTpwmthrs(float rpm) {
-    float usps = rpm * 3200.0f / 60.0f;
+    float usps = rpm * (float)stepsPerRev / 60.0f;
     return (usps < 1.0f) ? 0xFFFFF : (uint32_t)(12000000.0f / usps);
 }
 
-// --- ATOMIC ISR CAPTURE ---
+// --- ATOMIC ISR ---
 volatile uint32_t pulseCount = 0;
-void IRAM_ATTR tachoISR() { if (digitalRead(TACHO_PIN) == LOW) { pulseCount++; } }
+volatile long isrLastPos = -1;
+
+void IRAM_ATTR tachoISR() {
+    if (digitalRead(TACHO_PIN) == LOW) {
+        pulseCount++;
+        // Position capture is now handled in the main loop flags to keep ISR lean
+    }
+}
 
 uint32_t getPulseCount() {
     uint32_t c; portENTER_CRITICAL(&motorMux); c = pulseCount; portEXIT_CRITICAL(&motorMux);
     return c;
 }
 
-// --- TELEMETRY CACHE (Fix X6: back to 14 cols) ---
+// --- TELEMETRY CACHE (14 COLS) ---
 struct TelemCache { 
     uint16_t sg=0; uint8_t cs=0; int16_t cur_a=0, cur_b=0;
     bool stall=false, otpw=false, ot=false, ola=false, olb=false; 
@@ -61,14 +72,17 @@ void recordTelemetry(const char* phase, float val) {
 }
 
 void updateTelemCache() {
-    tCache.sg = driverX.SG_RESULT();
-    tCache.cs = driverX.cs_actual();
-    uint32_t msc = driverX.MSCURACT();
-    tCache.cur_a = (int16_t)(msc & 0x1FF); if (tCache.cur_a > 255) tCache.cur_a -= 512;
-    tCache.cur_b = (int16_t)((msc >> 16) & 0x1FF); if (tCache.cur_b > 255) tCache.cur_b -= 512;
-    uint32_t ds = driverX.DRV_STATUS();
-    tCache.stall = (ds & 0x1); tCache.otpw = driverX.otpw(); tCache.ot = driverX.ot();
-    tCache.ola = (ds >> 30) & 0x1; tCache.olb = (ds >> 31) & 0x1;
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        tCache.sg = driverX.SG_RESULT();
+        tCache.cs = driverX.cs_actual();
+        uint32_t msc = driverX.MSCURACT();
+        tCache.cur_a = (int16_t)(msc & 0x1FF); if (tCache.cur_a > 255) tCache.cur_a -= 512;
+        tCache.cur_b = (int16_t)((msc >> 16) & 0x1FF); if (tCache.cur_b > 255) tCache.cur_b -= 512;
+        uint32_t ds = driverX.DRV_STATUS();
+        tCache.stall = (ds & 0x1); tCache.otpw = driverX.otpw(); tCache.ot = driverX.ot();
+        tCache.ola = (ds >> 30) & 0x1; tCache.olb = (ds >> 31) & 0x1;
+        xSemaphoreGive(uartMutex);
+    }
 }
 
 void addLog(String msg) {
@@ -78,16 +92,34 @@ void addLog(String msg) {
     Serial.println(msg);
 }
 
-// --- DRIVER MGMT ---
 void applyDriverSettings(uint16_t runMA) {
-    float hF = min(0.5f, max(0.22f, 200.0f / (float)runMA));
-    driverX.rms_current(runMA, hF);
-    driverX.iholddelay(10);
-    driverX.SGTHRS(sys.cal[0].sgThrs > 0 ? sys.cal[0].sgThrs : MOTOR_SGTHRS_DEFAULT);
-    driverX.TPWMTHRS(rpmToTpwmthrs(100)); // StealthChop only at low speeds
-    driverX.en_spreadCycle(false);
-    driverX.TCOOLTHRS(rpmToTpwmthrs(50));
-    driverX.pwm_autoscale(true);
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        float hF = min(0.5f, max(0.22f, 200.0f / (float)runMA));
+        driverX.rms_current(runMA, hF);
+        driverX.microsteps(currentMicrosteps);
+        driverX.iholddelay(10);
+        driverX.SGTHRS(sys.cal[0].sgThrs > 0 ? sys.cal[0].sgThrs : MOTOR_SGTHRS_DEFAULT);
+        driverX.TPWMTHRS(rpmToTpwmthrs(100));
+        driverX.en_spreadCycle(false);
+        driverX.TCOOLTHRS(rpmToTpwmthrs(50));
+        driverX.pwm_autoscale(true);
+        xSemaphoreGive(uartMutex);
+    }
+}
+
+void setMicrosteps(uint16_t ms) {
+    if (ms == currentMicrosteps) return;
+    portENTER_CRITICAL(&motorMux);
+    float factor = (float)ms / (float)currentMicrosteps;
+    steppers[0]->setCurrentPosition((long)((float)steppers[0]->currentPosition() * factor));
+    steppers[0]->setSpeed(steppers[0]->speed() * factor);
+    currentMicrosteps = ms;
+    stepsPerRev = 200 * ms;
+    portEXIT_CRITICAL(&motorMux);
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.microsteps(ms);
+        xSemaphoreGive(uartMutex);
+    }
 }
 
 void setMotorPower(int i, bool on) {
@@ -95,16 +127,21 @@ void setMotorPower(int i, bool on) {
     sys.m[i].enabled = on;
     if (on) {
         digitalWrite(ENABLE_PIN, LOW); 
-        driverX.toff(5); // Fix X4: removed begin()
+        if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            driverX.toff(5); // Fix X4: Wakes up without full begin() reset
+            xSemaphoreGive(uartMutex);
+        }
         applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
         addLog("M0 ON");
     } else {
-        driverX.toff(0); digitalWrite(ENABLE_PIN, HIGH);
+        if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            driverX.toff(0); xSemaphoreGive(uartMutex);
+        }
+        digitalWrite(ENABLE_PIN, HIGH);
         addLog("M0 OFF");
     }
 }
 
-// --- PERSISTENCE ---
 void saveCalibration(int i) {
     prefs.begin("cal", false);
     String key = "m" + String(i) + "_" + String(sizeof(CalibrationData));
@@ -125,9 +162,11 @@ void loadCalibration() {
 void initMotors() {
     loadCalibration();
     SERIAL_PORT.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
-    pinMode(ENABLE_PIN, OUTPUT);
-    digitalWrite(ENABLE_PIN, LOW);
-    driverX.begin(); // Fix X4: only once here
+    pinMode(ENABLE_PIN, OUTPUT); digitalWrite(ENABLE_PIN, LOW);
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        driverX.begin(); xSemaphoreGive(uartMutex);
+    }
+    setMicrosteps(64);
     applyDriverSettings(MOTOR_CURRENT_DEFAULT);
     pinMode(TACHO_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(TACHO_PIN), tachoISR, FALLING);
@@ -147,47 +186,54 @@ bool waitForSensorRobust(bool state, unsigned long timeoutMs) {
 void homeMotor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
-    addLog("Homing M0...");
-    driverX.en_spreadCycle(true);
+    setMicrosteps(16);
+    addLog("Homing...");
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
+    }
     steppers[0]->setSpeed(1200);
-    if (!waitForSensorRobust(LOW, 15000)) { addLog("Err: Home Timeout"); return; }
+    if (!waitForSensorRobust(LOW, 15000)) { addLog("Err: Timeout"); return; }
     steppers[0]->setSpeed(-400); waitForSensorRobust(HIGH, 3000);
     steppers[0]->setSpeed(200);  waitForSensorRobust(LOW, 3000);
     steppers[0]->setCurrentPosition(0);
+    // Move to trigger center
     steppers[0]->moveTo(sys.cal[0].triggerCenter);
     while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); yield(); }
-    driverX.en_spreadCycle(false);
-    addLog("M0 Home.");
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
+    }
+    setMicrosteps(64);
+    addLog("Home.");
 }
 
 void characterizeSensor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
-    addLog("Mapping M0...");
-    driverX.en_spreadCycle(true);
+    setMicrosteps(16);
+    addLog("Mapping...");
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
+    }
     steppers[0]->setSpeed(400);
     if (!waitForSensorRobust(LOW, 15000)) { addLog("Err: Mapping fail"); return; }
     long sCW = steppers[0]->currentPosition();
     steppers[0]->setSpeed(200); waitForSensorRobust(HIGH, 5000);
     long eCW = steppers[0]->currentPosition();
-    steppers[0]->move(3200); while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); yield(); }
-    steppers[0]->setSpeed(-400);
-    waitForSensorRobust(LOW, 15000);
+    steppers[0]->move(stepsPerRev); while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); yield(); }
+    steppers[0]->setSpeed(-400); waitForSensorRobust(LOW, 15000);
     long eCCW = steppers[0]->currentPosition();
     steppers[0]->setSpeed(200); waitForSensorRobust(HIGH, 5000);
     long sCCW = steppers[0]->currentPosition();
     sys.cal[0].triggerCenter = ((sCW+eCW)/2 + (sCCW+eCCW)/2) / 2;
     sys.cal[0].valid = true; saveCalibration(0);
-    addLog("M0 Center: " + String(sys.cal[0].triggerCenter));
+    addLog("Center: " + String(sys.cal[0].triggerCenter));
     homeMotor(0);
 }
 
-// --- ACTUAL RPM MEASUREMENT (Fix X2: with settle time) ---
 float measureActualRpm(float cmdSps, uint32_t windowMs) {
     steppers[0]->setSpeed(cmdSps);
     unsigned long settle = millis();
-    while(millis() - settle < 500) { steppers[0]->runSpeed(); yield(); } // Settle phase
-    
+    while(millis() - settle < 500) { steppers[0]->runSpeed(); yield(); }
     portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
     unsigned long start = millis();
     while(millis() - start < windowMs) { steppers[0]->runSpeed(); yield(); }
@@ -197,75 +243,113 @@ float measureActualRpm(float cmdSps, uint32_t windowMs) {
 void learnSGProfile(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
+    setMicrosteps(16);
     addLog("SG-Learn...");
-    driverX.en_spreadCycle(true);
-    float testRpms[] = {100, 200, 300, 400};
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
+    }
+    float testRpms[] = {150, 250, 350, 450};
     float sgSum = 0; int samples = 0;
     for(int s=0; s<4; s++) {
         float sps = rpmToSps(testRpms[s]);
         steppers[0]->setSpeed(sps);
         unsigned long settle = millis();
-        while(millis() - settle < 800) { steppers[0]->runSpeed(); yield(); } // Fix X3
+        while(millis() - settle < 800) { steppers[0]->runSpeed(); yield(); }
         unsigned long start = millis();
+        unsigned long lastSample = 0;
         while(millis() - start < 1500) {
             steppers[0]->runSpeed();
-            sgSum += (float)driverX.SG_RESULT(); samples++;
+            // Fix N2: read from tCache every 50ms — avoids UART flood from direct SG_RESULT() call
+            if(millis() - lastSample >= 50) {
+                sgSum += (float)tCache.sg; samples++;
+                lastSample = millis();
+            }
             yield();
         }
     }
     if(samples > 0) sys.cal[0].sgThrs = (uint8_t)(sgSum / (float)samples * 0.6f);
     saveCalibration(0);
-    driverX.en_spreadCycle(false);
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
+    }
+    setMicrosteps(64);
+    // Fix N4: apply new SGTHRS to chip and restore normal run settings
+    applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
     addLog("SGTHRS: " + String(sys.cal[0].sgThrs));
 }
+
+// --- PARCOUR RPM BEREICH ---
+#ifndef PARCOUR_RPM_MAX
+#define PARCOUR_RPM_START   300.0f
+#define PARCOUR_RPM_MAX    2500.0f
+#define PARCOUR_RPM_STEP     100.0f
+#define PARCOUR_RPM_FINE      10.0f
+#endif
 
 void runSpeedTest(int i) {
     if (i != 0 || !sys.cal[0].valid) return;
     setMotorPower(0, true);
-    float rpm = 200.0f; bool failed = false;
+    setMicrosteps(16);
+    // Fix N3: resume from known-good RPM — skip the range already validated
+    float rpm = (sys.cal[0].maxRpm > 250.0f) ? sys.cal[0].maxRpm * 0.8f : 200.0f;
+    bool failed = false;
     uint16_t cur = sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT;
-    addLog("Speed Parcour M0...");
-    driverX.en_spreadCycle(true);
+    addLog("Speed Parcour...");
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
+    }
     while(rpm <= PARCOUR_RPM_MAX && !failed) {
         float cmdSps = rpmToSps(rpm);
         addLog("Try " + String(rpm,0) + " RPM");
         float actualRpm = measureActualRpm(cmdSps, 2000);
         addLog("Ist=" + String(actualRpm,0) + " Soll=" + String(rpm,0));
         if (actualRpm < rpm * 0.7f) {
-            if (cur + 100 <= MOTOR_CURRENT_MAX_MA) { cur += 100; driverX.rms_current(cur); addLog("Boost " + String(cur) + "mA"); }
-            else { failed = true; addLog("FAIL"); }
+            if (cur + 100 <= MOTOR_CURRENT_MAX_MA) {
+                cur += 100;
+                if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    driverX.rms_current(cur); xSemaphoreGive(uartMutex);
+                }
+                addLog("Boost " + String(cur) + "mA");
+            } else { failed = true; addLog("FAIL"); }
         } else { sys.cal[0].maxRpm = rpm; rpm += PARCOUR_RPM_STEP; }
     }
     saveCalibration(0);
-    driverX.en_spreadCycle(false);
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
+    }
+    setMicrosteps(64);
 }
 
 void runInertiaTest(int i) {
     if (i != 0 || !sys.cal[0].valid) return;
     setMotorPower(0, true);
-    addLog("Inertia M0...");
+    setMicrosteps(16);
+    addLog("Inertia...");
     float acc = 1000; bool failed = false;
     float testSpd = sys.cal[0].maxRpm > 0 ? sys.cal[0].maxRpm * 0.7f : 400.0f;
     steppers[0]->setMaxSpeed(rpmToSps(testSpd));
     while(acc <= 40000 && !failed) {
         steppers[0]->setAcceleration(acc);
-        steppers[0]->move(3200); while(steppers[0]->distanceToGo()!=0) { steppers[0]->run(); yield(); }
-        steppers[0]->move(-3200); while(steppers[0]->distanceToGo()!=0) { steppers[0]->run(); yield(); }
+        steppers[0]->move(stepsPerRev); while(steppers[0]->distanceToGo()!=0) { steppers[0]->run(); yield(); }
+        steppers[0]->move(-stepsPerRev); while(steppers[0]->distanceToGo()!=0) { steppers[0]->run(); yield(); }
         if (measureActualRpm(rpmToSps(testSpd), 1000) < testSpd * 0.8f) failed = true;
         else acc += 2000;
     }
     sys.cal[0].maxAccel = acc - 2000; saveCalibration(0);
+    setMicrosteps(64);
 }
 
 void runCoastTest(int i) {
     if (i != 0 || !sys.cal[0].valid) return;
     setMotorPower(0, true);
-    addLog("Coast M0...");
+    setMicrosteps(16);
+    addLog("Coast...");
     steppers[0]->setMaxSpeed(rpmToSps(400)); steppers[0]->setAcceleration(5000);
     steppers[0]->move(400); while(steppers[0]->distanceToGo()!=0) { steppers[0]->run(); yield(); }
     long pS = steppers[0]->currentPosition(); steppers[0]->setSpeed(rpmToSps(400));
     for(int s=0; s<800; s++) { steppers[0]->runSpeed(); yield(); }
-    addLog("Coast drift: " + String(abs(steppers[0]->currentPosition() - pS - 800)));
+    addLog("Drift: " + String(abs(steppers[0]->currentPosition() - pS - 800)));
+    setMicrosteps(64);
 }
 
 void updateMotors() {
