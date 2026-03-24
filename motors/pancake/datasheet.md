@@ -22,16 +22,20 @@
 | Phasen | 2 | — | Bipolar |
 | Phasenwiderstand | 2,6 | Ω | Datenblatt |
 | Phaseninduktivität | 1,29 | mH | Datenblatt |
-| Nennspannung | 2,4 | V | I×R Richtwert (≈ 0,92 A × 2,6 Ω) |
-| Max. Strom (Datenblatt) | 1,88 | A | **Schmelzgrenze – nicht dauerhaft!** |
-| **Betriebslimit (gesetzt)** | **1200** | **mA** | Unser Soft-Limit |
-| **Empfohlener RMS-Strom** | **600** | **mA** | Startpunkt Tuning (aktuell in FW) |
+| Nennspannung | 2,4 | V | I×R Richtwert |
+| **Nennstrom (berechnet)** | **~0,92** | **A** | 2,4 V / 2,6 Ω – wahrscheinlicher Dauerstrom |
+| Max. Strom (AliExpress) | 1,88 | A | **Schmelzgrenze / Peak – nicht dauerhaft!** |
+| **Betriebslimit (gesetzt)** | **1000** | **mA** | ~10 % über Nenn – sicheres Testlimit |
+| **Empfohlener RMS-Strom** | **600** | **mA** | Startpunkt Tuning (FW-Default) |
 
-> **Zur Nennspannung:** Der TMC2209 regelt den Strom per PWM-Chopper.
-> Mit 12 V Versorgung liegt der Duty-Cycle bei Stillstand bei ~26 %
-> (3,12 V Nutzspannung bei 1,2 A × 2,6 Ω). Das ist korrekt und gewollt –
-> höhere Versorgungsspannung = schnellerer Stromanstieg = bessere Hochdrehzahl-Performance.
-> Die 2,4 V aus dem Datenblatt sind nur ein Richtwert bei Nennlast, **nicht** die Betriebsspannung.
+> **Varianten-Hinweis:** Es gibt zwei Varianten der 36BYG1204:
+> - **Low-R** (unser Motor): 2,6 Ω / 1,29 mH / ~0,92 A Nenn – hoher Strom, gute Dynamik
+> - **High-R** (andere Variante): 13 Ω / 10 mH / 0,5 A Nenn – für andere Anwendungen
+>
+> Die im Netz kursierende "500 mA"-Empfehlung gilt für die **High-R-Variante** – nicht unseren Motor.
+>
+> **Zur Nennspannung:** Der TMC2209 regelt per PWM-Chopper. Die 2,4 V sind nur der I×R-Wert
+> bei Nennstrom, keine Betriebsspannung. Mit 12 V Versorgung = bessere Hochdrehzahl-Performance.
 
 ---
 
@@ -52,7 +56,7 @@
 
 | Parameter | Min | Max | Einheit | Hinweis |
 |-----------|-----|-----|---------|---------|
-| rms_current | 300 | 1200 | mA | **1200 mA = hartes Limit** |
+| rms_current | 300 | 1000 | mA | **1000 mA = hartes Limit** (~10 % über Nennstrom) |
 | Empf. Startpunkt | 600 | — | mA | Aktueller FW-Default |
 | Max. RPM (erwartet) | — | ~800 | RPM | Schätzung, wird gemessen |
 | SGTHRS Start | 50 | 100 | — | Startwert für SG-Lernlauf |
