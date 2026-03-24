@@ -6,7 +6,7 @@
 #include <AccelStepper.h>
 
 // --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.3.5"
+#define FW_VERSION "3.3.6"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
@@ -23,19 +23,15 @@
 #define E_STEP 16
 #define E_DIR  17
 
-#define LAMP_PIN 2
-#define FAN_PIN 13
-
-// --- MOTOR LIMITS (motors/pancake/datasheet.md) ---
+// --- MOTOR LIMITS ---
 #define MOTOR_CURRENT_MIN_MA   300
-#define MOTOR_CURRENT_MAX_MA   900   // 36BYG1204: ~0.92A Nenn, max 0.90A RMS
-#define MOTOR_CURRENT_DEFAULT  650   // Orbiter-Empfehlung: 0.85A RMS Startpunkt
+#define MOTOR_CURRENT_MAX_MA   900
+#define MOTOR_CURRENT_DEFAULT  650
 #define MOTOR_SGTHRS_DEFAULT    50
 
 // --- PARCOUR RPM BEREICH ---
-// Startpunkt wird in runSpeedTest dynamisch gesetzt (80% von cal.maxRpm oder 200 RPM Minimum)
-#define PARCOUR_RPM_START    200.0f  // Fallback wenn noch kein maxRpm bekannt
-#define PARCOUR_RPM_MAX     5000.0f  // Realistischer Maximalwert für NEMA14 Pancake
+#define PARCOUR_RPM_START   300.0f
+#define PARCOUR_RPM_MAX    2500.0f
 #define PARCOUR_RPM_STEP     100.0f
 #define PARCOUR_RPM_FINE      10.0f
 
@@ -53,18 +49,17 @@ struct CalibrationData {
     float maxRpm       = 0;
     float maxAccel     = 0;
     bool valid         = false;
-    // --- adaptives Tuning ---
-    uint16_t learnedCurrentMA = 0;  // IRUN: 0 → MOTOR_CURRENT_DEFAULT
-    uint8_t  sgThrs           = 0;  // 0 → noch nicht gelernt
-    uint8_t  stableRuns       = 0;  // aufeinanderfolgende stabile Läufe
-    uint32_t tpwmThrs         = 0;  // 0 → default (200 RPM Schwelle)
+    uint16_t learnedCurrentMA = 0;
+    uint8_t  sgThrs           = 0;
+    uint8_t  stableRuns       = 0;
+    uint32_t tpwmThrs         = 0;
 };
 
 struct ParcourConfig {
-    bool doSpeed = true;   // Geschwindigkeits-Parcour (100 RPM Stufen)
-    bool doFine  = true;   // Feinjustierung (10 RPM Stufen nach Grob-Fail)
-    bool doAccel = true;   // Trägheitstest (steigende Beschleunigung)
-    bool doCoast = true;   // Ausroll-Test (Burst + Freilauf + Sensor-Check)
+    bool doSpeed = true;
+    bool doFine  = true;
+    bool doAccel = true;
+    bool doCoast = true;
 };
 
 struct SystemState {
@@ -73,13 +68,9 @@ struct SystemState {
     MotorState m[4];
     CalibrationData cal[4];
     ParcourConfig parcour;
-    float currentMaxSpd = 4000;
-    float currentAccel = 2000;
-
     volatile int pendingHome    = -1;
     volatile int pendingTest    = -1;
     volatile int pendingCalib   = -1;
-    volatile int pendingInertia = -1;
     volatile int pendingLearn   = -1;
     volatile bool pendingStop   = false;
 };
@@ -88,8 +79,8 @@ extern SystemState sys;
 extern portMUX_TYPE motorMux;
 
 // --- STEPPER OBJECTS ---
-extern TMC2209Stepper driverX, driverY, driverZ, driverE;
-extern AccelStepper stX, stY, stZ, stE;
+extern TMC2209Stepper driverX;
+extern AccelStepper stX;
 extern AccelStepper* steppers[4];
 
 // --- FUNCTIONS ---
@@ -102,17 +93,15 @@ void runCoastTest(int i);
 void runSpeedTest(int i);
 void runInertiaTest(int i);
 void setMotorPower(int i, bool on);
-void setMotorDynamics(float speed, float accel);
-void emergencyStop();
-void saveCalibration(int i);
-void loadCalibration();
+void addLog(String msg);
 
 // --- TELEMETRY ---
-#define TELEM_INTERVAL_MS 200
+#define TELEM_INTERVAL_MS 50
 #define TELEM_MAX_BYTES   52000
 extern String telemCSV;
 extern unsigned long telemStart;
 void clearTelemetry();
 void recordTelemetry(const char* phase, float val);
+void updateTelemCache();
 
 #endif
