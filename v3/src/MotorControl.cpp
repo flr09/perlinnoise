@@ -133,7 +133,7 @@ void homeMotor(int i) {
 
 void characterizeSensor(int i) {
     if (i != 0) return;
-    addLog("Mapping M0...");
+    addLog("Mapping M0 (ISR)...");
     driverX.en_spreadCycle(true);
     lastSensorPos = -1; steppers[0]->setSpeed(150);
     while(lastSensorPos == -1) { steppers[0]->runSpeed(); yield(); }

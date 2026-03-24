@@ -26,7 +26,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     .btn { background: #333; color: #fff; border: 1px solid #444; padding: 12px; border-radius: 4px; cursor: pointer; width: 100%; margin: 5px 0; font-size: 0.9em; }
     .btn.on { background: #4CAF50; border-color: #4CAF50; }
     .btn.test { background: #9c27b0; font-weight: bold; }
-    .btn.stop { background: #f44336; padding: 20px; font-weight: bold; font-size: 1.2em; }
+    .btn.stop { background: #f44336; padding: 15px; font-weight: bold; font-size: 1.2em; }
     #log { background: #000; color: #0f0; padding: 15px; border-radius: 4px; height: 250px; overflow-y: auto; margin-top: 20px; font-size: 0.85em; text-align: left; line-height: 1.5em; border: 1px solid #333; }
     .nav { margin-bottom: 20px; padding: 12px; background: #003366; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ff9800; }
     .nav a { color: #fff; text-decoration: none; font-weight: bold; }
@@ -44,7 +44,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <a href="http://perlin-bench.local/">← HAUPT-UI</a>
             <a href="/update">OTA UPDATE</a>
         </div>
-        <span class="version">V3 SINGLE-MOTOR v3.3.6 (Merged)</span>
+        <span class="version">V3 SINGLE-MOTOR v3.3.7 (High-Speed Fix)</span>
     </div>
 
     <div class="card">
@@ -74,7 +74,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     </div>
 
     <button class="btn stop" onclick="cmd('stop', 0)">EMERGENCY STOP</button>
-    <div id="log">Bereit. v3.3.6 (ISR + Merged Features)</div>
+    <div id="log">Bereit. v3.3.7 (ISR + High-Speed Merged)</div>
   </div>
 
   <script>
@@ -110,18 +110,21 @@ const char index_html[] PROGMEM = R"rawliteral(
 
 void TaskCore1(void * pvParameters) {
     for(;;) {
-        if (sys.pendingHome   != -1) { int m = sys.pendingHome;   sys.pendingHome   = -1; homeMotor(m); }
-        if (sys.pendingCalib  != -1) { int m = sys.pendingCalib;  sys.pendingCalib  = -1; characterizeSensor(m); }
-        if (sys.pendingLearn  != -1) { int m = sys.pendingLearn;  sys.pendingLearn  = -1; learnSGProfile(m); }
+        bool busy = false;
+        if (sys.pendingHome   != -1) { busy = true; int m = sys.pendingHome;   sys.pendingHome   = -1; homeMotor(m); }
+        if (sys.pendingCalib  != -1) { busy = true; int m = sys.pendingCalib;  sys.pendingCalib  = -1; characterizeSensor(m); }
+        if (sys.pendingLearn  != -1) { busy = true; int m = sys.pendingLearn;  sys.pendingLearn  = -1; learnSGProfile(m); }
         if (sys.pendingTest   != -1) {
-            int m = sys.pendingTest; sys.pendingTest = -1;
+            busy = true; int m = sys.pendingTest; sys.pendingTest = -1;
             clearTelemetry();
             if (sys.parcour.doSpeed) runSpeedTest(m);
             if (sys.parcour.doAccel) runInertiaTest(m);
             if (sys.parcour.doCoast) runCoastTest(m);
         }
         updateMotors();
-        vTaskDelay(1);
+        // Delay only when idle to allow high step rates
+        if (!busy && !sys.m[0].enabled) vTaskDelay(1);
+        else yield();
     }
 }
 
