@@ -73,6 +73,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="param"><div class="label">SGTHRS</div><div class="value"><span id="calSG">—</span></div></div>
         <div class="param"><div class="label">Max RPM</div><div class="value"><span id="calRpm">—</span></div></div>
         <div class="param"><div class="label">Stabile Läufe</div><div class="value"><span id="calStable">—</span></div></div>
+        <div class="param"><div class="label">Tpwm-Schwelle</div><div class="value"><span id="calTpwm">—</span> RPM</div></div>
       </div>
     </div>
 
@@ -106,6 +107,7 @@ const char index_html[] PROGMEM = R"rawliteral(
           document.getElementById('calSG').innerText     = s.cal.sgthrs || '—';
           document.getElementById('calRpm').innerText    = s.cal.maxRpm ? s.cal.maxRpm.toFixed(0) : '—';
           document.getElementById('calStable').innerText = s.cal.stable != null ? s.cal.stable : '—';
+          document.getElementById('calTpwm').innerText   = s.cal.tpwmRpm || '—';
         }
 
         if (s.log) {
@@ -158,16 +160,20 @@ void setup() {
         float    maxRpm = sys.cal[0].maxRpm;
         uint8_t  stable = sys.cal[0].stableRuns;
 
+        uint32_t tpwm    = sys.cal[0].tpwmThrs;
+        float    tpwmRpm = tpwm > 0 ? (12000000.0f / tpwm / 3200.0f * 60.0f) : 200.0f;
+
         String j = "{\"hit\":"  + String(digitalRead(TACHO_PIN) == LOW ? "true" : "false")
                  + ",\"fw\":\"" FW_VERSION "\""
                  + ",\"log\":\"" + logData + "\""
                  + ",\"m\":[{\"p\":" + String(deg, 1)
                  + ",\"s\":"  + String(spd)
                  + ",\"e\":"  + String(sys.m[0].enabled ? "true" : "false") + "}]"
-                 + ",\"cal\":{\"cur\":" + String(cur)
-                 + ",\"sgthrs\":"       + String(sgthrs)
-                 + ",\"maxRpm\":"       + String(maxRpm, 1)
-                 + ",\"stable\":"       + String(stable) + "}}";
+                 + ",\"cal\":{\"cur\":"    + String(cur)
+                 + ",\"sgthrs\":"          + String(sgthrs)
+                 + ",\"maxRpm\":"          + String(maxRpm, 1)
+                 + ",\"stable\":"          + String(stable)
+                 + ",\"tpwmRpm\":"         + String(tpwmRpm, 0) + "}}";
 
         r->send(200, "application/json", j);
     });

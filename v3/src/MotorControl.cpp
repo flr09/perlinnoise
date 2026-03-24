@@ -16,7 +16,15 @@ AccelStepper stZ(AccelStepper::DRIVER, Z_STEP, Z_DIR);
 AccelStepper stE(AccelStepper::DRIVER, E_STEP, E_DIR);
 AccelStepper* steppers[4] = {&stX, &stY, &stZ, &stE};
 
-float rpmToSps(float rpm) { return (rpm * 3200.0f) / 60.0f; }
+float rpmToSps(float rpm)  { return (rpm * 3200.0f) / 60.0f; }
+
+// Geschwindigkeit → TPWMTHRS Register (TMC2209 interner Takt 12 MHz)
+// StealthChop aktiv wenn TSTEP > TPWMTHRS (= unter dieser Drehzahl)
+uint32_t rpmToTpwmthrs(float rpm) {
+    float usps = rpm * 3200.0f / 60.0f; // Mikroschritte/s
+    if (usps < 1.0f) return 0xFFFFF;
+    return (uint32_t)(12000000.0f / usps);
+}
 
 // --- TELEMETRY ---
 String telemCSV = "";
@@ -68,10 +76,31 @@ uint16_t activeCurrent(int i) {
     return (c >= MOTOR_CURRENT_MIN_MA && c <= MOTOR_CURRENT_MAX_MA) ? c : MOTOR_CURRENT_DEFAULT;
 }
 
-void applyDriverSettings(uint16_t currentMA) {
-    driverX.rms_current(currentMA);
+void applyDriverSettings(uint16_t runMA) {
+    // IRUN + IHOLD: 25 % Haltestrom (leise im Stillstand), min 200 mA
+    float holdFrac = min(0.5f, max(0.22f, 200.0f / (float)runMA));
+    driverX.rms_current(runMA, holdFrac);
+    driverX.iholddelay(10);       // ~300 ms bis Haltestrom aktiv
+
+    // StallGuard-Schwelle
     uint8_t thrs = sys.cal[0].sgThrs > 0 ? sys.cal[0].sgThrs : MOTOR_SGTHRS_DEFAULT;
     driverX.SGTHRS(thrs);
+
+    // Automatische StealthChop↔SpreadCycle Umschaltung per Geschwindigkeit
+    // Unter tpwmThrs (Default: 200 RPM) → StealthChop (leise, Haltestrom)
+    // Über tpwmThrs               → SpreadCycle (Drehmoment, Laufstrom)
+    uint32_t tpwm = sys.cal[0].tpwmThrs > 0
+                    ? sys.cal[0].tpwmThrs
+                    : rpmToTpwmthrs(200);
+    driverX.TPWMTHRS(tpwm);
+    driverX.en_spreadCycle(false); // Automatik via TPWMTHRS
+
+    // StallGuard erst ab ~50 RPM auswerten (darunter unzuverlässig)
+    driverX.TCOOLTHRS(rpmToTpwmthrs(50));
+
+    // PWM-Autotuning für optimale StealthChop-Effizienz
+    driverX.pwm_autograd(true);
+    driverX.pwm_autoscale(true);
 }
 
 // --- CALIBRATION PERSISTENCE ---
@@ -196,50 +225,65 @@ void characterizeSensor(int i) {
 }
 
 // --- SG LERNLAUF ---
+// Misst SG_RESULT in 5 Geschwindigkeitsstufen:
+// - Bestimmt SGTHRS (60% des Mittelwerts im SpreadCycle-Bereich)
+// - Findet Übergangsgeschwindigkeit StealthChop→SpreadCycle (TPWMTHRS)
+//   → Punkt, ab dem SG stabil wird (SpreadCycle liefert brauchbare SG-Werte)
 void learnSGProfile(int i) {
     if (i != 0) return;
     if (!sys.m[0].enabled) setMotorPower(0, true);
 
     uint16_t cur = activeCurrent(0);
-    driverX.rms_current(cur);
     addLog("SG-Lernlauf @" + String(cur) + "mA...");
-    setSpreadCycle(0, false); // StealthChop für SG-Messung
+    applyDriverSettings(cur); // inkl. TPWMTHRS, TCOOLTHRS, IHOLD
 
-    // 4 Geschwindigkeitspunkte: langsam → schnell
-    uint32_t speeds[] = {300, 800, 2000, 4000};
-    uint32_t sgTotal = 0;
-    uint32_t sgCount = 0;
+    // Messpunkte: sps → zugehörige RPM und SG-Mittelwert
+    struct { uint32_t sps; uint32_t sgAvg; } pts[] = {
+        {200,0}, {500,0}, {1000,0}, {2000,0}, {4000,0}
+    };
+    const int N = 5;
 
-    for (int s = 0; s < 4; s++) {
-        steppers[0]->setMaxSpeed(speeds[s]);
-        steppers[0]->setAcceleration(speeds[s] * 4);
-        steppers[0]->move(3200); // eine Umdrehung
+    for (int s = 0; s < N; s++) {
+        steppers[0]->setMaxSpeed(pts[s].sps);
+        steppers[0]->setAcceleration(pts[s].sps * 4);
+        steppers[0]->move(3200);
 
-        uint32_t sgLocal = 0;
-        uint32_t n = 0, nSamples = 0;
+        uint32_t sgSum = 0; uint32_t n = 0, nS = 0;
         while (steppers[0]->distanceToGo() != 0) {
             steppers[0]->run();
-            if (n % 20 == 0) { sgLocal += driverX.SG_RESULT(); nSamples++; }
-            n++;
-            yield();
+            if (n % 20 == 0) { sgSum += driverX.SG_RESULT(); nS++; }
+            n++; yield();
         }
-        if (nSamples > 0) {
-            uint32_t sgAvg = sgLocal / nSamples;
-            sgTotal += sgLocal;
-            sgCount += nSamples;
-            addLog("SG @" + String(speeds[s]) + "sps: avg=" + String(sgAvg));
+        pts[s].sgAvg = nS > 0 ? sgSum / nS : 0;
+        float rpm = pts[s].sps * 60.0f / 3200.0f;
+        addLog("SG @" + String(rpm,0) + "RPM (" + String(pts[s].sps) + "sps): " + String(pts[s].sgAvg));
+    }
+
+    // TPWMTHRS-Kandidat: erste Stufe, ab der SG deutlich > 0 und stabil ist
+    // (StallGuard liefert erst im SpreadCycle-Bereich sinnvolle Werte)
+    uint32_t tpwmCandidate = rpmToTpwmthrs(200); // Default
+    for (int s = 1; s < N; s++) {
+        if (pts[s].sgAvg > 10 && pts[s].sgAvg > pts[s-1].sgAvg * 2) {
+            // Sprunghafter SG-Anstieg → hier beginnt SpreadCycle wirklich zu greifen
+            float rpm = pts[s].sps * 60.0f / 3200.0f;
+            tpwmCandidate = rpmToTpwmthrs(rpm * 0.8f); // 20% Hysterese
+            addLog("TPWMTHRS-Sprung bei " + String(rpm, 0) + " RPM");
+            break;
         }
     }
 
-    uint32_t sgMean = sgCount > 0 ? sgTotal / sgCount : MOTOR_SGTHRS_DEFAULT * 2;
-    // Schwelle: 60% des Mittelwerts – stabil genug, empfindlich genug
-    uint8_t thrs = (uint8_t)min(255UL, (sgMean * 60UL) / 100UL);
-    if (thrs < 1) thrs = 1; // mindestens 1, sonst Stall-Flag immer aus
+    // SGTHRS: 60% des Mittelwerts der oberen Hälfte (SpreadCycle-Bereich)
+    uint32_t sgHigh = 0; int n = 0;
+    for (int s = N/2; s < N; s++) { sgHigh += pts[s].sgAvg; n++; }
+    uint32_t sgMean = n > 0 ? sgHigh / n : MOTOR_SGTHRS_DEFAULT * 2;
+    uint8_t thrs = (uint8_t)min(255UL, max(1UL, (sgMean * 60UL) / 100UL));
 
-    sys.cal[0].sgThrs = thrs;
-    driverX.SGTHRS(thrs);
+    sys.cal[0].sgThrs   = thrs;
+    sys.cal[0].tpwmThrs = tpwmCandidate;
+    applyDriverSettings(cur); // nochmal mit gelernten Werten
     saveCalibration(0);
-    addLog("SGTHRS=" + String(thrs) + " (SG-Mean=" + String(sgMean) + ")");
+    addLog("SGTHRS=" + String(thrs) + " TPWMTHRS=" + String(tpwmCandidate)
+           + " (" + String(12000000.0f / tpwmCandidate / 3200.0f * 60.0f, 0) + " RPM)");
 }
 
 // --- SPEED TEST (adaptiv) ---

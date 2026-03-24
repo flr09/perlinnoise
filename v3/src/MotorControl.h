@@ -47,9 +47,10 @@ struct CalibrationData {
     float maxAccel     = 0;
     bool valid         = false;
     // --- adaptives Tuning ---
-    uint16_t learnedCurrentMA = 0;  // 0 → MOTOR_CURRENT_DEFAULT
+    uint16_t learnedCurrentMA = 0;  // IRUN: 0 → MOTOR_CURRENT_DEFAULT
     uint8_t  sgThrs           = 0;  // 0 → noch nicht gelernt
     uint8_t  stableRuns       = 0;  // aufeinanderfolgende stabile Läufe
+    uint32_t tpwmThrs         = 0;  // 0 → default (200 RPM Schwelle)
 };
 
 struct SystemState {
