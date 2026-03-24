@@ -38,6 +38,11 @@ const char index_html[] PROGMEM = R"rawliteral(
     .param { background: #111; border-radius: 4px; padding: 8px 12px; }
     .param .label { font-size: 0.65em; color: #666; text-transform: uppercase; }
     .param .value { font-family: monospace; color: #00ff00; font-size: 1.1em; }
+    .mask-card { background: #1a1a1a; border-left: 5px solid #37474f; border-radius: 8px; padding: 14px 20px; margin-bottom: 20px; }
+    .mask-card h3 { margin: 0 0 10px; color: #78909c; font-size: 0.9em; text-transform: uppercase; }
+    .mask-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+    .tog { padding: 10px; border-radius: 4px; border: 1px solid #444; cursor: pointer; font-size: 0.8em; text-align: center; background: #2e7d32; color: #fff; user-select: none; }
+    .tog.off { background: #333; color: #666; border-color: #333; }
   </style>
 </head>
 <body>
@@ -66,6 +71,16 @@ const char index_html[] PROGMEM = R"rawliteral(
         </div>
     </div>
 
+    <div class="mask-card">
+      <h3>Parcour Konfiguration</h3>
+      <div class="mask-grid">
+        <div class="tog" id="tog_speed"  onclick="toggle('speed')" >SPEED-TEST</div>
+        <div class="tog" id="tog_fine"   onclick="toggle('fine')"  >FINE-TUNING</div>
+        <div class="tog" id="tog_accel"  onclick="toggle('accel')" >TRÄGHEIT</div>
+        <div class="tog" id="tog_coast"  onclick="toggle('coast')" >AUSROLL-TEST</div>
+      </div>
+    </div>
+
     <div class="learn-card">
       <h3>Adaptives Tuning</h3>
       <div class="param-grid">
@@ -82,7 +97,22 @@ const char index_html[] PROGMEM = R"rawliteral(
   </div>
 
   <script>
-    function cmd(a, m) { fetch(`/cmd?a=${a}&m=${m}`); }
+    const cfg = { speed:1, fine:1, accel:1, coast:1 };
+
+    function toggle(key) {
+      cfg[key] = cfg[key] ? 0 : 1;
+      const el = document.getElementById('tog_' + key);
+      el.classList.toggle('off', !cfg[key]);
+    }
+
+    function cmd(a, m) {
+      if (a === 'test') {
+        fetch(`/cmd?a=test&m=${m}&speed=${cfg.speed}&fine=${cfg.fine}&accel=${cfg.accel}&coast=${cfg.coast}`);
+      } else {
+        fetch(`/cmd?a=${a}&m=${m}`);
+      }
+    }
+
     function addLog(msg) {
       const log = document.getElementById('log');
       const div = document.createElement('div');
@@ -125,7 +155,12 @@ void TaskCore1(void * pvParameters) {
         if (sys.pendingHome   != -1) { int m = sys.pendingHome;   sys.pendingHome   = -1; homeMotor(m); }
         if (sys.pendingCalib  != -1) { int m = sys.pendingCalib;  sys.pendingCalib  = -1; characterizeSensor(m); }
         if (sys.pendingLearn  != -1) { int m = sys.pendingLearn;  sys.pendingLearn  = -1; learnSGProfile(m); }
-        if (sys.pendingTest   != -1) { int m = sys.pendingTest;   sys.pendingTest   = -1; runSpeedTest(m); runInertiaTest(m); }
+        if (sys.pendingTest   != -1) {
+            int m = sys.pendingTest; sys.pendingTest = -1;
+            if (sys.parcour.doSpeed) runSpeedTest(m);
+            if (sys.parcour.doAccel) runInertiaTest(m);
+            if (sys.parcour.doCoast) runCoastTest(m);
+        }
         updateMotors();
         vTaskDelay(1);
     }
@@ -186,7 +221,14 @@ void setup() {
         else if (a == "home")  { sys.pendingHome  = m; }
         else if (a == "cal")   { sys.pendingCalib = m; }
         else if (a == "learn") { sys.pendingLearn = m; }
-        else if (a == "test")  { sys.pendingTest  = m; }
+        else if (a == "test")  {
+            // Parcour-Konfiguration aus Query-Params lesen
+            sys.parcour.doSpeed = !r->hasParam("speed") || r->getParam("speed")->value() == "1";
+            sys.parcour.doFine  = !r->hasParam("fine")  || r->getParam("fine")->value()  == "1";
+            sys.parcour.doAccel = !r->hasParam("accel") || r->getParam("accel")->value() == "1";
+            sys.parcour.doCoast = !r->hasParam("coast") || r->getParam("coast")->value() == "1";
+            sys.pendingTest = m;
+        }
         else if (a == "stop")  { sys.pendingStop  = true; setMotorPower(0, false); }
         r->send(200, "text/plain", "OK");
     });

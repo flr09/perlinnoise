@@ -53,11 +53,19 @@ struct CalibrationData {
     uint32_t tpwmThrs         = 0;  // 0 → default (200 RPM Schwelle)
 };
 
+struct ParcourConfig {
+    bool doSpeed = true;   // Geschwindigkeits-Parcour (100 RPM Stufen)
+    bool doFine  = true;   // Feinjustierung (10 RPM Stufen nach Grob-Fail)
+    bool doAccel = true;   // Trägheitstest (steigende Beschleunigung)
+    bool doCoast = true;   // Ausroll-Test (Burst + Freilauf + Sensor-Check)
+};
+
 struct SystemState {
     bool hit = false;
     String log = "";
     MotorState m[4];
     CalibrationData cal[4];
+    ParcourConfig parcour;
     float currentMaxSpd = 4000;
     float currentAccel = 2000;
 
@@ -65,7 +73,7 @@ struct SystemState {
     volatile int pendingTest    = -1;
     volatile int pendingCalib   = -1;
     volatile int pendingInertia = -1;
-    volatile int pendingLearn   = -1;   // SG-Lernlauf
+    volatile int pendingLearn   = -1;
     volatile bool pendingStop   = false;
 };
 
@@ -83,6 +91,7 @@ void updateMotors();
 void homeMotor(int i);
 void characterizeSensor(int i);
 void learnSGProfile(int i);
+void runCoastTest(int i);
 void runSpeedTest(int i);
 void runInertiaTest(int i);
 void setMotorPower(int i, bool on);

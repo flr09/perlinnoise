@@ -344,7 +344,11 @@ void runSpeedTest(int i) {
         }
     }
 
-    // Feintuning nach Grobfehler
+    // Feintuning nach Grobfehler (nur wenn aktiviert)
+    if (failed && !sys.parcour.doFine) {
+        addLog("Fine-Tuning deaktiviert.");
+        failed = false; // nicht als Gesamtfehler werten
+    }
     if (failed) {
         rpm = lastGood + 10.0f; failed = false;
         addLog("Fine-tuning...");
@@ -414,6 +418,65 @@ void runInertiaTest(int i) {
     sys.cal[0].maxAccel = lastGood;
     saveCalibration(0);
     addLog("RESULT: " + String(lastGood, 0) + " Accel");
+}
+
+// --- COAST TEST ---
+// Misst Ausrollverhalten: kurze Beschleunigungsrampe (accelSteps),
+// dann Freilauf bei konstantem Tempo (coastSteps), danach Sensor-Drift-Check.
+// Wiederholt COAST_CYCLES mal mit steigender Testgeschwindigkeit.
+#define COAST_CYCLES     5
+#define COAST_ACCEL_STEPS 200
+#define COAST_COAST_STEPS 400
+
+void runCoastTest(int i) {
+    if (i != 0 || !sys.cal[0].valid) return;
+    if (!sys.m[0].enabled) setMotorPower(0, true);
+
+    float baseRpm = sys.cal[0].maxRpm > 0
+                    ? min(sys.cal[0].maxRpm * 0.5f, 400.0f)
+                    : 200.0f;
+    addLog("Coast M0 Basis=" + String(baseRpm, 0) + " RPM");
+
+    for (int cycle = 0; cycle < COAST_CYCLES; cycle++) {
+        float testRpm = baseRpm + cycle * (baseRpm / COAST_CYCLES);
+        float testSps = rpmToSps(testRpm);
+
+        // --- Beschleunigungsrampe (kurz & steil) ---
+        steppers[0]->setMaxSpeed(testSps);
+        steppers[0]->setAcceleration(testSps * 8); // steile Rampe
+        steppers[0]->move(COAST_ACCEL_STEPS);
+        while (steppers[0]->distanceToGo() != 0) {
+            steppers[0]->run();
+            recordTelemetry("C_ACCEL", testRpm);
+            yield();
+        }
+
+        // --- Freilauf: konstante Geschwindigkeit, keine Verzögerungsrampe ---
+        long posStart = steppers[0]->currentPosition();
+        steppers[0]->setSpeed(testSps);
+        for (int s = 0; s < COAST_COAST_STEPS; s++) {
+            steppers[0]->runSpeed();
+            if (s % 20 == 0) recordTelemetry("COAST", testRpm);
+            yield();
+        }
+        long posEnd = steppers[0]->currentPosition();
+
+        // --- Sensor-Drift-Check ---
+        setSpreadCycle(0, true);
+        steppers[0]->setSpeed(200);
+        bool found = waitForSensor(0, LOW, 5000);
+        long sensorPos = steppers[0]->currentPosition() % 3200;
+        long drift = abs(posEnd - posStart - COAST_COAST_STEPS);
+        setSpreadCycle(0, false);
+
+        recordTelemetry("C_CHECK", testRpm);
+        addLog("Coast #" + String(cycle+1)
+               + " @" + String(testRpm, 0) + "RPM"
+               + " drift=" + String(drift) + "st"
+               + " sensor=" + String(found ? String(sensorPos) : "miss"));
+    }
+
+    addLog("Coast abgeschlossen.");
 }
 
 // --- UPDATE LOOP ---
