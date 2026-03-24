@@ -7,19 +7,27 @@ Telemetrie vom ESP holen und in v3/tele/ speichern.
 """
 
 import sys
+import json
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 HOST   = sys.argv[1] if len(sys.argv) > 1 else "perlin-v3.local"
-URL    = f"http://{HOST}/telemetry"
 OUTDIR = Path(__file__).parent / "v3" / "tele"
-
 OUTDIR.mkdir(parents=True, exist_ok=True)
 
-print(f"[FETCH] {URL} ...")
+# Firmware-Version vom ESP holen
+fw = "unknown"
 try:
-    with urllib.request.urlopen(URL, timeout=10) as resp:
+    with urllib.request.urlopen(f"http://{HOST}/status", timeout=5) as r:
+        fw = json.loads(r.read()).get("fw", "unknown")
+except Exception:
+    pass
+
+# Telemetrie-CSV holen
+print(f"[FETCH] http://{HOST}/telemetry  (fw={fw}) ...")
+try:
+    with urllib.request.urlopen(f"http://{HOST}/telemetry", timeout=10) as resp:
         if resp.status == 204:
             print("[INFO]  Keine Daten – erst Parcour laufen lassen.")
             sys.exit(0)
@@ -28,8 +36,8 @@ except Exception as e:
     print(f"[ERR]   {e}")
     sys.exit(1)
 
-ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
-outfile  = OUTDIR / f"tele_{ts}.csv"
+ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+outfile = OUTDIR / f"tele_v{fw}_{ts}.csv"
 outfile.write_bytes(data)
 
 size_kb = len(data) / 1024

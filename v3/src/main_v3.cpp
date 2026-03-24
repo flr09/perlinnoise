@@ -122,7 +122,7 @@ void setup() {
         portENTER_CRITICAL(&motorMux);
         String logData = sys.log; sys.log = "";
         portEXIT_CRITICAL(&motorMux);
-        String j = "{\"hit\":" + String(digitalRead(TACHO_PIN)==LOW?"true":"false") + ",\"log\":\"" + logData + "\",\"m\":[";
+        String j = "{\"hit\":" + String(digitalRead(TACHO_PIN)==LOW?"true":"false") + ",\"fw\":\"" FW_VERSION "\",\"log\":\"" + logData + "\",\"m\":[";
         long pos = steppers[0]->currentPosition(); float spd = steppers[0]->speed();
         float deg = (pos % 3200) * 360.0 / 3200.0;
         j += "{\"p\":"+String(deg,1)+",\"s\":"+String(spd)+",\"e\":"+String(sys.m[0].enabled?"true":"false")+"}";
