@@ -4,7 +4,7 @@
 Preferences prefs;
 SystemState sys;
 portMUX_TYPE motorMux = portMUX_INITIALIZER_UNLOCKED;
-SemaphoreHandle_t uartMutex = xSemaphoreCreateMutex();
+SemaphoreHandle_t uartMutex = NULL; // created in initMotors() — FreeRTOS heap not ready at global ctor time
 
 TMC2209Stepper driverX(&SERIAL_PORT, R_SENSE, 1);
 TMC2209Stepper driverY(&SERIAL_PORT, R_SENSE, 3);
@@ -158,6 +158,7 @@ void initMotors() {
     SERIAL_PORT.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
     pinMode(ENABLE_PIN, OUTPUT); digitalWrite(ENABLE_PIN, LOW);
     
+    uartMutex = xSemaphoreCreateMutex(); // B1: must be created after FreeRTOS heap is ready
     engine.init();
     stepper = engine.stepperConnectToPin(X_STEP);
     if (stepper) {
@@ -176,6 +177,7 @@ void initMotors() {
 }
 
 bool waitForSensorTimed(bool state, long maxSteps, unsigned long timeoutMs) {
+    if (!stepper) return false; // B5: stepper may be NULL if engine init failed
     unsigned long start = millis();
     long startPos = stepper->getCurrentPosition();
     while (digitalRead(TACHO_PIN) != state) {
@@ -248,7 +250,7 @@ void learnSGProfile(int i) {
     float sgSum = 0; int samples = 0;
     for(int s=0; s<4; s++) {
         float sps = rpmToSps(testRpms[s]);
-        stepper->setSpeedInHz(sps);
+        stepper->setSpeedInHz((uint32_t)sps);
         unsigned long start = millis();
         unsigned long lastSG = 0;
         while(millis() - start < 2000) {
@@ -261,9 +263,10 @@ void learnSGProfile(int i) {
             yield();
         }
     }
+    stepper->stopMove(); // B2: stop before setMicrosteps — isRunning() guard would skip it otherwise
     if(samples > 0) sys.cal[0].sgThrs = (uint8_t)(sgSum / (float)samples * 0.6f);
     saveCalibration(0);
-    // Fix L1: Set 64 MS first, THEN apply settings
+    // L1: Set 64 MS first (stepsPerRev=12800), THEN apply settings so TPWMTHRS is correct
     setMicrosteps(64);
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
 }
@@ -281,7 +284,7 @@ void runSpeedTest(int i) {
     }
     while(rpm <= PARCOUR_RPM_MAX && !failed) {
         addLog("Try " + String(rpm,0) + " RPM");
-        stepper->setSpeedInHz(rpmToSps(rpm));
+        stepper->setSpeedInHz((uint32_t)rpmToSps(rpm));
         stepper->runForward();
         // Settle: let motor reach speed before counting
         unsigned long settle = millis();
@@ -321,7 +324,7 @@ void runInertiaTest(int i) {
     addLog("Inertia...");
     float acc = 1000; bool failed = false;
     float testSpd = sys.cal[0].maxRpm > 0 ? sys.cal[0].maxRpm * 0.7f : 400.0f;
-    stepper->setSpeedInHz(rpmToSps(testSpd));
+    stepper->setSpeedInHz((uint32_t)rpmToSps(testSpd));
     while(acc <= 40000 && !failed) {
         stepper->setAcceleration(acc);
         portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
@@ -339,10 +342,12 @@ void runCoastTest(int i) {
     setMotorPower(0, true);
     setMicrosteps(16);
     addLog("Coast...");
-    stepper->setSpeedInHz(rpmToSps(400));
+    stepper->setSpeedInHz((uint32_t)rpmToSps(400));
     unsigned long start = millis();
     portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
-    while(millis() - start < 1000) { stepper->runForward(); yield(); }
+    stepper->runForward();
+    while(millis() - start < 1000) { yield(); }
+    stepper->stopMove(); // B3: must stop or subsequent setMicrosteps is blocked
     addLog("Pulses: " + String(getPulseCount()));
     setMicrosteps(64);
 }
