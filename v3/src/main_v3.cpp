@@ -44,7 +44,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <a href="http://perlin-bench.local/">← HAUPT-UI</a>
             <a href="/update">OTA UPDATE</a>
         </div>
-        <span class="version" id="fwVer">V3 SINGLE-MOTOR ...</span>
+        <span class="version" id="fwVer">V3 SINGLE-MOTOR v3.5.1 (Math Fixes)</span>
     </div>
 
     <div class="card">
@@ -57,7 +57,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <div>Speed: <span class="val" id="spd0">0</span> sps</div>
         </div>
         <div style="margin-top:20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-          <button class="btn on" id="pwr0">POWER ON</button>
+          <button class="btn on" id="pwr0" onclick="cmd('pwr', 0)">POWER ON</button>
           <button class="btn" onclick="cmd('home', 0)">HOME MOTOR</button>
           <button class="btn" onclick="cmd('cal', 0)" style="background:#006064;">CALIB SENSOR</button>
           <button class="btn" onclick="cmd('learn', 0)" style="background:#455a64;">SG-LEARN</button>
@@ -74,7 +74,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     </div>
 
     <button class="btn stop" onclick="cmd('stop', 0)">EMERGENCY STOP</button>
-    <div id="log">Bereit. v3.4.2 (Full Logic Sanitize)</div>
+    <div id="log">Bereit. v3.5.1 (Math Fixes active)</div>
   </div>
 
   <script>
@@ -100,7 +100,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         const pBtn = document.getElementById('pwr0');
         pBtn.innerText = s.m[0].e ? 'POWER ON' : 'POWER OFF';
         pBtn.className = s.m[0].e ? 'btn on' : 'btn';
-        if(s.fw) document.getElementById('fwVer').innerText = 'V3 ' + s.fw;
+        if(s.fw) document.getElementById('fwVer').innerText = 'V3 SINGLE-MOTOR v' + s.fw + ' (Math Fixes)';
         if(s.log) s.log.split('\\n').forEach(l => { if(l.length > 2) addLog(l); });
       }).catch(e => console.log("Offline..."));
     }, 350);
@@ -142,10 +142,13 @@ void setup() {
         portENTER_CRITICAL(&motorMux);
         String logData = sys.log; sys.log = "";
         portEXIT_CRITICAL(&motorMux);
-        long pos = steppers[0]->currentPosition(); float spd = steppers[0]->speed();
+        
+        long pos = 0; float spd = 0;
+        if(stepper) { pos = stepper->getCurrentPosition(); spd = stepper->getCurrentSpeedInMilliHz() / 1000.0f; }
+        
         String j = "{\"hit\":" + String(digitalRead(TACHO_PIN)==LOW?"true":"false");
         j += ",\"fw\":\"" + String(FW_VERSION) + "\",\"log\":\"" + logData + "\"";
-        j += ",\"m\":[{\"p\":"+String((pos%3200)*360.0/3200.0,1)+",\"s\":"+String(spd)+",\"e\":"+String(sys.m[0].enabled?"true":"false")+"}]}";
+        j += ",\"m\":[{\"p\":"+String((pos%stepsPerRev)*360.0/stepsPerRev,1)+",\"s\":"+String(spd)+",\"e\":"+String(sys.m[0].enabled?"true":"false")+"}]}";
         r->send(200, "application/json", j);
     });
     server.on("/cmd", [](AsyncWebServerRequest *r){
@@ -167,14 +170,13 @@ void setup() {
     server.on("/telemetry", HTTP_GET, [](AsyncWebServerRequest *r){
         AsyncWebServerResponse *res = r->beginResponse(200, "text/csv", telemCSV);
         res->addHeader("Content-Disposition", "attachment; filename=\"parcour.csv\"");
-        res->addHeader("Access-Control-Allow-Origin", "*"); // Fix X5
+        res->addHeader("Access-Control-Allow-Origin", "*"); 
         r->send(res);
     });
     
     ElegantOTA.begin(&server, "admin", "12345678"); ElegantOTA.setAutoReboot(true);
     server.begin();
     
-    // Fix X1: Start UART background task on Core 0
     xTaskCreatePinnedToCore([](void*){
         for(;;) { updateTelemCache(); vTaskDelay(pdMS_TO_TICKS(300)); }
     }, "TelemCache", 2048, NULL, 1, NULL, 0);

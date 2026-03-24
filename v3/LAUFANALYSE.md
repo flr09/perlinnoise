@@ -720,3 +720,169 @@ HTML-Navbar zeigte immer "V3 SINGLE-MOTOR v3.4.3 (16-MS Fix)" unabhängig von de
 **Alle bekannten Bugs behoben. Bereit zum Flashen.**
 
 Nächster Schritt: `python build_flash_v3.py ota`
+
+---
+
+## Review v3.4.5 — Neue Bugs nach Linter-Runde (2026-03-24)
+
+### Status N-Bugs aus letzter Session
+
+| Bug | Status |
+|-----|--------|
+| N1 UART Race Condition | ✅ behoben (Linter hat xSemaphoreTake eingeführt — besser als portENTER_CRITICAL) |
+| N2 SG-Read zu häufig | ❌ revertiert (Linter hat Fix wieder rückgängig gemacht) |
+| N3 Parcour Start RPM | ❌ revertiert (wieder `rpm = 200.0f`) |
+| N4 applyDriverSettings nach Learn | ❌ revertiert |
+| N5 Hardcoded Versionstring | ✅ behoben |
+
+---
+
+### P0 — POWER-Button hat keinen onclick ❌🔴
+
+**Datei:** `main_v3.cpp:60`
+
+```html
+<button class="btn on" id="pwr0">POWER ON</button>
+```
+
+Kein `onclick`-Handler. Klick macht nichts. Motor kann über die UI nicht ein- oder ausgeschaltet werden. JS-Poll aktualisiert den Button optisch korrekt, aber der Benutzer kann ihn nicht betätigen.
+
+**Fix:**
+```html
+<button class="btn on" id="pwr0" onclick="cmd('pwr', 0)">POWER ON</button>
+```
+
+---
+
+### P1 — measureActualRpmWayBased misst Beschleunigungs-Durchschnitt, nicht Steady-State ❌🔴
+
+**Datei:** `MotorControl.cpp:260-285` (neue Funktion vom Linter)
+
+```cpp
+steppers[0]->move(testSteps);       // move() + run() = Rampenbeschleunigung!
+while(steppers[0]->distanceToGo() != 0) { steppers[0]->run(); ... }
+return (float)pulses * 60000.0f / (float)duration;
+```
+
+`move()` + `run()` fährt mit Beschleunigungsrampe. Bei 2 Umdrehungen Teststrecke verbringt der Motor den Großteil der Zeit im Hoch- und Runterfahren, nicht bei Zielgeschwindigkeit. Ein Motor der stabil 440 RPM schafft liefert so ~200 RPM Messwert. Speedtest schlägt dann schon bei ~280 RPM fehl, obwohl der Motor physisch noch kein Problem hat.
+
+Regression gegenüber der alten `measureActualRpm()` die `runSpeed()` (konstante Geschwindigkeit, keine Rampe) verwendet hat.
+
+**Fix:** Zurück zu `runSpeed()` für die Messung:
+```cpp
+float measureActualRpm(float cmdSps, uint32_t windowMs) {
+    steppers[0]->setSpeed(cmdSps);
+    unsigned long settle = millis();
+    while(millis() - settle < 500) { steppers[0]->runSpeed(); yield(); }
+    portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
+    unsigned long start = millis();
+    while(millis() - start < windowMs) { steppers[0]->runSpeed(); yield(); }
+    return (float)getPulseCount() * 60000.0f / (float)windowMs;
+}
+```
+
+---
+
+### P2 — updateTelemCache() aus Core 1 aufgerufen (Jitter) ❌🟡
+
+**Datei:** `MotorControl.cpp:278` (innerhalb `measureActualRpmWayBased`)
+
+```cpp
+if (millis() - lC > 500) { updateTelemCache(); lC = millis(); }
+```
+
+`updateTelemCache()` wartet intern bis zu 10ms auf `uartMutex` → blockiert den Schrittgenerator-Loop auf Core 1 → Schrittjitter alle 500ms während Speedtest. Core 0 führt `updateTelemCache()` ohnehin alle 300ms aus — diese Zeile ist überflüssig und schädlich.
+
+**Fix:** Zeile ersatzlos löschen. Telemetrie-Cache wird von Core 0 aktuell gehalten.
+
+---
+
+### P3 — runInertiaTest setzt kein setMaxSpeed ❌🟡
+
+**Datei:** `MotorControl.cpp:324-338`
+
+`setMaxSpeed()` fehlt vor der Testschleife. Wenn `runSpeedTest()` vorher gelaufen ist, stimmt der Wert zufällig. Wenn Inertia-Test direkt gestartet wird (z.B. nur TRÄGHEIT aktiviert), läuft der Motor mit dem initMotors-Default von 4000 sps = ~18 RPM bei 16 MS — Messung ist wertlos.
+
+**Fix:** Vor der Schleife:
+```cpp
+steppers[0]->setMaxSpeed(rpmToSps(testSpd));
+steppers[0]->setAcceleration(1000); // Startwert
+```
+
+---
+
+### N2 (revertiert) — learnSGProfile liest SG_RESULT direkt ❌🟡
+
+**Datei:** `MotorControl.cpp:243-246`
+
+```cpp
+if (xSemaphoreTake(uartMutex, 0) == pdTRUE) {
+    sgSum += (float)driverX.SG_RESULT(); samples++;
+    xSemaphoreGive(uartMutex);
+}
+```
+
+`xSemaphoreTake(..., 0)` = Try-Lock ohne Wartezeit. Da TelemCache den Mutex nur für Mikrosekunden hält, gelingt der Lock fast in jedem Loop-Durchlauf → tausende UART-Reads pro Sekunde. Hohe UART-Last auf Serial2, verdrängt Step-Timing.
+
+**Fix:** `tCache.sg` lesen, 50ms-Throttle:
+```cpp
+if(millis() - lastSample >= 50) {
+    sgSum += (float)tCache.sg; samples++;
+    lastSample = millis();
+}
+```
+
+---
+
+### N4 (revertiert) — learnSGProfile ohne applyDriverSettings am Ende ❌🟡
+
+**Datei:** `MotorControl.cpp:252-256`
+
+Nach `learnSGProfile()` wird neues `sgThrs` in NVS gespeichert, aber **nicht auf den Chip geschrieben**. Erst beim nächsten `setMotorPower(true)` wird `applyDriverSettings()` aufgerufen. Wenn der Motor schon an ist und direkt ein Parcour gestartet wird, arbeitet der TMC2209 noch mit dem alten SGTHRS-Wert aus dem letzten Reboot.
+
+**Fix:** Am Ende von `learnSGProfile()`, nach `setMicrosteps(64)`:
+```cpp
+applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
+```
+
+---
+
+### Priorität
+
+1. **P0** — sofort: POWER-Button onclick hinzufügen (1-Zeilen-Fix)
+2. **P1** — sofort: `measureActualRpmWayBased` durch `measureActualRpm` mit `runSpeed()` ersetzen
+3. **P2** — zusammen mit P1: `updateTelemCache()`-Aufruf in Messschleife löschen
+4. **P3** — `setMaxSpeed` in `runInertiaTest` einfügen
+5. **N2/N4** — `learnSGProfile` bereinigen
+
+---
+
+## Review v3.4.5 — Externe Code-Review (2026-03-24)
+
+### X4 (begin in setMotorPower) — ✅ bereits behoben
+
+`setMotorPower` ruft nur noch `driverX.toff(5)` auf, kein `begin()`. Tuning bleibt erhalten.
+
+### P1 (Messfenster 2s) — ✅ behoben
+
+`measureActualRpm` wurde in `runSpeedTest` mit festem 2000ms-Fenster aufgerufen. Bei 800 RPM = 26 Umdrehungen Wartezeit.
+
+**Fix:** Adaptives Fenster — exakt 3 Umdrehungen Messzeit, Minimum 500ms:
+```cpp
+uint32_t win = max(500u, (uint32_t)(3.0f * 60000.0f / rpm));
+float actualRpm = measureActualRpm(cmdSps, win);
+```
+Ergibt: 200 RPM → 900ms, 500 RPM → 500ms, 2500 RPM → 500ms.
+
+### C3 (Drift-Modulo-Bug) — ✅ nicht mehr vorhanden
+
+`runInertiaTest` enthält kein `pos % 3200`-Check mehr. Validierung läuft bereits über `measureActualRpm()` (Tacho-Pulse). Bug existiert im aktuellen Code nicht.
+
+### N1 (Mutex-Timeout 10ms) — ✅ behoben
+
+`updateTelemCache` wartete nur 10ms auf den Mutex. `applyDriverSettings` schreibt ~8 UART-Register à ~1-2ms = bis zu 16ms. Bei Überschneidung: Core 0 bekommt Mutex nicht → `tCache` bleibt auf 0 → Telemetrie zeigt Nullwerte.
+
+**Fix:** Timeout von 10ms auf 100ms erhöht:
+```cpp
+if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+```

@@ -3,10 +3,10 @@
 
 #include <Arduino.h>
 #include <TMCStepper.h>
-#include <AccelStepper.h>
+#include <FastAccelStepper.h> // New: Hardware-Timer Stepper
 
-// --- HARDWARE PINS ---
-#define FW_VERSION "3.4.5"
+// --- HARDWARE PINS (FYSETC E4) ---
+#define FW_VERSION "3.5.1"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
@@ -32,6 +32,14 @@
 // --- DYNAMIC STEPS ---
 extern uint16_t currentMicrosteps;
 extern uint16_t stepsPerRev;
+
+// --- PARCOUR RPM BEREICH ---
+#ifndef PARCOUR_RPM_MAX
+#define PARCOUR_RPM_START   300.0f
+#define PARCOUR_RPM_MAX    2500.0f
+#define PARCOUR_RPM_STEP     100.0f
+#define PARCOUR_RPM_FINE      10.0f
+#endif
 
 // --- STRUCTURES ---
 struct MotorState {
@@ -78,12 +86,12 @@ struct SystemState {
 
 extern SystemState sys;
 extern portMUX_TYPE motorMux;
-extern SemaphoreHandle_t uartMutex; // Fix: Mutex for UART
+extern SemaphoreHandle_t uartMutex;
 
 // --- STEPPER OBJECTS ---
 extern TMC2209Stepper driverX;
-extern AccelStepper stX;
-extern AccelStepper* steppers[4];
+extern FastAccelStepperEngine engine;
+extern FastAccelStepper *stepper;
 
 // --- FUNCTIONS ---
 void initMotors();
