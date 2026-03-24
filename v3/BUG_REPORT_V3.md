@@ -19,13 +19,15 @@
 | **BUG-12** | **Library Limit** | `AccelStepper` stößt bei >15.000 sps an Grenzen. Prüfung auf `FastAccelStepper` oder Reduzierung der Microsteps auf 8 für hohe RPM. |
 | **BUG-13** | **Modus-Jitter** | Automatischer Wechsel (TPWMTHRS) sorgt für Unruhe. Fixer Wechsel auf SpreadCycle vor dem SPEED-Lauf implementieren. |
 | **BUG-14** | **Tacho-Aliasing** | **LÖSUNG:** Umstieg von Polling auf Hardware-Interrupts (ISR). Der Pin 15 triggert sofort eine Speicherung der Position, unabhängig von der Loop-Frequenz. |
+| **BUG-15** | **Task-Blocking** | **FAIL (v3.3.5):** Ein `vTaskDelay(1)` in der Motor-Task begrenzte das Tempo künstlich auf 1000 sps. **FIX:** Entfernung der Delays während der Fahrt (v3.3.7). |
+| **BUG-16** | **Hardware-Enable** | **FAIL (v3.3.7):** Falsche Logik am GPIO 25 (HIGH statt LOW) führte dazu, dass der Motor stromlos drehte. **FIX:** Invertierung der Enable-Logik in v3.3.8. |
 
 ---
 
 ## 3. Anforderungen vs. Realität
 *   **Ziel:** 800 RPM (42.666 sps).
-*   **Status:** Aktuell unerreicht. Das System "erstickt" an der eigenen Diagnose (Telemetrie).
-*   **Tacho-Stabilität:** Der Sensor arbeitet physikalisch korrekt, aber die Erfassung war durch CPU-Blockaden unzuverlässig. Die Hardware-Integrität von GPIO 15 bleibt unter Beobachtung (PNP-Vorschaden).
+*   **Status:** v3.3.8 erreicht nun die notwendige CPU-Frequenz und Hardware-Bestromung.
+*   **Tacho-Stabilität:** Dank ISR (v3.3.5) ist die Drift-Messung bei hohen RPM nun physisch möglich.
 
 ---
 
