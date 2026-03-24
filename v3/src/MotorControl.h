@@ -6,7 +6,7 @@
 #include <AccelStepper.h>
 
 // --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.3.6"
+#define FW_VERSION "3.4.0"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
@@ -68,6 +68,8 @@ struct SystemState {
     MotorState m[4];
     CalibrationData cal[4];
     ParcourConfig parcour;
+    float currentMaxSpd = 4000; // Restored (m3)
+    float currentAccel = 2000;  // Restored (m3)
     volatile int pendingHome    = -1;
     volatile int pendingTest    = -1;
     volatile int pendingCalib   = -1;
@@ -93,6 +95,8 @@ void runCoastTest(int i);
 void runSpeedTest(int i);
 void runInertiaTest(int i);
 void setMotorPower(int i, bool on);
+void setMotorDynamics(float speed, float accel); // Restored (m3)
+void emergencyStop(); // Restored (m3)
 void addLog(String msg);
 
 // --- TELEMETRY ---

@@ -145,6 +145,129 @@ v3.3.0: TPWMTHRS@200RPM, Messung bei 3-75RPM → alles StealthChop → SG 0-16
 
 ---
 
+## Bug-Report v3.3.6 (aktueller Codestand)
+
+### 🔴 Kritisch
+
+**C1 — `learnSGProfile`: Messpunkte im StealthChop-Bereich, nur 1 Sample**
+
+```cpp
+uint32_t sps[] = {500, 1000, 2000, 4000};
+// = 9.4 / 18.8 / 37.5 / 75 RPM → alles unter TPWMTHRS=200 RPM → StealthChop
+// + nur 1 Sample NACH dem Move (Motor steht/bremst!) → SG≈0
+sgSum += driverX.SG_RESULT();
+```
+Identischer Fehler wie v3.3.0. SGTHRS wird auf ~0–5 gesetzt → 43% false-stalls im Parcour.
+
+**C2 — `learnSGProfile`: Integer-Truncation vor `*0.6`**
+
+```cpp
+sys.cal[0].sgThrs = (sgSum / 4) * 0.6;
+// sgSum/4 = integer division → Abschneiden
+// Beispiel: sgSum=30 → 30/4=7 (nicht 7.5) → 7*0.6=4.2 → uint8_t=4
+// Korrekt: (uint8_t)((float)sgSum / 4 * 0.6f)
+```
+
+**C3 — `runSpeedTest`: `lastSensorPos % 3200` ohne Startposition-Offset**
+
+```cpp
+steppers[0]->move(6400);  // startet von triggerCenter (z.B. pos=80)
+// ...
+long drift = abs(lastSensorPos % 3200);
+// Nach 6400 Steps korrekt bei pos=6480 → 6480%3200=80 → drift=80 > 60 → IMMER FAIL
+// Der Check liefert triggerCenter%3200 auch ohne jeden Schrittverlust
+```
+Bei `triggerCenter > 60` schlägt der Drift-Check strukturell fehl — unabhängig vom Motorverhalten.
+Korrekte Berechnung: `drift = abs((lastSensorPos - expectedSensorPos) % 3200)`
+
+**C4 — `tachoISR`: nicht-ISR-sichere Funktion aufgerufen**
+
+```cpp
+void IRAM_ATTR tachoISR() {
+    if (digitalRead(TACHO_PIN) == LOW) {
+        lastSensorPos = steppers[0]->currentPosition(); // ← nicht ISR-sicher!
+    }
+}
+```
+`AccelStepper::currentPosition()` liest `_currentPos` ohne Mutex — wird gleichzeitig vom Step-Generator im Hauptkontext geschrieben. Auf ESP32 sporadische Race Condition → falsche `lastSensorPos`-Werte möglich.
+
+---
+
+### 🟡 Mittel
+
+**M1 — `applyDriverSettings`: `en_spreadCycle(false)` fehlt**
+
+```cpp
+void applyDriverSettings(uint16_t runMA) {
+    driverX.TPWMTHRS(tpwm);
+    // FEHLT: driverX.en_spreadCycle(false);
+}
+```
+`characterizeSensor`, `learnSGProfile`, `runSpeedTest` setzen `en_spreadCycle(true)` ohne Rücksetzung. Nach diesen Funktionen bleibt der Motor in permanentem SpreadCycle — TPWMTHRS hat dann keine Wirkung.
+
+**M2 — `runSpeedTest`: `maxRpm` falsch gespeichert**
+
+```cpp
+sys.cal[0].maxRpm = rpm - PARCOUR_RPM_STEP;
+// Falls Schleife durch rpm > PARCOUR_RPM_MAX endet (kein Fehler):
+// maxRpm = 2500 - 100 = 2400 RPM — obwohl Motor real bei ~440 RPM limitiert ist
+```
+
+**M3 — `runInertiaTest`: kein `setMaxSpeed` vor Test**
+
+```cpp
+void runInertiaTest(int i) {
+    while(acc <= 40000 && !failed) {
+        steppers[0]->setAcceleration(acc);
+        steppers[0]->move(3200);
+        // setMaxSpeed nie gesetzt → verwendet initMotors-Default: 4000 sps = 75 RPM
+        // Test läuft immer bei 75 RPM, ignoriert cal.maxRpm
+```
+
+**M4 — `runCoastTest`: kein Guard, ignoriert Parameter `i`**
+
+```cpp
+void runCoastTest(int i) {
+    setMotorPower(0, true);  // ignoriert i, hardcoded Motor 0
+    // FEHLT: if (i != 0 || !sys.cal[0].valid) return;
+    // Läuft bei nicht kalibriertem Motor mit hardcoded 400 RPM
+```
+
+---
+
+### 🟢 Minor
+
+**m1 — `updateMotors`: GPIO-Write jede Millisekunde**
+
+```cpp
+if (sys.m[0].enabled) {
+    digitalWrite(ENABLE_PIN, LOW); // Unnötig: jede ms, kostet ~1 µs CPU
+    steppers[0]->run();
+}
+```
+
+**m2 — `lastSensorPos` ohne Memory-Barrier**
+`volatile long` schützt vor Compiler-Optimierung, aber nicht vor CPU-Reordering zwischen ISR und Main-Task auf ESP32 mit FreeRTOS. Besser: `portENTER_CRITICAL_ISR` beim Lesen im Hauptkontext.
+
+---
+
+### Übersicht
+
+| # | Schwere | Funktion | Problem | Auswirkung |
+|---|---------|----------|---------|------------|
+| C1 | 🔴 | `learnSGProfile` | StealthChop-Bereich + 1 Sample beim Stillstand | SGTHRS≈0 → false-stalls |
+| C2 | 🔴 | `learnSGProfile` | Integer-Division vor `*0.6` | SGTHRS bis 20% zu niedrig |
+| C3 | 🔴 | `runSpeedTest` | `lastSensorPos%3200` ohne Offset | Drift-Check bei triggerCenter>60 immer FAIL |
+| C4 | 🔴 | `tachoISR` | `currentPosition()` nicht ISR-sicher | Sporadisch falsche Sensorpositionen |
+| M1 | 🟡 | `applyDriverSettings` | `en_spreadCycle` nicht zurückgesetzt | TPWMTHRS wirkungslos nach Tests |
+| M2 | 🟡 | `runSpeedTest` | `maxRpm` falsch bei vollem Durchlauf | Nächster Parcour-Start falsch |
+| M3 | 🟡 | `runInertiaTest` | kein `setMaxSpeed` | Test immer bei 75 RPM |
+| M4 | 🟡 | `runCoastTest` | kein Guard, ignoriert Parameter | Läuft ohne Kalibration |
+| m1 | 🟢 | `updateMotors` | GPIO-Write jede ms | CPU-Last, kein Funktionsproblem |
+| m2 | 🟢 | `tachoISR` / Main | `lastSensorPos` ohne Memory-Barrier | Theoretische Race Condition |
+
+---
+
 ## Nächste Schritte (priorisiert)
 
 ### 1. TPWMTHRS verifizieren
