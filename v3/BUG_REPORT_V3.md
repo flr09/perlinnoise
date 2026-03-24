@@ -75,3 +75,4 @@ Unterstuetzt: Load from ESP, CSV einfuegen, 6 synchronisierte Charts, Flag-Ereig
 ## 5. Git & Workflow Preferences
 - Keine Begriffe wie "final" oder "fertig" verwenden.
 - Nach jeder Änderung: Dokumentation aktualisieren und Git-Commit durchführen.
+- **NEU:** Build-Anleitung für externe Agenten in `BUILD_INSTRUCTIONS.md` hinterlegt.

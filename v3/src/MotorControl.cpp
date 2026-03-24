@@ -42,7 +42,7 @@ void recordTelemetry(const char* phase, float val) {
     uint32_t msc = driverX.MSCURACT();
     int16_t cur_a = (int16_t)(msc & 0x1FF);        if (cur_a > 255) cur_a -= 512;
     int16_t cur_b = (int16_t)((msc >> 16) & 0x1FF); if (cur_b > 255) cur_b -= 512;
-    uint8_t flags = (driverX.stallguard()?1:0) | (driverX.otpw()?2:0)
+    uint8_t flags = (sg==0?1:0) | (driverX.otpw()?2:0)
                   | (driverX.ot()?4:0) | (driverX.ola()?8:0) | (driverX.olb()?16:0);
 
     char line[128];
