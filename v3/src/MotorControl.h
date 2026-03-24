@@ -6,7 +6,7 @@
 #include <AccelStepper.h>
 
 // --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.2.0"
+#define FW_VERSION "3.3.0"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
@@ -26,6 +26,12 @@
 #define LAMP_PIN 2
 #define FAN_PIN 13
 
+// --- MOTOR LIMITS (motors/pancake/datasheet.md) ---
+#define MOTOR_CURRENT_MIN_MA   300
+#define MOTOR_CURRENT_MAX_MA  1200
+#define MOTOR_CURRENT_DEFAULT  600
+#define MOTOR_SGTHRS_DEFAULT    50
+
 // --- MOTOR STATE & CONFIG ---
 struct MotorState {
     float posDeg = 0;
@@ -34,12 +40,16 @@ struct MotorState {
 };
 
 struct CalibrationData {
-    long triggerStart = 0;
-    long triggerEnd = 0;
+    long triggerStart  = 0;
+    long triggerEnd    = 0;
     long triggerCenter = 0;
-    float maxRpm = 0;
-    float maxAccel = 0;
-    bool valid = false;
+    float maxRpm       = 0;
+    float maxAccel     = 0;
+    bool valid         = false;
+    // --- adaptives Tuning ---
+    uint16_t learnedCurrentMA = 0;  // 0 → MOTOR_CURRENT_DEFAULT
+    uint8_t  sgThrs           = 0;  // 0 → noch nicht gelernt
+    uint8_t  stableRuns       = 0;  // aufeinanderfolgende stabile Läufe
 };
 
 struct SystemState {
@@ -49,12 +59,13 @@ struct SystemState {
     CalibrationData cal[4];
     float currentMaxSpd = 4000;
     float currentAccel = 2000;
-    
-    volatile int pendingHome = -1; 
-    volatile int pendingTest = -1; 
-    volatile int pendingCalib = -1; 
-    volatile int pendingInertia = -1; // Fixed: Added missing flag
-    volatile bool pendingStop = false;
+
+    volatile int pendingHome    = -1;
+    volatile int pendingTest    = -1;
+    volatile int pendingCalib   = -1;
+    volatile int pendingInertia = -1;
+    volatile int pendingLearn   = -1;   // SG-Lernlauf
+    volatile bool pendingStop   = false;
 };
 
 extern SystemState sys;
@@ -70,6 +81,7 @@ void initMotors();
 void updateMotors();
 void homeMotor(int i);
 void characterizeSensor(int i);
+void learnSGProfile(int i);
 void runSpeedTest(int i);
 void runInertiaTest(int i);
 void setMotorPower(int i, bool on);
