@@ -49,7 +49,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <a href="http://perlin-bench.local/">← HAUPT-UI</a>
             <a href="/update">OTA UPDATE</a>
         </div>
-        <span class="version" id="fwVer">V3 SINGLE-MOTOR v3.5.1 (Math Fixes)</span>
+        <span class="version" id="fwVer">V3 SINGLE-MOTOR v3.5.4</span>
     </div>
 
     <div class="card">
@@ -75,6 +75,40 @@ const char index_html[] PROGMEM = R"rawliteral(
         </div>
     </div>
 
+    <div style="background:#1a1a2e; border-left:5px solid #ff9800; border-radius:8px; padding:15px; margin-bottom:20px;">
+      <div style="font-size:0.75em; text-transform:uppercase; letter-spacing:1px; color:#ff9800; margin-bottom:12px; cursor:pointer;" onclick="document.getElementById('guide').classList.toggle('hidden')">
+        BEDIENREIHENFOLGE (ERSTSTART / NACH NEUSTART) &#9660;
+      </div>
+      <div id="guide" style="display:grid; grid-template-columns: repeat(5, 1fr); gap:8px; text-align:center;">
+        <div style="background:#1b2a1b; border:1px solid #2e7d32; border-radius:6px; padding:10px 4px;">
+          <div style="font-size:1.4em; font-weight:bold; color:#4CAF50;">1</div>
+          <div style="font-size:0.75em; margin-top:4px; color:#4CAF50; font-weight:bold;">POWER ON</div>
+          <div style="font-size:0.65em; color:#888; margin-top:4px;">Motorspulen aktivieren</div>
+        </div>
+        <div style="background:#1b2626; border:1px solid #006064; border-radius:6px; padding:10px 4px;">
+          <div style="font-size:1.4em; font-weight:bold; color:#00bcd4;">2</div>
+          <div style="font-size:0.75em; margin-top:4px; color:#00bcd4; font-weight:bold;">CALIB SENSOR</div>
+          <div style="font-size:0.65em; color:#888; margin-top:4px;">Sensor-Kante lernen</div>
+        </div>
+        <div style="background:#1e2225; border:1px solid #455a64; border-radius:6px; padding:10px 4px;">
+          <div style="font-size:1.4em; font-weight:bold; color:#90a4ae;">3</div>
+          <div style="font-size:0.75em; margin-top:4px; color:#90a4ae; font-weight:bold;">HOME MOTOR</div>
+          <div style="font-size:0.65em; color:#888; margin-top:4px;">Auf 0° fahren</div>
+        </div>
+        <div style="background:#1e2225; border:1px solid #455a64; border-radius:6px; padding:10px 4px;">
+          <div style="font-size:1.4em; font-weight:bold; color:#90a4ae;">4</div>
+          <div style="font-size:0.75em; margin-top:4px; color:#90a4ae; font-weight:bold;">SG-LEARN</div>
+          <div style="font-size:0.65em; color:#888; margin-top:4px;">StallGuard-Profil lernen</div>
+        </div>
+        <div style="background:#1e1826; border:1px solid #6a1b9a; border-radius:6px; padding:10px 4px;">
+          <div style="font-size:1.4em; font-weight:bold; color:#ce93d8;">5</div>
+          <div style="font-size:0.75em; margin-top:4px; color:#ce93d8; font-weight:bold;">START PARCOUR</div>
+          <div style="font-size:0.65em; color:#888; margin-top:4px;">Messsequenz starten</div>
+        </div>
+      </div>
+      <div style="font-size:0.65em; color:#555; margin-top:10px;">Nach Neustart ab Schritt 1. Wenn Kalibrierung noch gespeichert: ab Schritt 3.</div>
+    </div>
+
     <div class="mask-card">
       <div class="mask-grid">
         <div class="tog" id="tog_speed" onclick="toggle('speed')">SPEED-TEST</div>
@@ -85,7 +119,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     </div>
 
     <button class="btn stop" onclick="cmd('stop', 0)">EMERGENCY STOP</button>
-    <div id="log">Bereit. v3.5.1 (Math Fixes active)</div>
+    <div id="log">Bereit.</div>
   </div>
 
   <script>
@@ -117,7 +151,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         const pBtn = document.getElementById('pwr0');
         pBtn.innerText = s.m[0].e ? 'POWER ON' : 'POWER OFF';
         pBtn.className = s.m[0].e ? 'btn on' : 'btn';
-        if(s.fw) document.getElementById('fwVer').innerText = 'V3 SINGLE-MOTOR v' + s.fw + ' (Math Fixes)';
+        if(s.fw) document.getElementById('fwVer').innerText = 'V3 SINGLE-MOTOR v' + s.fw;
         if(s.log) s.log.split('\\n').forEach(l => { if(l.length > 2) addLog(l); });
       }).catch(e => console.log("Offline..."));
     }, 350);
