@@ -6,7 +6,7 @@
 #include <FastAccelStepper.h> // New: Hardware-Timer Stepper
 
 // --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.6.4"
+#define FW_VERSION "3.6.8"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
@@ -45,7 +45,7 @@ extern uint16_t stepsPerRev;
 struct MotorState {
     float posDeg = 0;
     float speed = 0;
-    bool enabled = true;
+    bool enabled = false;
 };
 
 struct CalibrationData {

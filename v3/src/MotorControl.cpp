@@ -1,7 +1,6 @@
 #include "MotorControl.h"
 #include <Preferences.h>
 #include "driver/pcnt.h"   // ESP32 hardware pulse counter — ISR-safe position capture
-#include "soc/gpio_struct.h" // direct GPIO register access — restore OUTPUT after PCNT init
 
 Preferences prefs;
 SystemState sys;
@@ -172,6 +171,31 @@ void initMotors() {
     pinMode(ENABLE_PIN, OUTPUT); digitalWrite(ENABLE_PIN, LOW);
     
     uartMutex = xSemaphoreCreateMutex(); // B1: must be created after FreeRTOS heap is ready
+    // --- PCNT: configure BEFORE FastAccelStepper ---
+    // The GPIO matrix has separate input and output paths.
+    // PCNT uses the input path (GPIO → PCNT), RMT uses the output path (RMT → GPIO).
+    // Order matters: pcnt_unit_config() calls gpio_output_disable() which calls
+    // gpio_matrix_out(SIG_GPIO_OUT_IDX) — this would overwrite FAS's RMT routing if
+    // called after. By configuring PCNT first, FAS's stepperConnectToPin() runs last
+    // and sets up RMT routing correctly. PCNT input routing is untouched by FAS.
+    pcnt_config_t pcnt_cfg = {};
+    pcnt_cfg.pulse_gpio_num = X_STEP;
+    pcnt_cfg.ctrl_gpio_num  = X_DIR;
+    pcnt_cfg.pos_mode   = PCNT_COUNT_INC;    // rising edge of STEP → count
+    pcnt_cfg.neg_mode   = PCNT_COUNT_DIS;    // falling edge → ignore
+    pcnt_cfg.lctrl_mode = PCNT_MODE_REVERSE; // DIR LOW (backward) → count down
+    pcnt_cfg.hctrl_mode = PCNT_MODE_KEEP;    // DIR HIGH (forward) → count up
+    pcnt_cfg.counter_h_lim = 32767;
+    pcnt_cfg.counter_l_lim = -32768;
+    pcnt_cfg.unit    = PCNT_UNIT_0;
+    pcnt_cfg.channel = PCNT_CHANNEL_0;
+    pcnt_unit_config(&pcnt_cfg);
+    pcnt_counter_pause(PCNT_UNIT_0);
+    pcnt_counter_clear(PCNT_UNIT_0);
+    pcnt_counter_resume(PCNT_UNIT_0);
+
+    // FAS runs after PCNT — stepperConnectToPin() routes RMT → X_STEP (output path)
+    // and re-enables the output buffer. PCNT input routing for X_STEP is unaffected.
     engine.init();
     stepper = engine.stepperConnectToPin(X_STEP);
     if (stepper) {
@@ -185,33 +209,6 @@ void initMotors() {
     }
     setMicrosteps(64);
     applyDriverSettings(MOTOR_CURRENT_DEFAULT);
-
-    // --- PCNT: hardware step counter for ISR-safe position capture ---
-    // Reads X_STEP pulses, uses X_DIR as count-direction control.
-    // DIR HIGH (forward) → count up. DIR LOW (backward) → count down.
-    // 16-bit range: ±32767 steps. characterizeSensor clears before use (max 15000 steps).
-    pcnt_config_t pcnt_cfg = {};
-    pcnt_cfg.pulse_gpio_num = X_STEP;
-    pcnt_cfg.ctrl_gpio_num  = X_DIR;
-    pcnt_cfg.pos_mode   = PCNT_COUNT_INC;     // rising edge of STEP → count
-    pcnt_cfg.neg_mode   = PCNT_COUNT_DIS;     // falling edge → ignore
-    pcnt_cfg.lctrl_mode = PCNT_MODE_REVERSE;  // DIR LOW (backward) → count down
-    pcnt_cfg.hctrl_mode = PCNT_MODE_KEEP;     // DIR HIGH (forward) → count up
-    pcnt_cfg.counter_h_lim = 32767;
-    pcnt_cfg.counter_l_lim = -32768;
-    pcnt_cfg.unit    = PCNT_UNIT_0;
-    pcnt_cfg.channel = PCNT_CHANNEL_0;
-    pcnt_unit_config(&pcnt_cfg);
-    // pcnt_unit_config() calls gpio_set_direction(INPUT) which clears GPIO_ENABLE.
-    // We must re-enable the output buffer — but NOT via gpio_set_direction(INPUT_OUTPUT)
-    // because that calls gpio_output_enable() → gpio_matrix_out(pin, SIG_GPIO_OUT_IDX)
-    // which overwrites FastAccelStepper's RMT signal routing → motor gets no pulses.
-    // Fix: set GPIO_ENABLE bit directly, leaving GPIO_FUNC_OUT_SEL_CFG (RMT routing) untouched.
-    GPIO.enable_w1ts = (1U << X_STEP);  // re-enable output buffer, RMT routing preserved
-    GPIO.enable_w1ts = (1U << X_DIR);
-    pcnt_counter_pause(PCNT_UNIT_0);
-    pcnt_counter_clear(PCNT_UNIT_0);
-    pcnt_counter_resume(PCNT_UNIT_0);
 
     pinMode(TACHO_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(TACHO_PIN), tachoISR, CHANGE);
@@ -262,46 +259,58 @@ void characterizeSensor(int i) {
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
     }
+    stepper->setAcceleration(30000);
 
-    // Sync PCNT to stepper coordinate space.
-    // PCNT is cleared to 0 here; pcntStepperBase records the stepper position at this
-    // moment. All edge captures: pos = (long)lastSensorRaw + pcntStepperBase.
-    // Max travel in this function is ~15000 steps — well within PCNT ±32767 range.
+    // --- PHASE 1: 360° blind search ---
+    // Scans one full revolution at 1200 sps. Guaranteed to find the sensor
+    // regardless of start position. Eliminates the need to home before calibrating.
+    addLog("360 scan...");
+    stepper->setSpeedInHz(1200);
+    stepper->runForward();
+    if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 1.1f), 5000)) {
+        addLog("Err: No sensor in 360"); stepper->stopMove(); return;
+    }
+    stepper->stopMove();
+    // Back off 0.8 rev so the precise CW pass has a clean run-up from before the sensor.
+    stepper->move(-(long)(stepsPerRev * 0.8f));
+    while (stepper->isRunning()) { yield(); }
+
+    // --- PCNT sync at this approach position ---
+    // Max PCNT travel ahead: ~1 rev CW + 0.8 rev fwd + 1 rev CCW = ~2.8 rev = ~9000 steps
+    // Well within ±32767 signed 16-bit range.
     pcnt_counter_pause(PCNT_UNIT_0);
     pcnt_counter_clear(PCNT_UNIT_0);
     pcnt_counter_resume(PCNT_UNIT_0);
     pcntStepperBase = stepper ? stepper->getCurrentPosition() : 0;
 
-    // CW pass: find sensor entry edge (HIGH→LOW)
+    // --- PHASE 2: CW precision pass ---
     sensorHit = false;
     stepper->setSpeedInHz(400); stepper->runForward();
-    if (!waitForSensorTimed(LOW, 8000, 10000)) { addLog("Err: Not found"); stepper->stopMove(); return; }
-    long sCW = (long)lastSensorRaw + pcntStepperBase;  // exact ISR-captured position
+    if (!waitForSensorTimed(LOW, stepsPerRev, 5000)) { addLog("Err: CW entry"); stepper->stopMove(); return; }
+    long sCW = (long)lastSensorRaw + pcntStepperBase;
 
-    // CW pass: find sensor exit edge (LOW→HIGH) at reduced speed
     sensorHit = false;
     stepper->setSpeedInHz(200); stepper->runForward(); waitForSensorTimed(HIGH, 1000, 3000);
     long eCW = (long)lastSensorRaw + pcntStepperBase;
     stepper->stopMove();
     addLog("CW: " + String(sCW) + "-" + String(eCW) + " (" + String(eCW-sCW) + " steps)");
 
-    // Move 0.8 rev away before reversing
-    stepper->move(stepsPerRev * 0.8f); while(stepper->isRunning()) { yield(); }
+    // Move 0.8 rev past the sensor before reversing
+    stepper->move((long)(stepsPerRev * 0.8f)); while(stepper->isRunning()) { yield(); }
 
-    // CCW pass: find sensor entry edge from the other side (HIGH→LOW)
+    // --- PHASE 3: CCW precision pass ---
     sensorHit = false;
     stepper->setSpeedInHz(400); stepper->runBackward();
-    waitForSensorTimed(LOW, 15000, 10000);
+    waitForSensorTimed(LOW, stepsPerRev, 5000);
     long eCCW = (long)lastSensorRaw + pcntStepperBase;
 
-    // CCW pass: find sensor exit edge (LOW→HIGH) at reduced speed
     sensorHit = false;
     stepper->setSpeedInHz(200); stepper->runBackward(); waitForSensorTimed(HIGH, 1000, 3000);
     long sCCW = (long)lastSensorRaw + pcntStepperBase;
     stepper->stopMove();
     addLog("CCW: " + String(sCCW) + "-" + String(eCCW) + " (" + String(eCCW-sCCW) + " steps)");
 
-    // Center = average of CW midpoint and CCW midpoint (cancels systematic hysteresis)
+    // Center = average of CW midpoint and CCW midpoint (hysteresis-cancelled)
     sys.cal[0].triggerCenter = ((sCW+eCW)/2 + (sCCW+eCCW)/2) / 2;
     sys.cal[0].triggerStart  = sCW;
     sys.cal[0].triggerEnd    = eCW;

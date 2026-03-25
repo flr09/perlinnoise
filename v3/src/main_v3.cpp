@@ -49,7 +49,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <a href="http://perlin-bench.local/">← HAUPT-UI</a>
             <a href="/update">OTA UPDATE</a>
         </div>
-        <span class="version" id="fwVer">V3 SINGLE-MOTOR v3.5.4</span>
+        <span class="version" id="fwVer">V3 SINGLE-MOTOR v3.6.7</span>
     </div>
 
     <div class="card">
