@@ -1,7 +1,7 @@
 #include "MotorControl.h"
 #include <Preferences.h>
 #include "driver/pcnt.h"   // ESP32 hardware pulse counter — ISR-safe position capture
-#include "driver/gpio.h"   // gpio_set_direction — needed to restore OUTPUT after PCNT init
+#include "soc/gpio_struct.h" // direct GPIO register access — restore OUTPUT after PCNT init
 
 Preferences prefs;
 SystemState sys;
@@ -202,12 +202,13 @@ void initMotors() {
     pcnt_cfg.unit    = PCNT_UNIT_0;
     pcnt_cfg.channel = PCNT_CHANNEL_0;
     pcnt_unit_config(&pcnt_cfg);
-    // pcnt_unit_config() reconfigures X_STEP and X_DIR as inputs internally.
-    // This would kill FastAccelStepper's RMT output on GPIO 27.
-    // Fix: restore both pins to INPUT_OUTPUT mode — ESP32 GPIO matrix supports
-    // simultaneous output (RMT → motor driver) and input (PCNT reads same signal).
-    gpio_set_direction((gpio_num_t)X_STEP, GPIO_MODE_INPUT_OUTPUT);
-    gpio_set_direction((gpio_num_t)X_DIR,  GPIO_MODE_INPUT_OUTPUT);
+    // pcnt_unit_config() calls gpio_set_direction(INPUT) which clears GPIO_ENABLE.
+    // We must re-enable the output buffer — but NOT via gpio_set_direction(INPUT_OUTPUT)
+    // because that calls gpio_output_enable() → gpio_matrix_out(pin, SIG_GPIO_OUT_IDX)
+    // which overwrites FastAccelStepper's RMT signal routing → motor gets no pulses.
+    // Fix: set GPIO_ENABLE bit directly, leaving GPIO_FUNC_OUT_SEL_CFG (RMT routing) untouched.
+    GPIO.enable_w1ts = (1U << X_STEP);  // re-enable output buffer, RMT routing preserved
+    GPIO.enable_w1ts = (1U << X_DIR);
     pcnt_counter_pause(PCNT_UNIT_0);
     pcnt_counter_clear(PCNT_UNIT_0);
     pcnt_counter_resume(PCNT_UNIT_0);
