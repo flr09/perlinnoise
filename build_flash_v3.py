@@ -17,7 +17,7 @@ from pathlib import Path
 # --- Konfiguration ---
 PROJECT_DIR = Path(__file__).parent
 ENV         = "fysetc_e4_v3"
-VERSION     = "3.6.0"
+VERSION     = "3.6.1"
 COM_PORT    = "COM4"
 
 # PlatformIO via venv (WSL)

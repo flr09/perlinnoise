@@ -1,5 +1,6 @@
 #include "MotorControl.h"
 #include <Preferences.h>
+#include "driver/pcnt.h"   // ESP32 hardware pulse counter — ISR-safe position capture
 
 Preferences prefs;
 SystemState sys;
@@ -27,8 +28,17 @@ uint32_t rpmToTpwmthrs(float rpm) {
 
 // --- ATOMIC ISR ---
 volatile uint32_t pulseCount = 0;
-// ISR: only increment counter — no stepper calls (not ISR-safe in FastAccelStepper)
+
+// PCNT-based edge capture: ISR stores the hardware counter value at the exact
+// moment the sensor fires — no getCurrentPosition() call needed (not ISR-safe)
+volatile int16_t lastSensorRaw = 0;   // raw PCNT value at last edge (16-bit signed)
+volatile bool    sensorHit     = false;
+long             pcntStepperBase = 0; // stepper position when PCNT was last cleared
+
 void IRAM_ATTR tachoISR() {
+    // Capture PCNT hardware register — atomic, ~3 CPU cycles, fully ISR-safe
+    pcnt_get_counter_value(PCNT_UNIT_0, (int16_t*)&lastSensorRaw);
+    sensorHit = true;
     if (digitalRead(TACHO_PIN) == LOW) { pulseCount++; }
 }
 
@@ -172,6 +182,27 @@ void initMotors() {
     }
     setMicrosteps(64);
     applyDriverSettings(MOTOR_CURRENT_DEFAULT);
+
+    // --- PCNT: hardware step counter for ISR-safe position capture ---
+    // Reads X_STEP pulses, uses X_DIR as count-direction control.
+    // DIR HIGH (forward) → count up. DIR LOW (backward) → count down.
+    // 16-bit range: ±32767 steps. characterizeSensor clears before use (max 15000 steps).
+    pcnt_config_t pcnt_cfg = {};
+    pcnt_cfg.pulse_gpio_num = X_STEP;
+    pcnt_cfg.ctrl_gpio_num  = X_DIR;
+    pcnt_cfg.pos_mode   = PCNT_COUNT_INC;     // rising edge of STEP → count
+    pcnt_cfg.neg_mode   = PCNT_COUNT_DIS;     // falling edge → ignore
+    pcnt_cfg.lctrl_mode = PCNT_MODE_REVERSE;  // DIR LOW (backward) → count down
+    pcnt_cfg.hctrl_mode = PCNT_MODE_KEEP;     // DIR HIGH (forward) → count up
+    pcnt_cfg.counter_h_lim = 32767;
+    pcnt_cfg.counter_l_lim = -32768;
+    pcnt_cfg.unit    = PCNT_UNIT_0;
+    pcnt_cfg.channel = PCNT_CHANNEL_0;
+    pcnt_unit_config(&pcnt_cfg);
+    pcnt_counter_pause(PCNT_UNIT_0);
+    pcnt_counter_clear(PCNT_UNIT_0);
+    pcnt_counter_resume(PCNT_UNIT_0);
+
     pinMode(TACHO_PIN, INPUT_PULLUP);
     attachInterrupt(digitalPinToInterrupt(TACHO_PIN), tachoISR, CHANGE);
 }
@@ -221,18 +252,49 @@ void characterizeSensor(int i) {
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
     }
+
+    // Sync PCNT to stepper coordinate space.
+    // PCNT is cleared to 0 here; pcntStepperBase records the stepper position at this
+    // moment. All edge captures: pos = (long)lastSensorRaw + pcntStepperBase.
+    // Max travel in this function is ~15000 steps — well within PCNT ±32767 range.
+    pcnt_counter_pause(PCNT_UNIT_0);
+    pcnt_counter_clear(PCNT_UNIT_0);
+    pcnt_counter_resume(PCNT_UNIT_0);
+    pcntStepperBase = stepper ? stepper->getCurrentPosition() : 0;
+
+    // CW pass: find sensor entry edge (HIGH→LOW)
+    sensorHit = false;
     stepper->setSpeedInHz(400); stepper->runForward();
     if (!waitForSensorTimed(LOW, 8000, 10000)) { addLog("Err: Not found"); stepper->stopMove(); return; }
-    long sCW = stepper->getCurrentPosition();
-    stepper->setSpeedInHz(200); stepper->runForward(); waitForSensorTimed(HIGH, 1000, 3000); // C1: runForward() needed after speed change
-    long eCW = stepper->getCurrentPosition(); stepper->stopMove();
+    long sCW = (long)lastSensorRaw + pcntStepperBase;  // exact ISR-captured position
+
+    // CW pass: find sensor exit edge (LOW→HIGH) at reduced speed
+    sensorHit = false;
+    stepper->setSpeedInHz(200); stepper->runForward(); waitForSensorTimed(HIGH, 1000, 3000);
+    long eCW = (long)lastSensorRaw + pcntStepperBase;
+    stepper->stopMove();
+    addLog("CW: " + String(sCW) + "-" + String(eCW) + " (" + String(eCW-sCW) + " steps)");
+
+    // Move 0.8 rev away before reversing
     stepper->move(stepsPerRev * 0.8f); while(stepper->isRunning()) { yield(); }
+
+    // CCW pass: find sensor entry edge from the other side (HIGH→LOW)
+    sensorHit = false;
     stepper->setSpeedInHz(400); stepper->runBackward();
     waitForSensorTimed(LOW, 15000, 10000);
-    long eCCW = stepper->getCurrentPosition();
-    stepper->setSpeedInHz(200); stepper->runBackward(); waitForSensorTimed(HIGH, 1000, 3000); // C1: runBackward() needed after speed change
-    long sCCW = stepper->getCurrentPosition(); stepper->stopMove();
+    long eCCW = (long)lastSensorRaw + pcntStepperBase;
+
+    // CCW pass: find sensor exit edge (LOW→HIGH) at reduced speed
+    sensorHit = false;
+    stepper->setSpeedInHz(200); stepper->runBackward(); waitForSensorTimed(HIGH, 1000, 3000);
+    long sCCW = (long)lastSensorRaw + pcntStepperBase;
+    stepper->stopMove();
+    addLog("CCW: " + String(sCCW) + "-" + String(eCCW) + " (" + String(eCCW-sCCW) + " steps)");
+
+    // Center = average of CW midpoint and CCW midpoint (cancels systematic hysteresis)
     sys.cal[0].triggerCenter = ((sCW+eCW)/2 + (sCCW+eCCW)/2) / 2;
+    sys.cal[0].triggerStart  = sCW;
+    sys.cal[0].triggerEnd    = eCW;
     sys.cal[0].valid = true; saveCalibration(0);
     addLog("Center: " + String(sys.cal[0].triggerCenter));
     homeMotor(0);

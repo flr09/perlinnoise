@@ -1021,3 +1021,54 @@ Telemetrie bestätigt exakt 2000 sps² Beschleunigung (+100 sps / 50ms).
 
 `3.5.4` → `3.6.0`
 
+---
+
+## v3.6.1 — PCNT-basierte ISR-Positionserfassung in characterizeSensor (2026-03-25)
+
+### Problem
+
+`characterizeSensor` las die Motorposition nach `waitForSensorTimed()` mit `stepper->getCurrentPosition()`. Diese Funktion ist nicht ISR-sicher und wird nach dem Return der Polling-Schleife aufgerufen — nach mindestens einem `yield()`-Zyklus (1–10ms bei Webserver-Last). Bei 200 sps = 1 Schritt Überlauf pro 5ms → systematischer Fehler an jeder der 4 Flanken.
+
+### Lösung: ESP32 PCNT Hardware-Modul
+
+Der ESP32 PCNT (Pulse Counter) liest die Schritt-Pulse direkt vom X_STEP-Pin (GPIO 27) in Hardware. Mit X_DIR (GPIO 26) als Richtungssignal zählt er automatisch hoch/runter — identisch zum internen FastAccelStepper-Zähler, aber als Hardware-Register.
+
+`pcnt_get_counter_value()` liest einen Hardware-Register in ~3 CPU-Taktzyklen. 100% ISR-sicher.
+
+```
+                    ┌──────────┐  STEP-Pulse  ┌──────────┐
+FastAccelStepper →  │ GPIO 27  │ ──────────── │  PCNT    │ → lastSensorRaw
+(RMT-Timer)         │ (Output) │              │ Unit 0   │   (int16_t, hardware)
+                    └──────────┘              └──────────┘
+                    ┌──────────┐  DIR-Signal
+                    │ GPIO 26  │ ─── CTRL ──────────────── count up/down
+                    └──────────┘
+                    ┌──────────┐  Sensor
+TACHO_PIN →         │ GPIO 15  │ ── ISR ─── pcnt_get_counter_value() → lastSensorRaw
+                    └──────────┘            (exakt bei Interrupt-Zeitpunkt)
+```
+
+### Änderungen
+
+| Datei | Änderung |
+|-------|----------|
+| `MotorControl.cpp` | `#include "driver/pcnt.h"` |
+| `MotorControl.cpp` | `volatile int16_t lastSensorRaw`, `volatile bool sensorHit`, `long pcntStepperBase` |
+| `MotorControl.cpp` | `tachoISR`: `pcnt_get_counter_value()` statt `stepper->getCurrentPosition()` |
+| `MotorControl.cpp` | `initMotors()`: PCNT auf X_STEP/X_DIR konfiguriert (PCNT_UNIT_0) |
+| `MotorControl.cpp` | `characterizeSensor`: PCNT-Sync am Start, `lastSensorRaw + pcntStepperBase` statt `getCurrentPosition()` |
+
+### Neue Log-Ausgaben in characterizeSensor
+
+```
+CW: 12480-12537 (57 steps)     ← Sensorbreite CW-Richtung
+CCW: 12421-12538 (117 steps)   ← Sensorbreite CCW-Richtung (ggf. Hysterese)
+Center: 12490
+```
+
+triggerStart/triggerEnd werden jetzt in `CalibrationData` gespeichert.
+
+### FW_VERSION
+
+`3.6.0` → `3.6.1`
+
