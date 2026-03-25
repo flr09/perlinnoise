@@ -37,8 +37,10 @@ volatile bool    sensorHit     = false;
 long             pcntStepperBase = 0; // stepper position when PCNT was last cleared
 
 void IRAM_ATTR tachoISR() {
-    // Capture PCNT hardware register — atomic, ~3 CPU cycles, fully ISR-safe
-    pcnt_get_counter_value(PCNT_UNIT_0, (int16_t*)&lastSensorRaw);
+    // Direct hardware register read — no function call, no Flash access, truly ISR-safe.
+    // pcnt_get_counter_value() is NOT IRAM_ATTR in ESP-IDF v4 → Flash fault when cache
+    // is disabled (WiFi init, OTA). PCNT peripheral registers are always accessible.
+    lastSensorRaw = (int16_t)(PCNT.cnt_unit[PCNT_UNIT_0].val & 0xFFFF);
     sensorHit = true;
     if (digitalRead(TACHO_PIN) == LOW) { pulseCount++; }
 }
