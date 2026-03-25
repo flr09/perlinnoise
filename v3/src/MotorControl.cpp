@@ -275,6 +275,8 @@ void runSpeedTest(int i) {
     if (i != 0 || !sys.cal[0].valid) return;
     setMotorPower(0, true);
     setMicrosteps(16);
+    // E1: Set high acceleration for parcour ramps (homeMotor uses 2000 sps² — far too slow)
+    stepper->setAcceleration(30000);
     float rpm = (sys.cal[0].maxRpm > 250.0f) ? sys.cal[0].maxRpm * 0.8f : 200.0f;
     bool failed = false;
     uint16_t cur = sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT;
@@ -284,13 +286,22 @@ void runSpeedTest(int i) {
     }
     while(rpm <= PARCOUR_RPM_MAX && !failed) {
         addLog("Try " + String(rpm,0) + " RPM");
-        stepper->setSpeedInHz((uint32_t)rpmToSps(rpm));
+        float targetSps = rpmToSps(rpm);
+        stepper->setSpeedInHz((uint32_t)targetSps);
         stepper->runForward();
-        // Settle: let motor reach speed before counting
-        unsigned long settle = millis();
-        while(millis() - settle < 500) yield();
+        // E2: Wait until motor actually reaches target speed (not just a fixed 500ms)
+        // Timeout = time to ramp + 500ms buffer (at 30000 sps²)
+        unsigned long settleStart = millis();
+        uint32_t rampTimeMs = (uint32_t)(targetSps / 30000.0f * 1000.0f) + 500;
+        while (millis() - settleStart < rampTimeMs) {
+            if (stepper->getCurrentSpeedInMilliHz() / 1000.0f >= targetSps * 0.95f) break;
+            yield();
+        }
+        float reachedSps = stepper->getCurrentSpeedInMilliHz() / 1000.0f;
+        float reachedRpm = spsToRpm(reachedSps);
+        addLog("Soll=" + String(rpm,0) + " Ist=" + String(reachedRpm,0) + " RPM");
         portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
-        // Adaptive window: 3 full revolutions, min 500ms
+        // Adaptive window: 3 full revolutions at target RPM, min 500ms
         uint32_t win = max(500u, (uint32_t)(3.0f * 60000.0f / rpm));
         unsigned long start = millis();
         while(millis() - start < win) {
@@ -299,21 +310,22 @@ void runSpeedTest(int i) {
         }
         stepper->stopMove();
         float actualRpm = (float)getPulseCount() * 60000.0f / (float)win;
-        addLog("Ist=" + String(actualRpm,0));
-        if (actualRpm < rpm * 0.7f) {
+        // E3: Only boost if motor physically can't reach speed (not if ramp was too slow)
+        if (reachedRpm < rpm * 0.85f) {
             if (cur + 100 <= MOTOR_CURRENT_MAX_MA) {
                 cur += 100;
                 if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
                     driverX.rms_current(cur); xSemaphoreGive(uartMutex);
                 }
                 addLog("Boost " + String(cur) + "mA");
-            } else { failed = true; addLog("FAIL"); }
-        } else { sys.cal[0].maxRpm = rpm; rpm += 100.0f; }
+            } else { failed = true; addLog("FAIL at " + String(rpm,0) + " RPM"); }
+        } else { sys.cal[0].maxRpm = rpm; rpm += PARCOUR_RPM_STEP; }
     }
     saveCalibration(0);
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
     }
+    stepper->setAcceleration(2000); // restore homeMotor default
     setMicrosteps(64);
 }
 

@@ -983,3 +983,41 @@ while(millis() - start < 2000) {
 
 `3.5.3` → `3.5.4`
 
+---
+
+## v3.6.0 — Fix: Motor erreichte Ziel-RPM nie (E1/E2/E3) (2026-03-25)
+
+### Root Cause
+
+Analyse der Telemetrie `parcour_2026-03-25T21-59-29.csv` (v3.5.4) zeigte:
+
+| RPM-Ziel | erwartet sps | tatsächlich max sps | Erreicht |
+|----------|-------------|---------------------|---------|
+| 200 | 10.667 | 2.743 | **26%** |
+| 900 | 48.000 | 16.877 | **35%** |
+| 2500 | 133.333 | 48.780 | **37%** |
+
+Der Motor befand sich **über den gesamten Parcour in der Beschleunigungsphase**.
+Telemetrie bestätigt exakt 2000 sps² Beschleunigung (+100 sps / 50ms).
+
+`runSpeedTest` hat `setAcceleration()` nie aufgerufen — es wurde der Wert von `homeMotor` (2000 sps²) übernommen. Zeit zum Hochlauf auf 133.333 sps (2500 RPM): **66 Sekunden**. Settle-Fenster: 500ms.
+
+### Bugs
+
+| ID | Beschreibung | Fix |
+|----|--------------|-----|
+| E1 | Kein `setAcceleration` in `runSpeedTest` → erbt 2000 sps² von homeMotor → Motor läuft nie auf Sollgeschwindigkeit | `stepper->setAcceleration(30000)` am Anfang von `runSpeedTest` |
+| E2 | Settle war immer 500ms — unabhängig davon ob Motor Zielgeschwindigkeit erreicht hatte | Aktives Warten: `while getCurrentSpeedInMilliHz() < target * 0.95` mit Timeout (rampTime + 500ms) |
+| E3 | Boost-Logik prüfte ob `actualRpm < 0.7 * target` — feuerte bei jedem Schritt weil Rampe zu langsam war, nicht weil Motor physisch nicht konnte. Strom wurde unnötig auf 900mA getrieben | Boost prüft jetzt `reachedRpm` (aus `getCurrentSpeedInMilliHz`) statt `actualRpm` aus Puls-Zählung |
+
+### Erwartetes Ergebnis nach Fix
+
+- Settle-Zeit pro Stufe: bei 2500 RPM = 133.333 / 30.000 = **4,4s** Rampe + 500ms Buffer
+- Gesamtlauf: ~24 Stufen × ~6s = ~2,5 Minuten (statt 24s Scheinlauf)
+- Telemetrie zeigt dann `spd_sps ≈ target sps` statt 35% davon
+- Boost sollte bei gesundem Motor nicht mehr feuern
+
+### FW_VERSION
+
+`3.5.4` → `3.6.0`
+
