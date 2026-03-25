@@ -1,6 +1,7 @@
 #include "MotorControl.h"
 #include <Preferences.h>
 #include "driver/pcnt.h"   // ESP32 hardware pulse counter — ISR-safe position capture
+#include "driver/gpio.h"   // gpio_set_direction — needed to restore OUTPUT after PCNT init
 
 Preferences prefs;
 SystemState sys;
@@ -199,6 +200,12 @@ void initMotors() {
     pcnt_cfg.unit    = PCNT_UNIT_0;
     pcnt_cfg.channel = PCNT_CHANNEL_0;
     pcnt_unit_config(&pcnt_cfg);
+    // pcnt_unit_config() reconfigures X_STEP and X_DIR as inputs internally.
+    // This would kill FastAccelStepper's RMT output on GPIO 27.
+    // Fix: restore both pins to INPUT_OUTPUT mode — ESP32 GPIO matrix supports
+    // simultaneous output (RMT → motor driver) and input (PCNT reads same signal).
+    gpio_set_direction((gpio_num_t)X_STEP, GPIO_MODE_INPUT_OUTPUT);
+    gpio_set_direction((gpio_num_t)X_DIR,  GPIO_MODE_INPUT_OUTPUT);
     pcnt_counter_pause(PCNT_UNIT_0);
     pcnt_counter_clear(PCNT_UNIT_0);
     pcnt_counter_resume(PCNT_UNIT_0);
