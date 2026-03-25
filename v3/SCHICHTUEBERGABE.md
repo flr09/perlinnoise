@@ -1,125 +1,126 @@
-# Schichtübergabe — 2026-03-24
+# Schichtübergabe — 2026-03-26
 
-**Session:** Diagnose & Fix v3.5.4
-**Firmware gebaut:** `firmware_v3_3.5.4_20260324_181741.bin` ✓
-**Status beim Übergeben:** Binary fertig, noch **nicht geflasht**
+**Session:** v3.6.x PCNT-Experiment + Doku-Aufräumen
+**Letzte verifiziert lauffähige FW:** `firmware_v3_3.5.4_20260324_181741.bin` ✅
+**Aktuelle FW:** v3.6.2 — gebaut, **noch nicht geflasht**, Funktion unbekannt
 
 ---
 
-## Was wurde in dieser Session erarbeitet
+## Aktueller Stand auf einen Blick
 
-### v3.5.2 — FastAccelStepper-Stabilisierung
-
-Der Linter hatte in der Vorsession die Stepper-Bibliothek auf FastAccelStepper migriert (Hardware-Timer, besser für hohe sps). Die Migration brachte 5 neue Bugs mit sich, die in v3.5.2 behoben wurden:
-
-- ISR-Crash (`tachoISR` rief nicht-ISR-sichere Funktion)
-- Mutex-Timeout zu kurz (10ms statt 100ms)
-- UART-Reads von Core 1 (→ auf `tCache.sg` umgestellt)
-- `updateTelemCache` im Step-Loop (→ Jitter)
-- Kein Settle vor Messung in `runSpeedTest`
-
-Feature: Winkelmarker 90/180/270/360° in UI (orangene LED-Punkte ±8°)
-
-### v3.5.3 — Boot-Crash und 4 Logik-Bugs
-
-| Bug | Beschreibung | Fix |
-|-----|--------------|-----|
-| B1 Boot-Crash | `xSemaphoreCreateMutex()` global → FreeRTOS-Heap nicht bereit | In `initMotors()` verschoben |
-| B2 learnSGProfile | Kein `stopMove()` → Motor läuft weiter → `setMicrosteps(64)` übersprungen | `stopMove()` vor setMicrosteps |
-| B3 runCoastTest | Kein `stopMove()` → Motor läuft endlos nach Test | `stopMove()` am Ende |
-| B4 float→uint32_t | Implicit Cast in `setSpeedInHz` | Expliziter `(uint32_t)` Cast |
-| B5 NULL-Check | `waitForSensorTimed` ohne Null-Check für stepper | `if (!stepper) return false` |
-
-### v3.5.4 — Button-Bugs characterizeSensor und learnSGProfile
-
-**Ursache der gemeldeten „Buttons haben nicht die erwartete Funktion":**
-
-#### D1 — `characterizeSensor` (falsche Kantenerkennung)
-
-Nach `setSpeedInHz(200)` wurde weder `runForward()` noch `runBackward()` aufgerufen.
-FastAccelStepper erfordert nach jedem Speed-Change einen expliziten Richtungsbefehl —
-sonst läuft der Motor mit der alten Geschwindigkeit (400Hz) weiter.
-
-Folge: `eCW` und `sCCW` wurden beim falschen Zeitpunkt erfasst →
-falscher `triggerCenter` → **HOME MOTOR fuhr zu falscher Position**.
-
-Fix:
-```cpp
-stepper->setSpeedInHz(200); stepper->runForward(); waitForSensorTimed(HIGH, 1000, 3000);
-// bzw. CCW:
-stepper->setSpeedInHz(200); stepper->runBackward(); waitForSensorTimed(HIGH, 1000, 3000);
+```
+v3.5.4  ← LETZTE BEKANNTE GUTE VERSION (getestet 2026-03-25)
+  ↓
+v3.6.0  ← runSpeedTest-Fix (Beschleunigung) — nicht geflasht/getestet
+  ↓
+v3.6.1  ← PCNT eingebaut → GPIO-Konflikt → System hing (defekt)
+  ↓
+v3.6.2  ← GPIO-Fix (INPUT_OUTPUT) → gebaut, NICHT GETESTET
 ```
 
-#### D2 — `learnSGProfile` (runForward im Loop)
+---
 
-`stepper->runForward()` wurde in **jeder Iteration** der inneren Messschleife aufgerufen (~jede paar ms). FastAccelStepper interpretiert jeden `runForward()`-Aufruf als neuen Bewegungsbefehl → Motor-Timing-Unterbrechungen / Jitter alle paar ms während SG-Messung.
+## Was in v3.5.4 verifiziert wurde (2026-03-25)
 
-Fix: `runForward()` einmalig vor den `while`-Block verschoben.
+Telemetrie: `parcour_2026-03-25T21-59-29.csv`
+
+| Metrik | Ergebnis |
+|--------|----------|
+| RPM-Ziel-Range | 200–2500 RPM (24 Stufen) |
+| Stall-Events | **0** |
+| cs_actual | **28 konstant** (= 900mA, Boost hatte unnötig gefeuert wegen E1/E2) |
+| Laufzeit | 24 Sekunden |
+| Dropouts | keine |
+
+**Caveat:** Motor hat nie die Ziel-RPM tatsächlich erreicht (E1/E2-Bug, erst in v3.6.0 gefixt). Er lief immer noch auf der Beschleunigungsrampe. Physisch aber gesund und stabil.
 
 ---
 
-## Auswirkung der v3.5.4-Bugs
+## Was in v3.6.0 geändert wurde (nicht getestet)
 
-| Funktion | Symptom | Root Cause |
-|----------|---------|------------|
-| **CALIB SENSOR** | HOME fuhr zur falschen Position | D1: triggerCenter falsch wegen falscher Geschwindigkeit |
-| **SG-LEARN** | Jitter, unzuverlässige SG-Werte | D2: runForward() pro Iteration |
-| **START PARCOUR** | Lief mit falschem Zentrum | D1: cal[0].valid=true, aber Wert falsch |
+| Bug | Fix |
+|-----|-----|
+| E1: Kein `setAcceleration()` in `runSpeedTest` → erbt 2000 sps² | `setAcceleration(30000)` am Anfang |
+| E2: 500ms Settle blind | Aktives Warten auf `getCurrentSpeedInMilliHz() >= 95%` |
+| E3: Boost feuerte bei jedem Schritt | Boost prüft jetzt `reachedRpm` aus Speed-Register |
 
 ---
 
-## Stand der Quelldateien beim Übergeben
+## Was in v3.6.1/v3.6.2 versucht wurde (PCNT)
 
-### Aktueller Zustand (v3.5.4, unkompromittiert)
+**Ziel:** ISR-sichere Positionserfassung in `characterizeSensor` via ESP32 PCNT-Hardware.
 
-- `v3/src/MotorControl.h`: `FW_VERSION "3.5.4"`
-- `v3/src/MotorControl.cpp`: D1 + D2 gefixt
-- `build_flash_v3.py`: `VERSION = "3.5.4"`
-- `v3/LAUFANALYSE.md`: v3.5.2, v3.5.3, v3.5.4 dokumentiert
-- `v3/BUG_REPORT_V3.md`: Alle Bugs A1–D2 dokumentiert
+**v3.6.1 — defekt:**
+`pcnt_unit_config()` setzt GPIO 27 intern auf Input → RMT-Output (FastAccelStepper) blockiert → Motor dreht sich nicht → System hängt.
 
-### Was als nächstes getan werden muss
+**v3.6.2 — Fix:**
+```cpp
+pcnt_unit_config(&pcnt_cfg);
+gpio_set_direction((gpio_num_t)X_STEP, GPIO_MODE_INPUT_OUTPUT);  // ← Restore
+gpio_set_direction((gpio_num_t)X_DIR,  GPIO_MODE_INPUT_OUTPUT);
+```
+ESP32 GPIO-Matrix kann einen Pin gleichzeitig als Output (RMT) und Input (PCNT) betreiben. Fix ist technisch korrekt — aber noch **nicht auf Hardware verifiziert**.
 
-**Schritt 1 — Binary flashen:**
+---
+
+## Nächste Schritte (in Reihenfolge)
+
+### Option A — Schnell: v3.5.4 flashen und mit v3.6.0 weiterarbeiten
+
+Falls v3.6.2 auf Hardware nicht startet → auf v3.5.4 zurückfallen und v3.6.0 separat testen.
+
+```
+# v3.5.4 (verifiziert):
+firmware_v3_3.5.4_20260324_181741.bin
+
+# v3.6.0 (E1/E2/E3-Fix, kein PCNT):
+firmware_v3_3.6.0_20260325_231030.bin
+```
+
+### Option B — v3.6.2 flashen und testen
 
 ```
 python build_flash_v3.py ota
+# oder manuell: firmware_v3_3.6.2_20260325_235628.bin
 ```
 
-Binary: `v3/firmware_v3_3.5.4_20260324_181741.bin`
+**Testsequenz v3.6.2:**
+1. `POWER ON` → LED muss grün werden, keine Panic im seriellen Monitor
+2. `CALIB SENSOR` → Neue Log-Zeilen prüfen:
+   ```
+   CW: XXXX-XXXX (XX steps)
+   CCW: XXXX-XXXX (XX steps)
+   Center: XXXX
+   ```
+   Wenn CW-Breite negativ oder > 500 steps → PCNT-Richtung invertiert (lctrl/hctrl tauschen)
+3. `HOME MOTOR` → Motor muss zur 0°-Position fahren
+4. `START PARCOUR` → Läuft jetzt länger (~2–3 min) wegen korrekter Acceleration-Settle-Logik
 
-**Testsequenz nach Flash:**
+### Falls v3.6.2 hängt
 
-1. `CALIB SENSOR` → triggerCenter prüfen (Logausgabe)
-2. `HOME MOTOR` → Motor muss zur korrekten 0°-Position fahren
-3. `SG-LEARN` → Log: SG-Werte sollten gleichmäßig und > 20 sein (kein Jitter)
-4. `START PARCOUR` → Läuft durch, kein Motor-Drift durch falsches Zentrum
-5. Telemetrie: `python fetch_tele.py`
-
-**Schritt 2 — Nach erstem validen Lauf:**
-
-- SG_RESULT vergleichen (Ziel: > 50 in SPEED-Phase)
-- maxRpm notieren (erwartet: ~440 RPM)
-- Falls SG < 20: SGTHRS-Stall-Erkennung für diesen Motor deaktivieren (1,29 mH zu schwach)
+PCNT-Block komplett entfernen und `characterizeSensor` auf v3.5.4-Stand zurücksetzen. PCNT ist eine Verbesserung, aber keine Notwendigkeit — v3.5.4 läuft korrekt ohne PCNT.
 
 ---
 
 ## Datei-Referenz
 
-| Datei | FW | Datum | Besonderheit |
-|-------|----|-------|--------------|
-| `v3/tele/parcour_183755.csv` | 3.2.0 | 2026-03-24 | Baseline, SpreadCycle, SG 2–46 |
-| `v3/tele/parcour_151061.csv` | 3.3.0 | 2026-03-24 | SGTHRS-Problem, 211 Stall-Events |
-| `v3/firmware_v3_3.5.4_*.bin` | 3.5.4 | 2026-03-24 | D1+D2 gefixt, **noch nicht geflasht** |
+| Datei | FW | Datum | Status |
+|-------|----|-------|--------|
+| `v3/tele/parcour_2026-03-25T21-59-29.csv` | 3.5.4 | 2026-03-25 | ✅ Verifiziert, 0 Stalls |
+| `v3/firmware_v3_3.5.4_20260324_181741.bin` | 3.5.4 | 2026-03-24 | ✅ Letzte bekannte gute Version |
+| `v3/firmware_v3_3.6.0_20260325_231030.bin` | 3.6.0 | 2026-03-25 | 🟡 E1/E2/E3-Fix, kein PCNT, nicht getestet |
+| `v3/firmware_v3_3.6.2_20260325_235628.bin` | 3.6.2 | 2026-03-25 | 🟡 PCNT+GPIO-Fix, nicht getestet |
+| `v3/firmware_v3_latest.bin` | 3.6.2 | 2026-03-25 | 🟡 = 3.6.2 |
 
 ---
 
-## Referenz-Schwellwerte
+## Referenz-Schwellwerte (aus v3.5.4-Lauf)
 
-| Metrik | Bisheriger Ist-Wert | Ziel |
-|--------|---------------------|------|
-| Max RPM (stabil) | 300–440 RPM | > 440 RPM |
-| SG_RESULT (SPEED) | 0–46 | > 50 (SpreadCycle) |
-| Stall-Events/Lauf | 19–211 | < 10 |
-| cs_actual | 18–26 | 25–32 |
-| HOME-Position | falsch (v3.5.3) | korrekt (v3.5.4) |
+| Metrik | Ist-Wert (v3.5.4) | Ziel (nach v3.6.0-Fix) |
+|--------|-------------------|------------------------|
+| Max getestetes RPM-Ziel | 2500 RPM | 2500 RPM (diesmal tatsächlich erreicht) |
+| Tatsächlich erreichte RPM | ~35% (Rampen-Bug) | ~100% (E1/E2 gefixt) |
+| Stall-Events | 0 | 0 |
+| cs_actual | 28 (900mA, Boost-Bug) | 20–26 (650mA, kein unnötiger Boost) |
+| Laufzeit Parcour | 24s (Rampe nie abgeschlossen) | ~2–3 min |
+| CALIB SENSOR Genauigkeit | ±2–3 Schritte (Polling-Latenz) | <1 Schritt (PCNT, wenn v3.6.2 läuft) |

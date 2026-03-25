@@ -1072,3 +1072,36 @@ triggerStart/triggerEnd werden jetzt in `CalibrationData` gespeichert.
 
 `3.6.0` → `3.6.1`
 
+---
+
+## v3.6.2 — Fix PCNT/RMT GPIO-Konflikt (2026-03-25)
+
+### Problem (F1)
+
+`pcnt_unit_config()` konfiguriert den übergebenen Pin intern als **Input**. Da X_STEP (GPIO 27) vorher von FastAccelStepper als RMT-Output belegt war, wurde der Ausgang damit stummgeschaltet. Motor bekam keine Pulse mehr → System hing, keine Bewegung.
+
+```
+pcnt_unit_config(&pcnt_cfg);
+// ↑ Setzt GPIO 27 intern auf INPUT — RMT-Output wird blockiert
+// Resultat: Motor dreht sich nicht mehr
+```
+
+### Fix
+
+Nach `pcnt_unit_config()` den Pin explizit auf `GPIO_MODE_INPUT_OUTPUT` zurücksetzen. Der ESP32 GPIO-Matrix unterstützt nativ, dass ein Pin gleichzeitig von RMT getrieben (Output) und von PCNT gelesen (Input) wird — klassischer GPIO-Matrix-Loopback.
+
+```cpp
+pcnt_unit_config(&pcnt_cfg);
+gpio_set_direction((gpio_num_t)X_STEP, GPIO_MODE_INPUT_OUTPUT);  // ← Fix F1
+gpio_set_direction((gpio_num_t)X_DIR,  GPIO_MODE_INPUT_OUTPUT);
+```
+
+### Status
+
+v3.6.2 ist kompiliert und gebaut. **Noch nicht geflasht und verifiziert.**
+Letzte verifiziert lauffähige Version: **v3.5.4** (`parcour_2026-03-25T21-59-29.csv`).
+
+### FW_VERSION
+
+`3.6.1` → `3.6.2`
+
