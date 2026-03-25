@@ -1,6 +1,6 @@
 # Technischer Statusbericht & Bug-Report
 
-**Firmware:** v3.3.3 (Jitter-Audit) | **Stand:** 2026-03-24
+**Firmware:** v3.5.4 | **Stand:** 2026-03-24
 
 ---
 
@@ -31,7 +31,28 @@
 
 ---
 
-## 4. Git & Workflow
-- Version auf 3.3.3 hochgestuft.
-- Dokumentation der Jitter-Analyse abgeschlossen.
-- Nächster Schritt: Code-Säuberung (v3.3.3-Build).
+## 4. Bugs v3.5.x (FastAccelStepper-Migration)
+
+| ID | FW | Beschreibung | Schwere | Fix |
+|----|----|--------------|---------|-----|
+| **A1** | 3.5.2 | ISR-Crash: `tachoISR` rief `stepper->getCurrentPosition()` auf — nicht ISR-sicher | 🔴 Crash | Entfernt, nur `pulseCount++` |
+| **A2** | 3.5.2 | Mutex 10ms: `updateTelemCache` wartete nur 10ms, `applyDriverSettings` hält bis 16ms | 🟠 Deadlock | 100ms |
+| **A3** | 3.5.2 | UART von Core 1: `learnSGProfile` las `driverX.SG_RESULT()` direkt | 🟠 Jitter | Auf `tCache.sg` umgestellt |
+| **B1** | 3.5.3 | `xSemaphoreCreateMutex()` global: FreeRTOS-Heap beim globalen Konstruktor noch nicht bereit → Panic | 🔴 Boot-Crash | In `initMotors()` verschoben |
+| **B2** | 3.5.3 | `learnSGProfile` kein stopMove: Motor lief weiter → `setMicrosteps(64)` übersprungen | 🟠 Silent fail | `stopMove()` vor setMicrosteps |
+| **B3** | 3.5.3 | `runCoastTest` kein stopMove: Motor lief nach Coast-Test endlos weiter | 🟠 Silent fail | `stopMove()` am Ende |
+| **D1** | 3.5.4 | `characterizeSensor`: Nach `setSpeedInHz(200)` kein `runForward()`/`runBackward()` → Motor blieb bei 400Hz → falscher `triggerCenter` | 🔴 Falsche Funktion | `runForward()`/`runBackward()` nach Speed-Wechsel eingefügt |
+| **D2** | 3.5.4 | `learnSGProfile`: `runForward()` in jeder Iteration der Messschleife → FastAccelStepper interpretiert als neuen Befehl → Jitter alle paar ms | 🟠 Jitter | `runForward()` aus Schleife heraus, einmaliger Aufruf |
+
+---
+
+## 5. Git & Workflow
+
+| Version | Commit | Beschreibung |
+|---------|--------|--------------|
+| 3.3.3 | — | Jitter-Audit dokumentiert |
+| 3.4.0 | `54180c3` | Comprehensive logic overhaul, measureActualRpm, SG-Learn fixes |
+| 3.5.1 | `8307f17` | FastAccelStepper API final corrections |
+| 3.5.2 | `61b0e50` | ISR, Mutex, UART/Core1 fixes + Winkelmarker |
+| 3.5.3 | `566b3e6` | Boot-Crash (Mutex global) + 4 Logic-Bugs |
+| 3.5.4 | — | D1/D2: characterizeSensor + learnSGProfile runForward-Bugs |

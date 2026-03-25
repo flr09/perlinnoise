@@ -224,13 +224,13 @@ void characterizeSensor(int i) {
     stepper->setSpeedInHz(400); stepper->runForward();
     if (!waitForSensorTimed(LOW, 8000, 10000)) { addLog("Err: Not found"); stepper->stopMove(); return; }
     long sCW = stepper->getCurrentPosition();
-    stepper->setSpeedInHz(200); waitForSensorTimed(HIGH, 1000, 3000);
+    stepper->setSpeedInHz(200); stepper->runForward(); waitForSensorTimed(HIGH, 1000, 3000); // C1: runForward() needed after speed change
     long eCW = stepper->getCurrentPosition(); stepper->stopMove();
     stepper->move(stepsPerRev * 0.8f); while(stepper->isRunning()) { yield(); }
     stepper->setSpeedInHz(400); stepper->runBackward();
     waitForSensorTimed(LOW, 15000, 10000);
     long eCCW = stepper->getCurrentPosition();
-    stepper->setSpeedInHz(200); waitForSensorTimed(HIGH, 1000, 3000);
+    stepper->setSpeedInHz(200); stepper->runBackward(); waitForSensorTimed(HIGH, 1000, 3000); // C1: runBackward() needed after speed change
     long sCCW = stepper->getCurrentPosition(); stepper->stopMove();
     sys.cal[0].triggerCenter = ((sCW+eCW)/2 + (sCCW+eCCW)/2) / 2;
     sys.cal[0].valid = true; saveCalibration(0);
@@ -251,10 +251,10 @@ void learnSGProfile(int i) {
     for(int s=0; s<4; s++) {
         float sps = rpmToSps(testRpms[s]);
         stepper->setSpeedInHz((uint32_t)sps);
+        stepper->runForward(); // C2: call once after speed change, not inside the loop
         unsigned long start = millis();
         unsigned long lastSG = 0;
         while(millis() - start < 2000) {
-            stepper->runForward();
             if (millis() - lastSG >= 50) {
                 // Use cache — no direct UART read from Core 1
                 sgSum += (float)tCache.sg; samples++;

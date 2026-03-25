@@ -886,3 +886,100 @@ Ergibt: 200 RPM → 900ms, 500 RPM → 500ms, 2500 RPM → 500ms.
 ```cpp
 if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
 ```
+
+---
+
+## v3.5.2 — Fixes & Feature (2026-03-24)
+
+### Linter-Migration FastAccelStepper
+
+Der Linter hat die gesamte Stepper-Logik von AccelStepper auf FastAccelStepper umgestellt.
+FastAccelStepper ist prinzipiell die bessere Wahl (Hardware-Timer, kein `run()` im Loop nötig,
+höhere Schrittfrequenzen möglich). Migration war aber mit 5 neuen Bugs verbunden.
+
+### Bugs behoben
+
+| Bug | Beschreibung | Fix |
+|-----|--------------|-----|
+| ISR-Crash | `tachoISR` rief `stepper->getCurrentPosition()` auf — nicht ISR-sicher bei FastAccelStepper Hardware-Timern | Entfernt, nur `pulseCount++` |
+| Mutex 10ms | `updateTelemCache` wartete nur 10ms — `applyDriverSettings` hält Mutex bis 16ms | 100ms |
+| UART von Core 1 | `learnSGProfile` las `driverX.SG_RESULT()` direkt | Auf `tCache.sg` umgestellt |
+| updateTelemCache in Core 1 | `runSpeedTest` rief `updateTelemCache()` im Step-Loop auf → Jitter | Entfernt |
+| Kein Settle vor Messung | `runSpeedTest` startete Puls-Zählung sofort | 500ms Settle eingefügt |
+| Festes 2s-Fenster | `runSpeedTest` maß immer 2000ms | Adaptiv: 3 Umdr. / min 500ms |
+| Negative Winkel | `pos % stepsPerRev` negativ bei CCW | `((pos%sr+sr)%sr)` |
+
+### Feature: Winkelmarker 90/180/270/360°
+
+Vier orangene LED-Punkte in der UI leuchten auf wenn der Motor innerhalb ±8° der jeweiligen
+Viertelposition ist. Entspricht dem Verhalten aus v3.2.
+
+### Git
+
+Commit: `61b0e50` auf Branch `v2-development`
+
+---
+
+## v3.5.3 — Boot-Crash und 4 Logik-Bugs behoben (2026-03-24)
+
+| Bug | Schwere | Beschreibung | Fix |
+|-----|---------|--------------|-----|
+| B1 `xSemaphoreCreateMutex()` global | 🔴 Boot-Crash | FreeRTOS-Heap beim globalen Konstruktor noch nicht bereit → Panic bei jedem Start | In `initMotors()` verschoben |
+| B2 `learnSGProfile` kein stopMove | 🟠 Silent fail | Motor lief weiter → `isRunning()=true` → `setMicrosteps(64)` übersprungen → L1-Fix wirkungslos, Motor bleibt auf 16MS | `stopMove()` vor setMicrosteps eingefügt |
+| B3 `runCoastTest` kein stopMove | 🟠 Silent fail | Motor lief nach Coast-Test endlos weiter → alle folgenden setMicrosteps-Aufrufe geblockt | `stopMove()` am Ende eingefügt |
+| B4 float→uint32_t in setSpeedInHz | 🟡 Compile | Implicit float→uint32_t Konvertierung → Compiler-Warnung/-Fehler | Expliziter `(uint32_t)` Cast |
+| B5 stepper NULL-Check | 🟡 Defensive | `waitForSensorTimed` dereferenzierte `stepper` ohne Null-Check | `if (!stepper) return false` am Anfang |
+
+Commit: `566b3e6` auf Branch `v2-development`
+
+---
+
+## v3.5.4 — Button-Bugs in characterizeSensor und learnSGProfile (2026-03-24)
+
+Ursache der gemeldeten „Buttons haben nicht die erwartete Funktion":
+
+| Bug | Schwere | Funktion | Beschreibung | Fix |
+|-----|---------|----------|--------------|-----|
+| D1 `characterizeSensor` falsche Geschwindigkeit | 🔴 Falsche Funktion | `characterizeSensor` | Nach `setSpeedInHz(200)` wurde weder `runForward()` noch `runBackward()` aufgerufen. Motor lief weiter mit 400Hz. Die Präzisionsfahrt zum genauen Sensor-Randpunkt fand nie statt → `eCW` und `sCCW` wurden beim falschen Timing erfasst → falscher `triggerCenter` → Homing geht zur falschen Position. | `stepper->runForward()` / `stepper->runBackward()` nach Geschwindigkeitswechsel eingefügt |
+| D2 `learnSGProfile` runForward im Loop | 🟠 Jitter/Fehlfunktion | `learnSGProfile` | `stepper->runForward()` wurde in jedem Durchlauf der inneren Messschleife aufgerufen (~jede paar ms). FastAccelStepper interpretiert jeden `runForward()`-Aufruf als neuen Bewegungsbefehl → Motor-Timing-Unterbrechungen / Jitter alle paar ms während SG-Messung. | `runForward()` aus der Schleife heraus vor den `while`-Block verschoben (einmaliger Aufruf nach Speed-Set) |
+
+### Code-Diff D1
+
+```cpp
+// Vorher (falsch):
+stepper->setSpeedInHz(200); waitForSensorTimed(HIGH, 1000, 3000);
+
+// Nachher (korrekt):
+stepper->setSpeedInHz(200); stepper->runForward(); waitForSensorTimed(HIGH, 1000, 3000);
+// bzw. CCW:
+stepper->setSpeedInHz(200); stepper->runBackward(); waitForSensorTimed(HIGH, 1000, 3000);
+```
+
+### Code-Diff D2
+
+```cpp
+// Vorher (falsch):
+while(millis() - start < 2000) {
+    stepper->runForward();  // ← jede Iteration!
+    if (millis() - lastSG >= 50) { ... }
+    yield();
+}
+
+// Nachher (korrekt):
+stepper->runForward();  // einmalig
+while(millis() - start < 2000) {
+    if (millis() - lastSG >= 50) { ... }
+    yield();
+}
+```
+
+### Auswirkung
+
+- **CALIB SENSOR**: Edge-Detection war bei voller Geschwindigkeit → triggerCenter falsch → HOME MOTOR fuhr zu falscher Position
+- **SG-LEARN**: Motor jitterte während Messung → SG-Werte unzuverlässig, schlechter SGTHRS
+- **START PARCOUR**: Lief zwar (cal[0].valid=true), aber mit falschem Zentrum
+
+### FW_VERSION
+
+`3.5.3` → `3.5.4`
+

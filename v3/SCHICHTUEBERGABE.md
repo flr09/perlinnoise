@@ -1,191 +1,116 @@
 # Schichtübergabe — 2026-03-24
 
-**Session:** Diagnose & Fix v3.4.0
-**Firmware gebaut:** `firmware_v3_3.4.0_20260324_130632.bin` ✓
+**Session:** Diagnose & Fix v3.5.4
+**Firmware gebaut:** `firmware_v3_3.5.4_20260324_181741.bin` ✓
 **Status beim Übergeben:** Binary fertig, noch **nicht geflasht**
 
 ---
 
 ## Was wurde in dieser Session erarbeitet
 
-### 1. Drei Kern-Bugs vollständig diagnostiziert
+### v3.5.2 — FastAccelStepper-Stabilisierung
 
-Alle drei Bugs wurden per Telemetrie-Analyse, Code-Review und Logik nachgewiesen:
+Der Linter hatte in der Vorsession die Stepper-Bibliothek auf FastAccelStepper migriert (Hardware-Timer, besser für hohe sps). Die Migration brachte 5 neue Bugs mit sich, die in v3.5.2 behoben wurden:
 
-#### Bug 1 — `PARCOUR_RPM_START = 1000` (open-loop Catastrophe)
+- ISR-Crash (`tachoISR` rief nicht-ISR-sichere Funktion)
+- Mutex-Timeout zu kurz (10ms statt 100ms)
+- UART-Reads von Core 1 (→ auf `tCache.sg` umgestellt)
+- `updateTelemCache` im Step-Loop (→ Jitter)
+- Kein Settle vor Messung in `runSpeedTest`
 
-Das is die Haupt-Ursache für „Motor dreht 50 RPM, Log sagt Try 3200 RPM".
+Feature: Winkelmarker 90/180/270/360° in UI (orangene LED-Punkte ±8°)
 
-AccelStepper ist ein **offener Regelkreis**. Er zählt *befohlene* Schritte, misst keine echte Bewegung. Bei `setMaxSpeed(rpmToSps(1000))` = 53333 sps:
-- Motor kann physisch max ~440 RPM = 23467 sps
-- Motor läuft an sein Maximum, verliert Schritte, aber Schrittzähler läuft auf 53333 weiter
-- Da kein Fehler erkannt wird (Bug 2), zählt rpm++ bei jeder Iteration
-- Nach ~20 Iterationen: „Try 3200 RPM" — Motor war die ganze Zeit bei 440 RPM
+### v3.5.3 — Boot-Crash und 4 Logik-Bugs
 
-#### Bug 2 — `pos % 3200` Drift-Check lieferte immer 0
+| Bug | Beschreibung | Fix |
+|-----|--------------|-----|
+| B1 Boot-Crash | `xSemaphoreCreateMutex()` global → FreeRTOS-Heap nicht bereit | In `initMotors()` verschoben |
+| B2 learnSGProfile | Kein `stopMove()` → Motor läuft weiter → `setMicrosteps(64)` übersprungen | `stopMove()` vor setMicrosteps |
+| B3 runCoastTest | Kein `stopMove()` → Motor läuft endlos nach Test | `stopMove()` am Ende |
+| B4 float→uint32_t | Implicit Cast in `setSpeedInHz` | Expliziter `(uint32_t)` Cast |
+| B5 NULL-Check | `waitForSensorTimed` ohne Null-Check für stepper | `if (!stepper) return false` |
 
+### v3.5.4 — Button-Bugs characterizeSensor und learnSGProfile
+
+**Ursache der gemeldeten „Buttons haben nicht die erwartete Funktion":**
+
+#### D1 — `characterizeSensor` (falsche Kantenerkennung)
+
+Nach `setSpeedInHz(200)` wurde weder `runForward()` noch `runBackward()` aufgerufen.
+FastAccelStepper erfordert nach jedem Speed-Change einen expliziten Richtungsbefehl —
+sonst läuft der Motor mit der alten Geschwindigkeit (400Hz) weiter.
+
+Folge: `eCW` und `sCCW` wurden beim falschen Zeitpunkt erfasst →
+falscher `triggerCenter` → **HOME MOTOR fuhr zu falscher Position**.
+
+Fix:
 ```cpp
-steppers[0]->move(6400);  // 2 Umdrehungen befohlen
-// ...
-long drift = abs(steppers[0]->currentPosition() % 3200);
-// 6400 % 3200 = 0  →  drift = 0  →  immer PASS
+stepper->setSpeedInHz(200); stepper->runForward(); waitForSensorTimed(HIGH, 1000, 3000);
+// bzw. CCW:
+stepper->setSpeedInHz(200); stepper->runBackward(); waitForSensorTimed(HIGH, 1000, 3000);
 ```
 
-Diese Prüfung hat in der gesamten v3.3.0-Laufzeit **nie einen echten Schrittausfall erkannt**.
+#### D2 — `learnSGProfile` (runForward im Loop)
 
-#### Bug 3 — `learnSGProfile` maß in StealthChop (alle SG-Werte bedeutungslos)
+`stepper->runForward()` wurde in **jeder Iteration** der inneren Messschleife aufgerufen (~jede paar ms). FastAccelStepper interpretiert jeden `runForward()`-Aufruf als neuen Bewegungsbefehl → Motor-Timing-Unterbrechungen / Jitter alle paar ms während SG-Messung.
 
-Alte Messpunkte: 200, 500, 1000, 2000, 4000 **sps** = 3,75 – 75 **RPM**. TPWMTHRS war auf 200 RPM gesetzt → sämtliche Messpunkte lagen tief in der StealthChop-Zone. SG_RESULT liefert im StealthChop-Modus keine echten Lastwerte. Ergebnis: SGTHRS wurde auf ~6 gelernt → 43% aller Samples triggerten Stall-Flag im CSV.
-
-Das erklärt auch das beschriebene Verhalten:
-- **Learn-Modus:** laut und stabil → war in SpreadCycle (explizit gesetzt bei homeMotor)
-- **Test-Modus:** leise und Jitter → war in StealthChop (Auto via TPWMTHRS)
+Fix: `runForward()` einmalig vor den `while`-Block verschoben.
 
 ---
 
-### 2. Fixes für v3.4.0 implementiert und kompiliert
+## Auswirkung der v3.5.4-Bugs
 
-Die folgende `MotorControl.cpp` wurde geschrieben und erfolgreich gebaut:
-
-#### `measureActualRpm(cmdSps, windowMs)` — neuer Kern
-
-```cpp
-static float measureActualRpm(float cmdSps, unsigned long windowMs) {
-    steppers[0]->setSpeed(cmdSps);
-    // 400ms Einlaufen
-    // HIGH→LOW Flanken am TACHO_PIN zählen (= 1 Umdrehung pro Puls)
-    // return revCount * 60000.0 / windowMs
-}
-```
-
-Ersetzt den kaputten `pos % 3200` Check vollständig.
-
-#### `runSpeedTest()` — Kern-Änderungen
-
-| Parameter | v3.3.0 | v3.4.0 |
-|-----------|--------|--------|
-| Start-RPM | 1000 (fest) | `cal.maxRpm > 250 ? maxRpm * 0.8 : 200` |
-| Validierung | `pos % 3200` (immer 0) | `measureActualRpm()` — Tacho-Pulse |
-| Modus | Auto StealthChop | `en_spreadCycle(true)` explizit |
-| Log | „Try X RPM" | „Ist=X Soll=Y (Z%)" |
-| Retry | 1× pro Lauf | 1× pro RPM-Stufe |
-
-#### `learnSGProfile()` — Kern-Änderungen
-
-| Parameter | v3.3.0 | v3.4.0 |
-|-----------|--------|--------|
-| Messpunkte | 200-4000 sps = 3-75 RPM | 100-400 RPM |
-| Modus | Auto (→ StealthChop) | `en_spreadCycle(true)` explizit |
-| Tacho | nicht genutzt | RPM-Validierung bei jedem Punkt |
-| TPWMTHRS-Grenze | 200 RPM | 100 RPM (StealthChop nur Stillstand) |
-
-#### `TelemCache` — UART-Jitter eliminiert
-
-UART-Reads auf dem TMC2209 (SG_RESULT, cs_actual, MSCURACT etc.) dürfen nicht direkt in der Schrittgenerator-Schleife aufgerufen werden — verursachen Jitter. Lösung: Cache-Struct der alle 300ms refresht wird, `recordTelemetry()` liest nur noch den Cache.
-
----
-
-### 3. Weitere Änderungen in dieser Session
-
-**`MotorControl.h`:**
-- `FW_VERSION "3.4.0"`
-- `PARCOUR_RPM_START 200.0f` (war 1000.0f)
-- `PARCOUR_RPM_MAX 5000.0f` (war 10000.0f — realistischer für NEMA14 Pancake)
-- Kommentar: Start wird dynamisch in runSpeedTest gesetzt
-
-**`build_flash_v3.py`:**
-- `VERSION = "3.4.0"` (war 3.3.0)
-
-**`v3/LAUFANALYSE.md`:**
-- Root-Cause Sektion für alle 3 Bugs ergänzt
-- v3.4.0 Fix-Tabelle ergänzt
-
-**`motors/pancake/datasheet.md`:**
-- NEMA14-Korrektheit bestätigt (nicht NEMA17)
-- 2,6 Ω / 1,29 mH / ~0,92 A Nennstrom dokumentiert
-- Warnung: AliExpress-Listing „1,88 A" gehört zu Wantai 36HS2418 (1,9 Ω) — **falscher Motor**
-- Sichere Grenzen: 300–900 mA, Default 650 mA
+| Funktion | Symptom | Root Cause |
+|----------|---------|------------|
+| **CALIB SENSOR** | HOME fuhr zur falschen Position | D1: triggerCenter falsch wegen falscher Geschwindigkeit |
+| **SG-LEARN** | Jitter, unzuverlässige SG-Werte | D2: runForward() pro Iteration |
+| **START PARCOUR** | Lief mit falschem Zentrum | D1: cal[0].valid=true, aber Wert falsch |
 
 ---
 
 ## Stand der Quelldateien beim Übergeben
 
-> **Wichtig:** Es gibt ein Problem mit dem Code-Formatter in dieser Entwicklungsumgebung.
-> Der Formatter hat `MotorControl.cpp` während der Session **mehrfach auf einen vereinfachten Stand zurückgesetzt**.
-> Das fertig kompilierte Binary `firmware_v3_3.4.0_20260324_130632.bin` enthält **alle Fixes korrekt** —
-> es wurde vor dem letzten Formatter-Eingriff erfolgreich gebaut.
+### Aktueller Zustand (v3.5.4, unkompromittiert)
 
-### Aktueller Zustand `MotorControl.cpp` (nach letztem Formatter-Eingriff)
-
-Der Formatter hat folgende **Regression** eingebracht:
-- `runSpeedTest()` ist auf 300–800 RPM vereinfacht, keine Tacho-Validierung, `move(6400)` bleibt
-- `learnSGProfile()` fehlt komplett
-- `characterizeSensor()` fehlt
-- `runCoastTest()` / `runInertiaTest()` fehlen
-- `applyDriverSettings()` / `activeCurrent()` fehlen
-- NVS-Versionsschutz entfernt (Key-Format rückwärts-inkompatibel)
-- CSV-Header auf 10 Spalten reduziert (Telemetry Viewer erwartet 14)
-
-**Was der Formatter gut hinzugefügt hat** (behalten!):
-```cpp
-volatile long lastSensorPos = -1;
-volatile bool sensorHit = false;
-
-void IRAM_ATTR tachoISR() {
-    if (digitalRead(TACHO_PIN) == LOW) {
-        lastSensorPos = steppers[0]->currentPosition();
-        sensorHit = true;
-    }
-}
-// + attachInterrupt(...) in initMotors()
-```
-Der ISR-Ansatz ist besser als Polling — Flanken werden nicht verpasst, Timing ist exakt.
+- `v3/src/MotorControl.h`: `FW_VERSION "3.5.4"`
+- `v3/src/MotorControl.cpp`: D1 + D2 gefixt
+- `build_flash_v3.py`: `VERSION = "3.5.4"`
+- `v3/LAUFANALYSE.md`: v3.5.2, v3.5.3, v3.5.4 dokumentiert
+- `v3/BUG_REPORT_V3.md`: Alle Bugs A1–D2 dokumentiert
 
 ### Was als nächstes getan werden muss
 
-**Schritt 1 — Sofort:** Binary flashen und testen
+**Schritt 1 — Binary flashen:**
 
 ```
 python build_flash_v3.py ota
 ```
 
-Binary: `v3/firmware_v3_3.4.0_20260324_130632.bin`
+Binary: `v3/firmware_v3_3.5.4_20260324_181741.bin`
 
-Testsequenz:
-1. `CALIB SENSOR` → Position lernen
-2. `LEARN SG PROFILE` → Log prüfen: SG-Werte sollten jetzt > 20 sein (nicht mehr 0–6)
-3. `START PARCOUR` → Log prüfen: `Ist=XXX Soll=YYY (ZZ%)` statt `Try 3200 RPM`
-4. Telemetrie herunterladen → `python fetch_tele.py`
+**Testsequenz nach Flash:**
 
-**Schritt 2 — MotorControl.cpp wiederherstellen**
+1. `CALIB SENSOR` → triggerCenter prüfen (Logausgabe)
+2. `HOME MOTOR` → Motor muss zur korrekten 0°-Position fahren
+3. `SG-LEARN` → Log: SG-Werte sollten gleichmäßig und > 20 sein (kein Jitter)
+4. `START PARCOUR` → Läuft durch, kein Motor-Drift durch falsches Zentrum
+5. Telemetrie: `python fetch_tele.py`
 
-Die v3.4.0 Logik muss neu in `MotorControl.cpp` geschrieben werden, **mit tachoISR aus Formatter-Version integriert**. Kern-Funktionen die fehlen:
+**Schritt 2 — Nach erstem validen Lauf:**
 
-```
-applyDriverSettings(uint16_t runMA)
-activeCurrent(int i)
-measureActualRpm(float cmdSps, unsigned long windowMs)  ← neu
-learnSGProfile(int i)    ← SpreadCycle, RPM-Punkte 100-400
-runSpeedTest(int i)      ← measureActualRpm statt pos%3200
-runInertiaTest(int i)
-runCoastTest(int i)
-characterizeSensor(int i)
-setMotorDynamics(float, float)
-emergencyStop()
-```
-
-NVS-Versionsschutz:
-```cpp
-String key = "m" + String(i) + "_" + String(sizeof(CalibrationData));
-// nicht: "m" + String(i)  (kein Größencheck → Garbage bei Struct-Änderung)
-```
-
-**Schritt 3 — Nach erstem validen Lauf**
-
-Wenn Parcour läuft und Telemetrie sinnvoll:
 - SG_RESULT vergleichen (Ziel: > 50 in SPEED-Phase)
-- maxRpm aus Lauf notieren (erwartbar: ~440 RPM wie v3.2.0)
-- Falls SG < 20: Motor hat intrinsisch niedrige SG-Werte (1,29 mH Induktivität) → SGTHRS-Stall-Erkennung ist für diesen Motor unzuverlässig, lieber abschalten
+- maxRpm notieren (erwartet: ~440 RPM)
+- Falls SG < 20: SGTHRS-Stall-Erkennung für diesen Motor deaktivieren (1,29 mH zu schwach)
+
+---
+
+## Datei-Referenz
+
+| Datei | FW | Datum | Besonderheit |
+|-------|----|-------|--------------|
+| `v3/tele/parcour_183755.csv` | 3.2.0 | 2026-03-24 | Baseline, SpreadCycle, SG 2–46 |
+| `v3/tele/parcour_151061.csv` | 3.3.0 | 2026-03-24 | SGTHRS-Problem, 211 Stall-Events |
+| `v3/firmware_v3_3.5.4_*.bin` | 3.5.4 | 2026-03-24 | D1+D2 gefixt, **noch nicht geflasht** |
 
 ---
 
@@ -193,19 +118,8 @@ Wenn Parcour läuft und Telemetrie sinnvoll:
 
 | Metrik | Bisheriger Ist-Wert | Ziel |
 |--------|---------------------|------|
-| Max RPM (stabil) | 300–440 RPM | > 440 RPM (nach Fix) |
+| Max RPM (stabil) | 300–440 RPM | > 440 RPM |
 | SG_RESULT (SPEED) | 0–46 | > 50 (SpreadCycle) |
 | Stall-Events/Lauf | 19–211 | < 10 |
 | cs_actual | 18–26 | 25–32 |
-| Log bei RPM-Test | „Try 3200 RPM" | „Ist=440 Soll=440 (100%)" |
-
----
-
-## Datei-Referenz
-
-| Datei | FW | Datum | Besonderheit |
-|-------|----|-------|-------------|
-| `v3/tele/parcour_183755.csv` | 3.2.0 | 2026-03-24 | Baseline, SpreadCycle, SG 2–46 |
-| `v3/tele/parcour_151061.csv` | 3.3.0 | 2026-03-24 | SGTHRS-Problem, 211 Stall-Events |
-| `v3/tele/parcour_393983.csv` | 3.3.0 | 2026-03-24 | Kurzlauf, abgebrochen |
-| `v3/firmware_v3_3.4.0_*.bin` | 3.4.0 | 2026-03-24 | Alle Bugs gefixt, **noch nicht geflasht** |
+| HOME-Position | falsch (v3.5.3) | korrekt (v3.5.4) |
