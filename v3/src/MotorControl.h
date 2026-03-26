@@ -6,7 +6,7 @@
 #include <FastAccelStepper.h> // New: Hardware-Timer Stepper
 
 // --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.6.9"
+#define FW_VERSION "3.6.10"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
@@ -62,10 +62,11 @@ struct CalibrationData {
 };
 
 struct ParcourConfig {
-    bool doSpeed = true;
-    bool doFine  = true;
-    bool doAccel = true;
-    bool doCoast = true;
+    bool doSpeed    = true;
+    bool doFine     = true;
+    bool doAccel    = true;
+    bool doCoast    = true;
+    bool doKatapult = false;
 };
 
 struct SystemState {
@@ -82,6 +83,7 @@ struct SystemState {
     volatile int pendingLearn    = -1;
     volatile int pendingPower    = -1;
     volatile int pendingKatapult = -1;
+    volatile int pendingShow     = -1;
     volatile bool pendingStop    = false;
 };
 
@@ -104,6 +106,7 @@ void runCoastTest(int i);
 void runSpeedTest(int i);
 void runInertiaTest(int i);
 void runKatapult(int i);
+void runPerformanceShow(int i);
 void setMotorPower(int i, bool on);
 void setMicrosteps(uint16_t ms);
 void addLog(String msg);

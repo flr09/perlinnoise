@@ -115,9 +115,10 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="tog" id="tog_speed" onclick="toggle('speed')">SPEED-TEST</div>
         <div class="tog" id="tog_accel" onclick="toggle('accel')">TRÄGHEIT</div>
         <div class="tog" id="tog_coast" onclick="toggle('coast')">COAST-TEST</div>
+        <div class="tog off" id="tog_katapult" onclick="toggle('katapult')">KATAPULT</div>
       </div>
       <button class="btn test" onclick="cmd('test', 0)" style="margin-top:15px;">START PARCOUR</button>
-      <button class="btn" onclick="cmd('katapult', 0)" style="margin-top:8px; background:#b71c1c; border-color:#b71c1c;">KATAPULT (A:Hunt / B:Launch / C:Ghost)</button>
+      <button class="btn" onclick="cmd('show', 0)" style="margin-top:8px; background:#6a1b9a; border-color:#7b1fa2; font-weight:bold;">&#9733; VORFÜHRMODUS</button>
     </div>
 
     <button class="btn stop" onclick="cmd('stop', 0)">EMERGENCY STOP</button>
@@ -125,12 +126,12 @@ const char index_html[] PROGMEM = R"rawliteral(
   </div>
 
   <script>
-    const cfg = { speed:1, accel:1, coast:1 };
+    const cfg = { speed:1, accel:1, coast:1, katapult:0 };
     function toggle(k) { cfg[k]=cfg[k]?0:1; document.getElementById('tog_'+k).classList.toggle('off', !cfg[k]); }
-    function cmd(a, m) { 
+    function cmd(a, m) {
         let url = `/cmd?a=${a}&m=${m}`;
-        if(a==='test') url += `&speed=${cfg.speed}&accel=${cfg.accel}&coast=${cfg.coast}`;
-        fetch(url); 
+        if(a==='test') url += `&speed=${cfg.speed}&accel=${cfg.accel}&coast=${cfg.coast}&katapult=${cfg.katapult}`;
+        fetch(url);
     }
     function addLog(msg) {
       const log = document.getElementById('log');
@@ -172,11 +173,16 @@ void TaskCore1(void * pvParameters) {
         if (sys.pendingTest    != -1) {
             int m = sys.pendingTest; sys.pendingTest = -1;
             clearTelemetry();
-            if (sys.parcour.doSpeed) runSpeedTest(m);
-            if (sys.parcour.doAccel) runInertiaTest(m);
-            if (sys.parcour.doCoast) runCoastTest(m);
+            if (sys.parcour.doSpeed)    runSpeedTest(m);
+            if (sys.parcour.doAccel)    runInertiaTest(m);
+            if (sys.parcour.doCoast)    runCoastTest(m);
+            if (sys.parcour.doKatapult) runKatapult(m);
         }
-        if (sys.pendingKatapult != -1) { int m = sys.pendingKatapult; sys.pendingKatapult = -1; runKatapult(m); }
+        if (sys.pendingKatapult != -1) {
+            int m = sys.pendingKatapult; sys.pendingKatapult = -1;
+            clearTelemetry(); runKatapult(m);     // standalone: clear first
+        }
+        if (sys.pendingShow != -1) { int m = sys.pendingShow; sys.pendingShow = -1; runPerformanceShow(m); }
         updateMotors();
         yield();
     }
@@ -217,12 +223,14 @@ void setup() {
         else if(a=="cal") sys.pendingCalib = m;
         else if(a=="learn") sys.pendingLearn = m;
         else if(a=="test") {
-            sys.parcour.doSpeed = !r->hasParam("speed") || r->getParam("speed")->value() == "1";
-            sys.parcour.doAccel = !r->hasParam("accel") || r->getParam("accel")->value() == "1";
-            sys.parcour.doCoast = !r->hasParam("coast") || r->getParam("coast")->value() == "1";
+            sys.parcour.doSpeed    = !r->hasParam("speed")    || r->getParam("speed")->value()    == "1";
+            sys.parcour.doAccel    = !r->hasParam("accel")    || r->getParam("accel")->value()    == "1";
+            sys.parcour.doCoast    = !r->hasParam("coast")    || r->getParam("coast")->value()    == "1";
+            sys.parcour.doKatapult =  r->hasParam("katapult") && r->getParam("katapult")->value() == "1";
             sys.pendingTest = m;
         }
         else if(a=="katapult") sys.pendingKatapult = m;
+        else if(a=="show")     sys.pendingShow     = m;
         else if(a=="stop") { sys.pendingStop = true; sys.pendingPower = 0; }
         r->send(200, "text/plain", "OK");
     });

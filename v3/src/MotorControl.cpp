@@ -428,6 +428,8 @@ void runSpeedTest(int i) {
     }
     stepper->setAcceleration(2000); // restore homeMotor default
     setMicrosteps(64);
+    // Fix 4: restore driver settings so values are active without re-power
+    applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
 }
 
 void runInertiaTest(int i) {
@@ -448,6 +450,7 @@ void runInertiaTest(int i) {
     }
     sys.cal[0].maxAccel = acc - 2000; saveCalibration(0);
     setMicrosteps(64);
+    applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
 }
 
 void runCoastTest(int i) {
@@ -463,13 +466,14 @@ void runCoastTest(int i) {
     stepper->stopMove(); // B3: must stop or subsequent setMicrosteps is blocked
     addLog("Pulses: " + String(getPulseCount()));
     setMicrosteps(64);
+    applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
 }
 
 void runKatapult(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
     addLog("=== KATAPULT ===");
-    clearTelemetry();
+    // clearTelemetry() is called by the caller (TaskCore1 standalone) or by the parcour sequence
 
     // ===== PHASE A: Stall-Hunt per MS level =====
     addLog("--- A: Stall-Hunt ---");
@@ -486,9 +490,10 @@ void runKatapult(int i) {
         uint16_t ms = msLevels[li];
         stepper->stopMove(); while (stepper->isRunning()) { yield(); }
         setMicrosteps(ms);
-        float testRpm = 200.0f;
+        // Fix 3: StallGuard unreliable below TCOOLTHRS (~600 RPM); start hunt above that
+        float testRpm = 600.0f;
         bool done = false;
-        Serial.printf("[KAT-A] MS=%d\n", ms);
+        Serial.printf("[KAT-A] MS=%d (hunt from %.0f RPM)\n", ms, testRpm);
         while (testRpm <= 2500.0f && !done) {
             float tgtSps = rpmToSps(testRpm);
             stepper->setSpeedInHz((uint32_t)tgtSps);
@@ -502,9 +507,10 @@ void runKatapult(int i) {
             delay(80); // brief SG settle
             uint16_t sg = tCache.sg;
             float actualRpm = spsToRpm(stepper->getCurrentSpeedInMilliHz() / 1000.0f);
-            Serial.printf("[KAT-A] MS=%d RPM=%.0f SG=%d\n", ms, actualRpm, sg);
+            Serial.printf("[KAT-A] MS=%d RPM=%.0f SG=%d cs=%d\n", ms, actualRpm, sg, tCache.cs);
             recordTelemetry("HUNT", actualRpm);
-            if (sg < 20) {
+            // Fix 3: only trust SG when cs_actual > 0 (real current flowing)
+            if (tCache.cs > 0 && sg < 20) {
                 done = true;
                 addLog("A: MS=" + String(ms) + " lim=" + String(actualRpm,0) + " RPM SG=" + String(sg));
             } else {
@@ -517,7 +523,12 @@ void runKatapult(int i) {
         if (msMaxRpm[li] > bestAbsRpm) { bestAbsRpm = msMaxRpm[li]; bestMs = ms; }
         Serial.printf("[KAT-A] MS=%d max=%.0f RPM\n", ms, msMaxRpm[li]);
     }
-    if (bestAbsRpm < 200.0f) { bestMs = 16; bestAbsRpm = 2000.0f; } // fallback
+    // Fix 2: use learned maxRpm as fallback, not hardcoded 2000
+    if (bestAbsRpm < 200.0f) {
+        bestMs = 16;
+        bestAbsRpm = sys.cal[0].maxRpm > 600.0f ? sys.cal[0].maxRpm : 2000.0f;
+        addLog("A: Fallback -> " + String(bestAbsRpm,0) + " RPM (aus Cal)");
+    }
     addLog("A: bestMS=" + String(bestMs) + " @" + String(bestAbsRpm,0) + " RPM");
 
     // ===== PHASE B: 3×CW + 3×CCW full-load launch =====
@@ -608,6 +619,95 @@ void runKatapult(int i) {
     setMicrosteps(64); // set MS first so applyDriverSettings gets correct stepsPerRev
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
     addLog("=== KATAPULT DONE ===");
+}
+
+void runPerformanceShow(int i) {
+    if (i != 0) return;
+    setMotorPower(0, true);
+    addLog("=== VORFÜHRUNG ===");
+
+    // All vars declared before any potential goto
+    uint16_t runMA   = sys.cal[0].learnedCurrentMA > 0  ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT;
+    float    maxRpm  = sys.cal[0].maxRpm   > 600.0f     ? sys.cal[0].maxRpm            : 2000.0f;
+    float    maxAcc  = sys.cal[0].maxAccel > 1000.0f    ? sys.cal[0].maxAccel           : 100000.0f;
+    uint16_t silentMA = (uint16_t)(runMA / 2 > 150 ? runMA / 2 : 150);
+
+    // --- 1/4: SILENT — StealthChop, halber Strom, sehr langsam ---
+    addLog("[1/4] Silent @150 RPM StealthChop " + String(silentMA) + "mA");
+    setMicrosteps(16);
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.toff(5); driverX.en_spreadCycle(false);
+        driverX.TPWMTHRS(0);            // Force StealthChop at all speeds
+        driverX.rms_current(silentMA);
+        driverX.pwm_autoscale(true); xSemaphoreGive(uartMutex);
+    }
+    stepper->setSpeedInHz((uint32_t)rpmToSps(150.0f));
+    stepper->setAcceleration(2000);
+    stepper->move((long)(stepsPerRev * 3));
+    while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
+    delay(400);
+    stepper->move(-(long)(stepsPerRev * 3));
+    while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
+    delay(600);
+
+    // --- 2/4: AGILITY — SpreadCycle, gelernte Maximalwerte, schnelle Bursts ---
+    addLog("[2/4] Agility @" + String(maxRpm,0) + " RPM  a=" + String(maxAcc/1000.0f,0) + "k sps²");
+    applyDriverSettings(runMA);
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
+    }
+    stepper->setSpeedInHz((uint32_t)rpmToSps(maxRpm));
+    stepper->setAcceleration((uint32_t)maxAcc);
+    for (int run = 0; run < 3; run++) {
+        addLog("  Burst " + String(run+1) + "/3  CW");
+        stepper->move((long)(stepsPerRev * 4));
+        while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
+        delay(80);
+        addLog("  Burst " + String(run+1) + "/3  CCW");
+        stepper->move(-(long)(stepsPerRev * 4));
+        while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
+        delay(80);
+    }
+    delay(400);
+
+    // --- 3/4: PRECISION — 4×90° Schritte, Winkelpunkte im UI leuchten auf ---
+    addLog("[3/4] Precision: 4×90° (StealthChop)");
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(false);
+        driverX.TPWMTHRS(rpmToTpwmthrs(100));
+        driverX.rms_current(runMA); xSemaphoreGive(uartMutex);
+    }
+    stepper->setSpeedInHz((uint32_t)rpmToSps(300.0f));
+    stepper->setAcceleration(8000);
+    for (int step = 0; step < 4; step++) {
+        stepper->move((long)(stepsPerRev / 4));   // genau +90°
+        while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
+        delay(900);                                // Pause: UI-Dot leuchtet auf
+    }
+    delay(300);
+
+    // --- 4/4: GHOST FINALE — Flüstermodus 150 mA ---
+    addLog("[4/4] Ghost @250 RPM  150 mA  StealthChop");
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.toff(5); driverX.en_spreadCycle(false);
+        driverX.TPWMTHRS(0);
+        driverX.rms_current(150); driverX.pwm_autoscale(true); xSemaphoreGive(uartMutex);
+    }
+    stepper->setSpeedInHz((uint32_t)rpmToSps(250.0f));
+    stepper->setAcceleration(2000);
+    stepper->move((long)(stepsPerRev * 2));
+    while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
+    delay(500);
+
+cleanup:
+    stepper->stopMove();
+    sys.pendingStop = false;
+    setMicrosteps(64);
+    applyDriverSettings(runMA);
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
+    }
+    addLog("=== VORFÜHRUNG DONE ===");
 }
 
 void updateMotors() {
