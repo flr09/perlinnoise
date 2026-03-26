@@ -286,6 +286,9 @@ void gotoCardinal() {
 // --- HOMING ---
 // Requires valid calibration. triggerStart stores the step offset from center where
 // the sensor turns ON in CW direction (negative value). Center = 0°.
+// v3.6.14: all stopMove() calls followed by while(isRunning()) — motor must be fully
+// stopped before setCurrentPosition() or the next run command. PCNT ISR captures the
+// exact sensor ON-edge so overshoot can be corrected in the position declaration.
 void homeMotor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
@@ -299,37 +302,65 @@ void homeMotor(int i) {
     stepper->setSpeedInHz(1200);
     stepper->runForward();
     if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 1.5f), 15000)) {
-        addLog("Err: Sensor nicht gefunden"); stepper->stopMove(); return;
+        addLog("Err: Sensor nicht gefunden");
+        stepper->stopMove();
+        while (stepper->isRunning()) { yield(); }
+        return;
     }
     stepper->stopMove();
-    // Back off CCW past sensor, then approach CW slowly for precision
-    stepper->setSpeedInHz(400); stepper->runBackward();
+    while (stepper->isRunning()) { yield(); }  // H4: warten bis Motor vollständig steht
+    // Back off CCW past sensor
+    stepper->setSpeedInHz(400);
+    stepper->runBackward();
     waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.3f), 3000);
     stepper->stopMove();
-    stepper->setSpeedInHz(200); stepper->runForward();
-    waitForSensorTimed(LOW, (long)(stepsPerRev * 0.5f), 5000);
-    stepper->stopMove();
-    // Position at sensor ON-edge (CW) = triggerStart offset from center
-    if (sys.cal[0].valid) {
-        stepper->setCurrentPosition(sys.cal[0].triggerStart);
-        stepper->moveTo(0); // → Center = 0°
+    while (stepper->isRunning()) { yield(); }  // H4: warten bis Motor vollständig steht
+
+    // PCNT sync vor Präzisions-Anfahrt — identisch mit characterizeSensor P2
+    pcnt_counter_pause(PCNT_UNIT_0);
+    pcnt_counter_clear(PCNT_UNIT_0);
+    pcnt_counter_resume(PCNT_UNIT_0);
+    pcntStepperBase = stepper->getCurrentPosition();
+    sensorHit = false;
+
+    // Slow CW precision approach — ISR captures exact ON-edge via PCNT register
+    stepper->setSpeedInHz(200);
+    stepper->runForward();
+    if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 0.5f), 5000)) {
+        addLog("Err: Sensor (langsam CW) nicht gefunden");
+        stepper->stopMove();
         while (stepper->isRunning()) { yield(); }
+        return;
+    }
+    long sCW_abs = (long)lastSensorRaw + pcntStepperBase;  // ISR-erfasste Einschaltposition
+    stepper->stopMove();
+    while (stepper->isRunning()) { yield(); }  // H4: Motor steht — setCurrentPosition erst jetzt sicher
+
+    if (sys.cal[0].valid) {
+        // Motor steht bei curPos; Sensor schaltete bei sCW_abs (ISR-präzise).
+        // Überschuss nach dem Sensor = curPos - sCW_abs.
+        // Position neu deklarieren: sCW_abs := triggerStart, curPos := triggerStart + Überschuss
+        long curPos   = stepper->getCurrentPosition();
+        long overshot = curPos - sCW_abs;
+        stepper->setCurrentPosition(sys.cal[0].triggerStart + overshot);
+        stepper->moveTo(0);  // → Sensormitte = 0°
+        while (stepper->isRunning()) { yield(); }
+        addLog("Home @0° (sCW=" + String(sCW_abs) + " over=" + String(overshot) + ")");
     } else {
         stepper->setCurrentPosition(0);
+        addLog("Home @0° (keine Cal — Sensor-ON als 0)");
     }
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
     }
     setMicrosteps(64);
-    // TPWMTHRS/TCOOLTHRS were computed at 64MS during setMotorPower() → re-apply now
-    // that stepsPerRev is back at 12800 so thresholds are correct.
+    // TPWMTHRS/TCOOLTHRS werden mit stepsPerRev=12800 (64MS) korrekt neu berechnet
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
-    addLog("Home @0°");
 }
 
 // --- SENSOR CHARACTERIZATION ---
 // Procedure:
-//   P1: CCW 200sps until sensor (approaches from left)
+//   P1: CCW 500sps until sensor (approaches from left — fast, just need to pass it)
 //   P2: CW 200sps until sensor LOW  (consistent CW approach)
 //   P3: Continue CW at 20sps through sensor → record ON (sCW) and OFF (eCW) steps
 // Center = (sCW+eCW)/2 → declared as position 0 (0°)
@@ -345,9 +376,9 @@ void characterizeSensor(int i) {
     }
     stepper->setAcceleration(2000);
 
-    // --- P1: CCW 200sps bis Sensor LOW — stellt sicher, wir sind links vom Sensor ---
-    addLog("P1: CCW 200sps...");
-    stepper->setSpeedInHz(200);
+    // --- P1: CCW 500sps bis Sensor LOW — stellt sicher, wir sind links vom Sensor ---
+    addLog("P1: CCW 500sps...");
+    stepper->setSpeedInHz(500);
     stepper->runBackward();
     if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 1.5f), 25000)) {
         addLog("Err: kein Sensor (CCW)"); stepper->stopMove(); return;
