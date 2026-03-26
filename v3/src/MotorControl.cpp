@@ -1,120 +1,10 @@
 #include "MotorControl.h"
 #include <Preferences.h>
-#include "driver/pcnt.h"   // ESP32 hardware pulse counter — ISR-safe position capture
 
 Preferences prefs;
 SystemState sys;
 portMUX_TYPE motorMux = portMUX_INITIALIZER_UNLOCKED;
 SemaphoreHandle_t uartMutex = NULL; // created in initMotors() — FreeRTOS heap not ready at global ctor time
-
-TMC2209Stepper driverX(&SERIAL_PORT, R_SENSE, 1);
-TMC2209Stepper driverY(&SERIAL_PORT, R_SENSE, 3);
-TMC2209Stepper driverZ(&SERIAL_PORT, R_SENSE, 0);
-TMC2209Stepper driverE(&SERIAL_PORT, R_SENSE, 2);
-
-FastAccelStepperEngine engine = FastAccelStepperEngine();
-FastAccelStepper *stepper = NULL;
-
-uint16_t currentMicrosteps = 64;
-uint16_t stepsPerRev = 12800;
-
-float rpmToSps(float rpm)  { return (rpm * (float)stepsPerRev) / 60.0f; }
-float spsToRpm(float sps)  { return (sps * 60.0f) / (float)stepsPerRev; }
-
-uint32_t rpmToTpwmthrs(float rpm) {
-    float usps = rpm * (float)stepsPerRev / 60.0f;
-    return (usps < 1.0f) ? 0xFFFFF : (uint32_t)(12000000.0f / usps);
-}
-
-// --- ATOMIC ISR ---
-volatile uint32_t pulseCount = 0;
-
-// PCNT-based edge capture: ISR stores the hardware counter value at the exact
-// moment the sensor fires — no getCurrentPosition() call needed (not ISR-safe)
-volatile int16_t lastSensorRaw = 0;   // raw PCNT value at last edge (16-bit signed)
-volatile bool    sensorHit     = false;
-long             pcntStepperBase = 0; // stepper position when PCNT was last cleared
-
-// Tacho RPM tracking: period between consecutive LOW edges (one per revolution)
-volatile unsigned long tachoPeriodMs = 0;
-volatile unsigned long lastTachoLowMs = 0;
-
-void IRAM_ATTR tachoISR() {
-    // Direct hardware register read — no function call, no Flash access, truly ISR-safe.
-    // pcnt_get_counter_value() is NOT IRAM_ATTR in ESP-IDF v4 → Flash fault when cache
-    // is disabled (WiFi init, OTA). PCNT peripheral registers are always accessible.
-    lastSensorRaw = (int16_t)(PCNT.cnt_unit[PCNT_UNIT_0].val & 0xFFFF);
-    sensorHit = true;
-    if (digitalRead(TACHO_PIN) == LOW) {
-        pulseCount++;
-        // millis() is ARDUINO_ISR_ATTR in ESP32 Arduino — safe to call from ISR
-        unsigned long now = millis();
-        if (lastTachoLowMs > 0) {
-            unsigned long p = now - lastTachoLowMs;
-            if (p >= 5) tachoPeriodMs = p;   // ignore bounces / noise < 5 ms apart
-        }
-        lastTachoLowMs = now;
-    }
-}
-
-uint16_t getTachoRpm() {
-    unsigned long period, lastT;
-    portENTER_CRITICAL(&motorMux);
-    period = tachoPeriodMs;
-    lastT  = lastTachoLowMs;
-    portEXIT_CRITICAL(&motorMux);
-    if (period == 0 || millis() - lastT > 2000) return 0;
-    return (uint16_t)min(9999UL, 60000UL / period);
-}
-
-uint32_t getPulseCount() {
-    uint32_t c; portENTER_CRITICAL(&motorMux); c = pulseCount; portEXIT_CRITICAL(&motorMux);
-    return c;
-}
-
-// --- TELEMETRY CACHE ---
-struct TelemCache { 
-    uint16_t sg=0; uint8_t cs=0; int16_t cur_a=0, cur_b=0;
-    bool stall=false, otpw=false, ot=false, ola=false, olb=false; 
-} tCache;
-
-String telemCSV = "";
-unsigned long telemStart = 0;
-static unsigned long lastTelemMs = 0;
-
-void clearTelemetry() {
-    telemCSV = "ts_ms,phase,val,pos_steps,spd_sps,real_rpm,sg_result,cs_actual,cur_a,cur_b,stall,otpw,ot,ola,olb\n";
-    telemStart = millis(); lastTelemMs = 0;
-}
-
-void recordTelemetry(const char* phase, float val) {
-    unsigned long now = millis();
-    if (telemCSV.length() > TELEM_MAX_BYTES || now - lastTelemMs < TELEM_INTERVAL_MS) return;
-    lastTelemMs = now;
-    if (!stepper) return;
-    char line[140];
-    snprintf(line, sizeof(line), "%lu,%s,%.0f,%ld,%d,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d\n",
-        now - telemStart, phase, val, stepper->getCurrentPosition(), (int)(stepper->getCurrentSpeedInMilliHz() / 1000),
-        getTachoRpm(),
-        tCache.sg, tCache.cs, tCache.cur_a, tCache.cur_b,
-        tCache.stall, tCache.otpw, tCache.ot, tCache.ola, tCache.olb);
-    telemCSV += line;
-}
-
-void updateTelemCache() {
-    // 100ms: applyDriverSettings writes ~8 UART registers, takes up to 16ms
-    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        tCache.sg = driverX.SG_RESULT();
-        tCache.cs = driverX.cs_actual();
-        uint32_t msc = driverX.MSCURACT();
-        tCache.cur_a = (int16_t)(msc & 0x1FF); if (tCache.cur_a > 255) tCache.cur_a -= 512;
-        tCache.cur_b = (int16_t)((msc >> 16) & 0x1FF); if (tCache.cur_b > 255) tCache.cur_b -= 512;
-        uint32_t ds = driverX.DRV_STATUS();
-        tCache.stall = (ds & 0x1); tCache.otpw = driverX.otpw(); tCache.ot = driverX.ot();
-        tCache.ola = (ds >> 30) & 0x1; tCache.olb = (ds >> 31) & 0x1;
-        xSemaphoreGive(uartMutex);
-    }
-}
 
 void addLog(String msg) {
     portENTER_CRITICAL(&motorMux);
@@ -123,54 +13,6 @@ void addLog(String msg) {
     Serial.println(msg);
 }
 
-void applyDriverSettings(uint16_t runMA) {
-    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        float hF = min(0.5f, max(0.22f, 200.0f / (float)runMA));
-        driverX.rms_current(runMA, hF);
-        driverX.microsteps(currentMicrosteps);
-        driverX.iholddelay(10);
-        driverX.SGTHRS(sys.cal[0].sgThrs > 0 ? sys.cal[0].sgThrs : MOTOR_SGTHRS_DEFAULT);
-        driverX.TPWMTHRS(rpmToTpwmthrs(100));
-        driverX.en_spreadCycle(false);
-        driverX.TCOOLTHRS(rpmToTpwmthrs(50));
-        driverX.pwm_autoscale(true);
-        xSemaphoreGive(uartMutex);
-    }
-}
-
-void setMicrosteps(uint16_t ms) {
-    if (ms == currentMicrosteps || (stepper && stepper->isRunning())) return;
-    portENTER_CRITICAL(&motorMux);
-    long oldPos = stepper ? stepper->getCurrentPosition() : 0;
-    float factor = (float)ms / (float)currentMicrosteps;
-    if (stepper) stepper->setCurrentPosition((long)((float)oldPos * factor));
-    currentMicrosteps = ms;
-    stepsPerRev = 200 * ms;
-    portEXIT_CRITICAL(&motorMux);
-    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        driverX.microsteps(ms);
-        xSemaphoreGive(uartMutex);
-    }
-}
-
-void setMotorPower(int i, bool on) {
-    if (i != 0) return;
-    sys.m[i].enabled = on;
-    if (on) {
-        digitalWrite(ENABLE_PIN, LOW); 
-        if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            driverX.toff(5); xSemaphoreGive(uartMutex);
-        }
-        applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
-        addLog("M0 ON");
-    } else {
-        if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-            driverX.toff(0); xSemaphoreGive(uartMutex);
-        }
-        digitalWrite(ENABLE_PIN, HIGH);
-        addLog("M0 OFF");
-    }
-}
 
 void saveCalibration(int i) {
     prefs.begin("cal", false);
@@ -197,62 +39,9 @@ void loadCalibration() {
 
 void initMotors() {
     loadCalibration();
-    SERIAL_PORT.begin(115200, SERIAL_8N1, UART_RX, UART_TX);
-    pinMode(ENABLE_PIN, OUTPUT); digitalWrite(ENABLE_PIN, LOW);
-    
-    uartMutex = xSemaphoreCreateMutex(); // B1: must be created after FreeRTOS heap is ready
-    // --- PCNT: configure BEFORE FastAccelStepper ---
-    // The GPIO matrix has separate input and output paths.
-    // PCNT uses the input path (GPIO → PCNT), RMT uses the output path (RMT → GPIO).
-    // Order matters: pcnt_unit_config() calls gpio_output_disable() which calls
-    // gpio_matrix_out(SIG_GPIO_OUT_IDX) — this would overwrite FAS's RMT routing if
-    // called after. By configuring PCNT first, FAS's stepperConnectToPin() runs last
-    // and sets up RMT routing correctly. PCNT input routing is untouched by FAS.
-    pcnt_config_t pcnt_cfg = {};
-    pcnt_cfg.pulse_gpio_num = X_STEP;
-    pcnt_cfg.ctrl_gpio_num  = X_DIR;
-    pcnt_cfg.pos_mode   = PCNT_COUNT_INC;    // rising edge of STEP → count
-    pcnt_cfg.neg_mode   = PCNT_COUNT_DIS;    // falling edge → ignore
-    pcnt_cfg.lctrl_mode = PCNT_MODE_REVERSE; // DIR LOW (backward) → count down
-    pcnt_cfg.hctrl_mode = PCNT_MODE_KEEP;    // DIR HIGH (forward) → count up
-    pcnt_cfg.counter_h_lim = 32767;
-    pcnt_cfg.counter_l_lim = -32768;
-    pcnt_cfg.unit    = PCNT_UNIT_0;
-    pcnt_cfg.channel = PCNT_CHANNEL_0;
-    pcnt_unit_config(&pcnt_cfg);
-    pcnt_counter_pause(PCNT_UNIT_0);
-    pcnt_counter_clear(PCNT_UNIT_0);
-    pcnt_counter_resume(PCNT_UNIT_0);
-
-    // FAS runs after PCNT — stepperConnectToPin() routes RMT → X_STEP (output path)
-    // and re-enables the output buffer. PCNT input routing for X_STEP is unaffected.
-    engine.init();
-    stepper = engine.stepperConnectToPin(X_STEP);
-    if (stepper) {
-        stepper->setDirectionPin(X_DIR);
-        stepper->setEnablePin(ENABLE_PIN, true);
-        stepper->setAutoEnable(false);
-    }
-
-    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        driverX.begin(); xSemaphoreGive(uartMutex);
-    }
-    setMicrosteps(64);
-    applyDriverSettings(MOTOR_CURRENT_DEFAULT);
-
-    pinMode(TACHO_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(TACHO_PIN), tachoISR, CHANGE);
-}
-
-bool waitForSensorTimed(bool state, long maxSteps, unsigned long timeoutMs) {
-    if (!stepper) return false; // B5: stepper may be NULL if engine init failed
-    unsigned long start = millis();
-    long startPos = stepper->getCurrentPosition();
-    while (digitalRead(TACHO_PIN) != state) {
-        if (millis() - start > timeoutMs || abs(stepper->getCurrentPosition() - startPos) > maxSteps) return false;
-        yield();
-    }
-    return true;
+    uartMutex = xSemaphoreCreateMutex(); // must be created before initDriver() uses it
+    initSensor();   // PCNT must be configured BEFORE FastAccelStepper (see Sensor.cpp)
+    initDriver();   // FAS + TMC2209 init runs after PCNT
 }
 
 // --- CARDINAL ANGLES ---
@@ -452,7 +241,7 @@ void learnSGProfile(int i) {
         while(millis() - start < 2000) {
             if (millis() - lastSG >= 50) {
                 // Use cache — no direct UART read from Core 1
-                sgSum += (float)tCache.sg; samples++;
+                sgSum += (float)telemCacheSG(); samples++;
                 lastSG = millis();
             }
             yield();
@@ -612,12 +401,12 @@ void runKatapult(int i) {
             // 400ms settle: allows tacho to measure 2+ revolutions even at 600 RPM (100ms/rev)
             delay(400);
             uint16_t realRpm   = getTachoRpm();
-            uint16_t sg        = tCache.sg;
+            uint16_t sg        = telemCacheSG();
             float    actualRpm = spsToRpm(stepper->getCurrentSpeedInMilliHz() / 1000.0f);
             bool tachoStall = (realRpm == 0 || (float)realRpm < testRpm * 0.5f);
-            bool sgStall    = (tCache.cs > 0 && sg < 20);
+            bool sgStall    = (telemCacheCS() > 0 && sg < 20);
             Serial.printf("[KAT-A] MS=%d RPM=%.0f tach=%d SG=%d cs=%d tStall=%d\n",
-                          ms, actualRpm, realRpm, sg, tCache.cs, tachoStall);
+                          ms, actualRpm, realRpm, sg, telemCacheCS(), tachoStall);
             recordTelemetry("HUNT", actualRpm);
             if (tachoStall || sgStall) {
                 done = true;
