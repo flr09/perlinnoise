@@ -35,13 +35,12 @@
 #define PARCOUR_RPM_FINE     10.0f
 #endif
 
-// --- FREQUENCY SWEEP ---
-#define FREQ_MIN_HZ          10.0f   // sweep start (Hz)
-#define FREQ_MAX_HZ         200.0f   // sweep end   (Hz)
-#define FREQ_STEP_HZ         10.0f   // linear step (Hz)
-#define FREQ_CYCLES_PER_F       5    // oscillation cycles per frequency step
-#define FREQ_ACCEL_MAX    500000UL   // steps/s² — high-accel / "no ramp" mode
-#define FREQ_AMP_MIN_STEPS      3    // skip frequency if achievable amplitude < this
+// --- FREQUENCY SWEEP (continuous chirp) ---
+#define FREQ_MIN_HZ        10.0f    // sweep start (Hz)
+#define FREQ_MAX_HZ       200.0f    // sweep end   (Hz)
+#define FREQ_SWEEP_S       30.0f    // total sweep duration (seconds)
+#define FREQ_ACCEL_MAX   500000UL   // steps/s² — max accel / no ramp
+#define FREQ_AMP_MIN_STEPS    3     // abort when amplitude falls below this
 
 // --- TELEMETRY ---
 #define TELEM_INTERVAL_MS  50

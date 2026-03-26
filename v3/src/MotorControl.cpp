@@ -656,76 +656,78 @@ cleanup:
     addLog("=== VORFÜHRUNG DONE ===");
 }
 
-// --- FREQUENCY SWEEP ---
-// Oscillates the motor ±amp steps at each target frequency from FREQ_MIN_HZ to FREQ_MAX_HZ.
-// Amplitude is maximised at each frequency using the triangle velocity profile:
-//   th = 1/(2·f)  [half-period]
-//   amp = FREQ_ACCEL_MAX / (16·f²)  [triangle: accel for th/2, decel for th/2]
-// Above the transition frequency where peak velocity would exceed maxSps, the profile
-// becomes trapezoidal and amplitude caps to the sensor range anyway.
-// Frequencies where the achievable amplitude < FREQ_AMP_MIN_STEPS are skipped.
+// --- FREQUENCY SWEEP (continuous chirp) ---
+// Sweeps oscillation frequency from FREQ_MIN_HZ to FREQ_MAX_HZ over FREQ_SWEEP_S seconds.
+// Frequency and amplitude are recalculated from elapsed time before every half-swing —
+// no discrete steps (Gänge), pure chirp.
+//
+// Triangle velocity profile (FREQ_ACCEL_MAX >> any reachable vmax in the time window):
+//   half-period th = 1/(2·f)
+//   amp = FREQ_ACCEL_MAX / (16·f²)     [exact: th = 2·sqrt(amp/a)]
+//   peak_v = sqrt(a·amp)               [capped to cal.maxRpm speed]
+//
+// Sweep ends when f reaches FREQ_MAX_HZ OR amplitude drops below FREQ_AMP_MIN_STEPS.
 void runFreqSweep(int idx) {
     if (!stepper || !sys.cal[idx].valid) {
         addLog("FreqSweep: keine Kalibrierung"); return;
     }
-
     long ampLimit = min(abs(sys.cal[idx].triggerStart), abs(sys.cal[idx].triggerEnd));
     if (ampLimit < FREQ_AMP_MIN_STEPS) { addLog("FreqSweep: calib range zu klein"); return; }
 
-    // Use calibrated max speed; fall back to sys.currentMaxSpd (sps → converted)
     float maxSps = sys.cal[idx].maxRpm > 100.0f
                    ? rpmToSps(sys.cal[idx].maxRpm)
                    : (float)sys.currentMaxSpd;
-    uint32_t accel = FREQ_ACCEL_MAX;
 
     setMicrosteps(64);
     applyDriverSettings(sys.cal[idx].learnedCurrentMA > 0
                         ? sys.cal[idx].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
 
-    addLog("=== FreqSweep " + String(FREQ_MIN_HZ,0) + "-" + String(FREQ_MAX_HZ,0) + " Hz ===");
+    addLog("=== FreqSweep " + String(FREQ_MIN_HZ,0) + "→" + String(FREQ_MAX_HZ,0)
+           + " Hz  " + String(FREQ_SWEEP_S,0) + "s ===");
 
-    // Return to center before sweep
+    // Start from center
     stepper->setSpeedInHz((uint32_t)rpmToSps(600.0f));
     stepper->setAcceleration(20000);
     stepper->moveTo(0);
     while (stepper->isRunning()) { yield(); }
 
-    for (float f = FREQ_MIN_HZ; f <= FREQ_MAX_HZ + 0.1f; f += FREQ_STEP_HZ) {
-        if (sys.pendingStop) break;
+    unsigned long tStart   = millis();
+    float         tDur_ms  = FREQ_SWEEP_S * 1000.0f;
+    int           dir      = 1;
+    float         lastLogF = FREQ_MIN_HZ - 1.0f;
 
-        // Triangle profile: amplitude at target frequency
-        // (nearly always triangle for f >= 1 Hz with these accel values)
-        float amp_f = (float)accel / (16.0f * f * f);
-        long  amp   = (long)min(amp_f * 0.92f, (float)ampLimit); // 8% headroom
-        if (amp < FREQ_AMP_MIN_STEPS) {
-            addLog("FS " + String((int)f) + "Hz skip amp=" + String(amp));
-            continue;
-        }
+    while (!sys.pendingStop) {
+        // Frequency from elapsed time (linear chirp)
+        float elapsed  = (float)(millis() - tStart);
+        float progress = elapsed / tDur_ms;
+        if (progress >= 1.0f) break;
 
-        // Peak velocity in triangle profile at this amplitude
-        float peak_v = sqrtf((float)accel * (float)amp);
-        uint32_t spd = (uint32_t)min(peak_v, maxSps);
+        float f    = FREQ_MIN_HZ + (FREQ_MAX_HZ - FREQ_MIN_HZ) * progress;
+        float amp_f = (float)FREQ_ACCEL_MAX / (16.0f * f * f);
+        long  amp   = (long)min(amp_f * 0.92f, (float)ampLimit);
+        if (amp < FREQ_AMP_MIN_STEPS) break;
+
+        float    peak_v = sqrtf((float)FREQ_ACCEL_MAX * (float)amp);
+        uint32_t spd    = (uint32_t)min(peak_v, maxSps);
         if (spd < 10) spd = 10;
 
         stepper->setSpeedInHz(spd);
-        stepper->setAcceleration(accel);
+        stepper->setAcceleration(FREQ_ACCEL_MAX);
 
-        char tag[10]; snprintf(tag, sizeof(tag), "FS%.0f", f);
-        addLog("FS " + String((int)f) + "Hz  amp=" + String(amp) +
-               "  v=" + String(spd/1000) + "k sps");
-
-        for (int c = 0; c < FREQ_CYCLES_PER_F && !sys.pendingStop; c++) {
-            stepper->moveTo( amp);
-            while (stepper->isRunning()) { recordTelemetry(tag, f); yield(); }
-            stepper->moveTo(-amp);
-            while (stepper->isRunning()) { recordTelemetry(tag, f); yield(); }
+        // Log every ~10 Hz increment (not per half-swing)
+        if (f - lastLogF >= 10.0f) {
+            addLog("FS " + String((int)f) + "Hz  amp=" + String(amp));
+            lastLogF = f;
         }
-        // Return to center between frequency steps
-        stepper->moveTo(0);
-        while (stepper->isRunning()) { yield(); }
+
+        stepper->moveTo(dir * amp);
+        while (stepper->isRunning()) { recordTelemetry("FS", f); yield(); }
+        dir = -dir;
     }
 
     sys.pendingStop = false;
+    stepper->moveTo(0);
+    while (stepper->isRunning()) { yield(); }
     addLog("=== FreqSweep DONE ===");
 }
 
