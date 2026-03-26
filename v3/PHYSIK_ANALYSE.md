@@ -103,8 +103,8 @@ Wechselpunkt: Motor unter ~50 SPS (= fast stehend) → MRES wechseln → neu bes
 | T1 | `runInertiaTest` mit neuem Code (E1-Fix) | Reales a_max messen | 🕒 Ausstehend |
 | T2 | `runCoastTest` bei 2500 RPM | Bremsweg-Basis | 🕒 Ausstehend |
 | T3 | Parcour 200–2500 RPM vollständig | SG-Profil über gesamten Bereich | 🕒 Ausstehend (maxRpm zurücksetzen) |
-| T4 | Microstep-Wechsel bei laufendem Motor | Resonanz/Stall beim Wechsel? | 🕒 Ausstehend |
-| T5 | a_max bei 1MS/4MS (Stall-Grenze) | Physikalisches Limit | 🕒 Ausstehend |
+| T4 | **KATAPULT Phase A** | SG-Stall-Map pro MS-Stufe [32…1] | 🕒 Ausstehend |
+| T5 | **KATAPULT Phase C** | Ghost-Mode: minimaler Strom (StealthChop) | 🕒 Ausstehend |
 
 ---
 
@@ -118,3 +118,43 @@ Beschleunigung:      100.000 sps² (testen — T1)
 Microsteps:          16 MS (aktuell) → 4 MS für schnelle Segmente (T4 erst)
 Bremsrampe:          symmetrisch zur Beschleunigungsrampe
 ```
+
+---
+
+## 6. v3.6.9 — KATAPULT & Fixes (2026-03-26)
+
+### Bug-Fix: Kalibrierung CCW-Rückpass Timeout
+- **Problem:** Nach dem CW-Pass fährt der Motor 0,8 Umdrehungen vorwärts, dann CCW zurück.
+  Bei 400 sps und 3200 Schritten (0,8 rev @ 16MS) dauert das **6,4 Sekunden** — Timeout war 5000 ms → Abbruch vor Sensor.
+- **Fix:** Timeout 5000 ms → **12000 ms** in beiden Präzisionspässen (CW + CCW).
+
+### Tacho-RPM Anzeige
+- ISR misst Zeit zwischen aufeinanderfolgenden LOW-Flanken (= 1 Umdrehung)
+- `getTachoRpm()` gibt 0 zurück wenn Motor >2 Sek. stillsteht
+- Web-UI zeigt RPM-Feld live neben Speed-SPS
+
+### KATAPULT-Modus (3 Phasen)
+```
+Phase A — Stall-Hunt:
+  MS-Stufen [32,16,8,4,2,1] nacheinander
+  Pro Stufe: RPM-Rampe 200→2500 in 200er Schritten (SpreadCycle)
+  Stop wenn SG_RESULT < 20 (Stall-Grenze)
+  → Ergebnis: bestMS + bestRPM für Phase B
+
+Phase B — Full-Load Launch (3×CW + 3×CCW):
+  bestMS aus Phase A, a=100.000 sps², 2 Sek. pro Run
+  Telemetrie: "LAUNCH_CW" / "LAUNCH_CCW"
+
+Phase C — Coast + Ghost Mode:
+  Coast: toff=0 (Motor kraftlos), Tacho misst Auslauf 3 Sek.
+  Ghost: StealthChop (en_spreadCycle=false, TPWMTHRS=0 → immer leise)
+         Strom-Sweep 400→50 mA in 50er Schritten
+         Pro Stufe: 1,5 Sek. bei 400 RPM, Tacho-Verifikation
+         → Minimum Betriebsstrom unter StealthChop
+```
+
+### Ghost-Mode Technik-Detail
+- `TPWMTHRS = 0` erzwingt StealthChop bei **allen** Geschwindigkeiten
+  (Bedingung für SpreadCycle: TSTEP ≤ TPWMTHRS; mit TPWMTHRS=0 niemals erfüllt)
+- `en_spreadCycle(false)` deaktiviert SpreadCycle-Override zusätzlich
+- Minimum-Strom-Verifikation: erwartet ≥70 % der Soll-Umdrehungen (10 rev in 1,5 s @ 400 RPM)

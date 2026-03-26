@@ -6,7 +6,7 @@
 #include <FastAccelStepper.h> // New: Hardware-Timer Stepper
 
 // --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.6.8"
+#define FW_VERSION "3.6.9"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
@@ -76,12 +76,13 @@ struct SystemState {
     ParcourConfig parcour;
     float currentMaxSpd = 4000;
     float currentAccel = 2000;
-    volatile int pendingHome    = -1;
-    volatile int pendingTest    = -1;
-    volatile int pendingCalib   = -1;
-    volatile int pendingLearn   = -1;
-    volatile int pendingPower   = -1;
-    volatile bool pendingStop   = false;
+    volatile int pendingHome     = -1;
+    volatile int pendingTest     = -1;
+    volatile int pendingCalib    = -1;
+    volatile int pendingLearn    = -1;
+    volatile int pendingPower    = -1;
+    volatile int pendingKatapult = -1;
+    volatile bool pendingStop    = false;
 };
 
 extern SystemState sys;
@@ -102,9 +103,15 @@ void learnSGProfile(int i);
 void runCoastTest(int i);
 void runSpeedTest(int i);
 void runInertiaTest(int i);
+void runKatapult(int i);
 void setMotorPower(int i, bool on);
 void setMicrosteps(uint16_t ms);
 void addLog(String msg);
+
+// --- TACHO RPM ---
+extern volatile unsigned long tachoPeriodMs;
+extern volatile unsigned long lastTachoLowMs;
+uint16_t getTachoRpm();
 
 // --- TELEMETRY ---
 #define TELEM_INTERVAL_MS 50

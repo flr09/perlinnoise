@@ -35,13 +35,33 @@ volatile int16_t lastSensorRaw = 0;   // raw PCNT value at last edge (16-bit sig
 volatile bool    sensorHit     = false;
 long             pcntStepperBase = 0; // stepper position when PCNT was last cleared
 
+// Tacho RPM tracking: period between consecutive LOW edges (one per revolution)
+volatile unsigned long tachoPeriodMs = 0;
+volatile unsigned long lastTachoLowMs = 0;
+
 void IRAM_ATTR tachoISR() {
     // Direct hardware register read — no function call, no Flash access, truly ISR-safe.
     // pcnt_get_counter_value() is NOT IRAM_ATTR in ESP-IDF v4 → Flash fault when cache
     // is disabled (WiFi init, OTA). PCNT peripheral registers are always accessible.
     lastSensorRaw = (int16_t)(PCNT.cnt_unit[PCNT_UNIT_0].val & 0xFFFF);
     sensorHit = true;
-    if (digitalRead(TACHO_PIN) == LOW) { pulseCount++; }
+    if (digitalRead(TACHO_PIN) == LOW) {
+        pulseCount++;
+        // millis() is ARDUINO_ISR_ATTR in ESP32 Arduino — safe to call from ISR
+        unsigned long now = millis();
+        if (lastTachoLowMs > 0) tachoPeriodMs = now - lastTachoLowMs;
+        lastTachoLowMs = now;
+    }
+}
+
+uint16_t getTachoRpm() {
+    unsigned long period, lastT;
+    portENTER_CRITICAL(&motorMux);
+    period = tachoPeriodMs;
+    lastT  = lastTachoLowMs;
+    portEXIT_CRITICAL(&motorMux);
+    if (period == 0 || millis() - lastT > 2000) return 0;
+    return (uint16_t)min(9999UL, 60000UL / period);
 }
 
 uint32_t getPulseCount() {
@@ -286,7 +306,7 @@ void characterizeSensor(int i) {
     // --- PHASE 2: CW precision pass ---
     sensorHit = false;
     stepper->setSpeedInHz(400); stepper->runForward();
-    if (!waitForSensorTimed(LOW, stepsPerRev, 5000)) { addLog("Err: CW entry"); stepper->stopMove(); return; }
+    if (!waitForSensorTimed(LOW, stepsPerRev, 12000)) { addLog("Err: CW entry"); stepper->stopMove(); return; }
     long sCW = (long)lastSensorRaw + pcntStepperBase;
 
     sensorHit = false;
@@ -301,7 +321,7 @@ void characterizeSensor(int i) {
     // --- PHASE 3: CCW precision pass ---
     sensorHit = false;
     stepper->setSpeedInHz(400); stepper->runBackward();
-    waitForSensorTimed(LOW, stepsPerRev, 5000);
+    waitForSensorTimed(LOW, stepsPerRev, 12000);
     long eCCW = (long)lastSensorRaw + pcntStepperBase;
 
     sensorHit = false;
@@ -443,6 +463,151 @@ void runCoastTest(int i) {
     stepper->stopMove(); // B3: must stop or subsequent setMicrosteps is blocked
     addLog("Pulses: " + String(getPulseCount()));
     setMicrosteps(64);
+}
+
+void runKatapult(int i) {
+    if (i != 0) return;
+    setMotorPower(0, true);
+    addLog("=== KATAPULT ===");
+    clearTelemetry();
+
+    // ===== PHASE A: Stall-Hunt per MS level =====
+    addLog("--- A: Stall-Hunt ---");
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
+    }
+    stepper->setAcceleration(30000);
+    const uint16_t msLevels[6] = {32, 16, 8, 4, 2, 1};
+    float msMaxRpm[6] = {0};
+    uint16_t bestMs = 16;
+    float bestAbsRpm = 0;
+
+    for (int li = 0; li < 6; li++) {
+        uint16_t ms = msLevels[li];
+        stepper->stopMove(); while (stepper->isRunning()) { yield(); }
+        setMicrosteps(ms);
+        float testRpm = 200.0f;
+        bool done = false;
+        Serial.printf("[KAT-A] MS=%d\n", ms);
+        while (testRpm <= 2500.0f && !done) {
+            float tgtSps = rpmToSps(testRpm);
+            stepper->setSpeedInHz((uint32_t)tgtSps);
+            stepper->runForward();
+            // Wait for motor to reach target speed (30k sps² accel, max 4 sec)
+            unsigned long t0 = millis();
+            while (millis() - t0 < 4000) {
+                if (stepper->getCurrentSpeedInMilliHz() / 1000.0f >= tgtSps * 0.93f) break;
+                yield();
+            }
+            delay(80); // brief SG settle
+            uint16_t sg = tCache.sg;
+            float actualRpm = spsToRpm(stepper->getCurrentSpeedInMilliHz() / 1000.0f);
+            Serial.printf("[KAT-A] MS=%d RPM=%.0f SG=%d\n", ms, actualRpm, sg);
+            recordTelemetry("HUNT", actualRpm);
+            if (sg < 20) {
+                done = true;
+                addLog("A: MS=" + String(ms) + " lim=" + String(actualRpm,0) + " RPM SG=" + String(sg));
+            } else {
+                msMaxRpm[li] = actualRpm;
+                testRpm += 200.0f;
+            }
+        }
+        stepper->stopMove(); while (stepper->isRunning()) { yield(); }
+        if (!done) addLog("A: MS=" + String(ms) + " ok@2500");
+        if (msMaxRpm[li] > bestAbsRpm) { bestAbsRpm = msMaxRpm[li]; bestMs = ms; }
+        Serial.printf("[KAT-A] MS=%d max=%.0f RPM\n", ms, msMaxRpm[li]);
+    }
+    if (bestAbsRpm < 200.0f) { bestMs = 16; bestAbsRpm = 2000.0f; } // fallback
+    addLog("A: bestMS=" + String(bestMs) + " @" + String(bestAbsRpm,0) + " RPM");
+
+    // ===== PHASE B: 3×CW + 3×CCW full-load launch =====
+    addLog("--- B: Launch (MS=" + String(bestMs) + ") ---");
+    stepper->stopMove(); while (stepper->isRunning()) { yield(); }
+    setMicrosteps(bestMs);
+    float launchRpm = min(bestAbsRpm, 2500.0f);
+    if (launchRpm < 500.0f) launchRpm = 2000.0f;
+    stepper->setSpeedInHz((uint32_t)rpmToSps(launchRpm));
+    stepper->setAcceleration(100000);
+    for (int run = 0; run < 3; run++) {
+        addLog("B: CW " + String(run+1) + "/3 @" + String(launchRpm,0) + " RPM");
+        stepper->runForward();
+        unsigned long t0 = millis();
+        while (millis() - t0 < 2000) { recordTelemetry("LAUNCH_CW", launchRpm); yield(); }
+        stepper->stopMove(); while (stepper->isRunning()) { yield(); }
+        delay(150);
+    }
+    for (int run = 0; run < 3; run++) {
+        addLog("B: CCW " + String(run+1) + "/3 @" + String(launchRpm,0) + " RPM");
+        stepper->runBackward();
+        unsigned long t0 = millis();
+        while (millis() - t0 < 2000) { recordTelemetry("LAUNCH_CCW", launchRpm); yield(); }
+        stepper->stopMove(); while (stepper->isRunning()) { yield(); }
+        delay(150);
+    }
+
+    // ===== PHASE C: Coast + Ghost Mode =====
+    addLog("--- C: Coast ---");
+    stepper->setSpeedInHz((uint32_t)rpmToSps(launchRpm));
+    stepper->setAcceleration(30000);
+    stepper->runForward();
+    delay(2000); // spin up to launch speed
+    // Cut motor power — coasts freely under inertia
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.toff(0); xSemaphoreGive(uartMutex);
+    }
+    stepper->stopMove();
+    portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
+    unsigned long coastStart = millis();
+    uint32_t prevP = 0;
+    while (millis() - coastStart < 3000) {
+        delay(250);
+        uint32_t p = getPulseCount();
+        float rpmC = (float)(p - prevP) * (60000.0f / 250.0f);
+        recordTelemetry("COAST", rpmC);
+        Serial.printf("[KAT-C] t=%lums rpm~%.0f\n", millis()-coastStart, rpmC);
+        prevP = p;
+    }
+    addLog("C: coast=" + String(getPulseCount()) + " rev/3s");
+
+    // Ghost mode: StealthChop forced, find minimum working current
+    addLog("--- C: Ghost (StealthChop) ---");
+    stepper->stopMove(); while (stepper->isRunning()) { yield(); }
+    setMicrosteps(16);
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.toff(5);
+        driverX.en_spreadCycle(false);  // StealthChop
+        driverX.TPWMTHRS(0);           // TSTEP always > 0 → always StealthChop
+        driverX.pwm_autoscale(true);
+        xSemaphoreGive(uartMutex);
+    }
+    stepper->setSpeedInHz((uint32_t)rpmToSps(400.0f));
+    stepper->setAcceleration(5000);
+    uint16_t ghostCur = 400;
+    uint16_t minGhostCur = 400;
+    while (ghostCur >= 50) {
+        if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            driverX.rms_current(ghostCur); xSemaphoreGive(uartMutex);
+        }
+        portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
+        stepper->runForward();
+        delay(1500);
+        stepper->stopMove(); while (stepper->isRunning()) { yield(); }
+        uint32_t pulses = getPulseCount();
+        float expected = 400.0f * 1.5f / 60.0f; // ~10 revs in 1.5s at 400 RPM
+        bool ok = (float)pulses >= expected * 0.7f;
+        Serial.printf("[Ghost] %dmA: %lu rev (need>=%.0f) %s\n", ghostCur, (unsigned long)pulses, expected*0.7f, ok?"OK":"FAIL");
+        addLog("Ghost " + String(ghostCur) + "mA: " + String(pulses) + "r " + (ok?"OK":"FAIL"));
+        recordTelemetry("GHOST", ghostCur);
+        if (ok) { minGhostCur = ghostCur; ghostCur -= 50; }
+        else break;
+    }
+    stepper->stopMove();
+    addLog("Ghost min=" + String(minGhostCur) + "mA");
+
+    // Restore normal settings
+    setMicrosteps(64); // set MS first so applyDriverSettings gets correct stepsPerRev
+    applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
+    addLog("=== KATAPULT DONE ===");
 }
 
 void updateMotors() {

@@ -57,9 +57,10 @@ const char index_html[] PROGMEM = R"rawliteral(
           <h2 style="margin:0; color:#ff9800;">MOTOR X</h2>
           <div class="led" id="led0"></div>
         </div>
-        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
             <div>Winkel: <span class="val" id="pos0">0.0</span>°</div>
             <div>Speed: <span class="val" id="spd0">0</span> sps</div>
+            <div>RPM: <span class="val" id="rpm0">0</span></div>
         </div>
         <div class="angle-ring">
           <div class="angle-mark"><div class="dot" id="a90"></div><span>90°</span></div>
@@ -116,6 +117,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="tog" id="tog_coast" onclick="toggle('coast')">COAST-TEST</div>
       </div>
       <button class="btn test" onclick="cmd('test', 0)" style="margin-top:15px;">START PARCOUR</button>
+      <button class="btn" onclick="cmd('katapult', 0)" style="margin-top:8px; background:#b71c1c; border-color:#b71c1c;">KATAPULT (A:Hunt / B:Launch / C:Ghost)</button>
     </div>
 
     <button class="btn stop" onclick="cmd('stop', 0)">EMERGENCY STOP</button>
@@ -147,6 +149,7 @@ const char index_html[] PROGMEM = R"rawliteral(
           const diff = Math.min(Math.abs(deg - t), Math.abs(deg - t + 360), Math.abs(deg - t - 360));
           document.getElementById('a'+t).classList.toggle('active', diff < 8);
         });
+        if(s.rpm !== undefined) document.getElementById('rpm0').innerText = s.rpm;
         document.getElementById('led0').className = s.hit ? 'led hit' : 'led';
         const pBtn = document.getElementById('pwr0');
         pBtn.innerText = s.m[0].e ? 'POWER ON' : 'POWER OFF';
@@ -173,6 +176,7 @@ void TaskCore1(void * pvParameters) {
             if (sys.parcour.doAccel) runInertiaTest(m);
             if (sys.parcour.doCoast) runCoastTest(m);
         }
+        if (sys.pendingKatapult != -1) { int m = sys.pendingKatapult; sys.pendingKatapult = -1; runKatapult(m); }
         updateMotors();
         yield();
     }
@@ -200,7 +204,8 @@ void setup() {
         long sr = (long)stepsPerRev;
         float angleDeg = ((pos % sr + sr) % sr) * 360.0f / sr;
         String j = "{\"hit\":" + String(digitalRead(TACHO_PIN)==LOW?"true":"false");
-        j += ",\"fw\":\"" + String(FW_VERSION) + "\",\"log\":\"" + logData + "\"";
+        j += ",\"fw\":\"" + String(FW_VERSION) + "\",\"rpm\":" + String(getTachoRpm());
+        j += ",\"log\":\"" + logData + "\"";
         j += ",\"m\":[{\"p\":" + String(angleDeg, 1) + ",\"s\":" + String(spd) + ",\"e\":" + String(sys.m[0].enabled?"true":"false") + "}]}";
         r->send(200, "application/json", j);
     });
@@ -217,6 +222,7 @@ void setup() {
             sys.parcour.doCoast = !r->hasParam("coast") || r->getParam("coast")->value() == "1";
             sys.pendingTest = m;
         }
+        else if(a=="katapult") sys.pendingKatapult = m;
         else if(a=="stop") { sys.pendingStop = true; sys.pendingPower = 0; }
         r->send(200, "text/plain", "OK");
     });
