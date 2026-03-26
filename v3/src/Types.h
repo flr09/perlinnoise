@@ -26,6 +26,7 @@ struct ParcourConfig {
     bool doAccel    = true;
     bool doCoast    = true;
     bool doKatapult = false;
+    bool doFreq     = false;
 };
 
 struct SystemState {
@@ -41,9 +42,10 @@ struct SystemState {
     volatile int  pendingCalib    = -1;
     volatile int  pendingLearn    = -1;
     volatile int  pendingPower    = -1;
-    volatile int  pendingKatapult = -1;
-    volatile int  pendingShow     = -1;
-    volatile bool pendingStop     = false;
+    volatile int  pendingKatapult  = -1;
+    volatile int  pendingShow      = -1;
+    volatile int  pendingFreqSweep = -1;
+    volatile bool pendingStop      = false;
 };
 
 // --- Plugin sequence types (Freq / Perlin / Oszy) ---

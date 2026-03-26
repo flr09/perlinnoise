@@ -29,5 +29,6 @@ void runSpeedTest(int i);
 void runInertiaTest(int i);
 void runKatapult(int i);
 void runPerformanceShow(int i);
+void runFreqSweep(int i);
 
 #endif
