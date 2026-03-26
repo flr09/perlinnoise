@@ -284,11 +284,11 @@ void gotoCardinal() {
 }
 
 // --- HOMING ---
-// Requires valid calibration. triggerStart stores the step offset from center where
-// the sensor turns ON in CW direction (negative value). Center = 0°.
-// v3.6.14: all stopMove() calls followed by while(isRunning()) — motor must be fully
-// stopped before setCurrentPosition() or the next run command. PCNT ISR captures the
-// exact sensor ON-edge so overshoot can be corrected in the position declaration.
+// Homing approach (v3.6.17 - Single-Pass Logic):
+// 1. Fast CW search until sensor is hit (A1).
+// 2. Back off CCW to clear sensor.
+// 3. Slow CW precision approach to find A1 again.
+// 4. Use triggerStart (offset from center) to find 0°.
 void homeMotor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
@@ -298,157 +298,129 @@ void homeMotor(int i) {
         driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
     }
     stepper->setAcceleration(2000);
-    // Fast CW search for sensor
+    
+    // Fast CW search
     stepper->setSpeedInHz(1200);
     stepper->runForward();
     if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 1.5f), 15000)) {
         addLog("Err: Sensor nicht gefunden");
-        stepper->stopMove();
-        while (stepper->isRunning()) { yield(); }
+        stepper->stopMove(); while (stepper->isRunning()) { yield(); }
         return;
     }
-    stepper->stopMove();
-    while (stepper->isRunning()) { yield(); }  // H4: warten bis Motor vollständig steht
-    // Back off CCW past sensor
+    stepper->stopMove(); while (stepper->isRunning()) { yield(); }
+    
+    // Back off CCW
     stepper->setSpeedInHz(400);
     stepper->runBackward();
     waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.3f), 3000);
-    stepper->stopMove();
-    while (stepper->isRunning()) { yield(); }  // H4: warten bis Motor vollständig steht
+    stepper->stopMove(); while (stepper->isRunning()) { yield(); }
 
-    // PCNT sync vor Präzisions-Anfahrt — identisch mit characterizeSensor P2
+    // PCNT sync for precision A1
     pcnt_counter_pause(PCNT_UNIT_0);
     pcnt_counter_clear(PCNT_UNIT_0);
     pcnt_counter_resume(PCNT_UNIT_0);
     pcntStepperBase = stepper->getCurrentPosition();
     sensorHit = false;
 
-    // Slow CW precision approach — ISR captures exact ON-edge via PCNT register
+    // Slow CW precision A1
     stepper->setSpeedInHz(200);
     stepper->runForward();
     if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 0.5f), 5000)) {
-        addLog("Err: Sensor (langsam CW) nicht gefunden");
-        stepper->stopMove();
-        while (stepper->isRunning()) { yield(); }
+        addLog("Err: A1-Anfahrt fehlgeschlagen");
+        stepper->stopMove(); while (stepper->isRunning()) { yield(); }
         return;
     }
-    long sCW_abs = (long)lastSensorRaw + pcntStepperBase;  // ISR-erfasste Einschaltposition
-    stepper->stopMove();
-    while (stepper->isRunning()) { yield(); }  // H4: Motor steht — setCurrentPosition erst jetzt sicher
+    long a1_abs = (long)lastSensorRaw + pcntStepperBase;
+    stepper->stopMove(); while (stepper->isRunning()) { yield(); }
 
     if (sys.cal[0].valid) {
-        // Motor steht bei curPos; Sensor schaltete bei sCW_abs (ISR-präzise).
-        // Überschuss nach dem Sensor = curPos - sCW_abs.
-        // Position neu deklarieren: sCW_abs := triggerStart, curPos := triggerStart + Überschuss
-        long curPos   = stepper->getCurrentPosition();
-        long overshot = curPos - sCW_abs;
+        long curPos = stepper->getCurrentPosition();
+        long overshot = curPos - a1_abs;
+        // Position neu deklarieren: a1_abs ist triggerStart (z.B. -25)
         stepper->setCurrentPosition(sys.cal[0].triggerStart + overshot);
-        stepper->moveTo(0);  // → Sensormitte = 0°
+        stepper->moveTo(0); // Fahre zur Sensormitte
         while (stepper->isRunning()) { yield(); }
-        addLog("Home @0° (sCW=" + String(sCW_abs) + " over=" + String(overshot) + ")");
+        addLog("Home @0°");
     } else {
         stepper->setCurrentPosition(0);
-        addLog("Home @0° (keine Cal — Sensor-ON als 0)");
+        addLog("Home (kein Cal)");
     }
+    
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
     }
     setMicrosteps(64);
-    // TPWMTHRS/TCOOLTHRS werden mit stepsPerRev=12800 (64MS) korrekt neu berechnet
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
 }
 
 // --- SENSOR CHARACTERIZATION ---
-// Procedure (v3.6.15):
-//   P0: Falls Sensor bereits aktiv → CW bis inaktiv (clean start außerhalb Sensor)
-//   A1: CW 500sps bis Sensor aktiv   → ISR erfasst Einschalt-Kante
-//   A2: Weiter CW 20sps bis inaktiv  → ISR erfasst Ausschalt-Kante
-//   Center = A1 + (A2-A1)/2 → moveTo(center) → setCurrentPosition(0) = 0°
-//   triggerStart = A1 - center (negativ), triggerEnd = A2 - center (positiv)
-//
-// Bug-History:
-//   v3.6.12/13: P1 CCW → stop → move(+0.5rev CW) → PCNT reset → P2 CW
-//   Der +0.5rev CW nach P1 fuhr WEG vom Sensor (P1 landete auf A1, dann CW=weg).
-//   P2 runForward() von dort fand Sensor nie. Fix: direkte A1→A2 CW-Durchfahrt.
+// Procedure (v3.6.17 - Single-Pass CW):
+// 1. Ensure we start outside sensor (move CCW if active).
+// 2. Approach from left (CW) -> find A1 (ON-edge).
+// 3. Continue CW -> find A2 (OFF-edge).
+// 4. Center = (A1 + A2) / 2.
+// 5. Return to Center and set 0°.
 void characterizeSensor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
     setMicrosteps(16);
-    addLog("Sensor-Kalibrierung...");
+    addLog("Kalibrierung (Single-Pass CW)...");
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
     }
     stepper->setAcceleration(2000);
 
-    // --- P0: Sensor bereits aktiv? → CW bis inaktiv (außerhalb der Sensorzone starten) ---
+    // Vorbereitung: Sicherstellen, dass wir links vom Sensor sind
     if (digitalRead(TACHO_PIN) == LOW) {
-        addLog("P0: Sensor aktiv — CW bis inaktiv...");
-        stepper->setSpeedInHz(500);
-        stepper->runForward();
-        if (!waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.5f), 5000)) {
-            addLog("Err: Sensor verlässt nicht (P0)");
-            stepper->stopMove();
-            while (stepper->isRunning()) { yield(); }
-            return;
-        }
-        stepper->stopMove();
-        while (stepper->isRunning()) { yield(); }
+        stepper->setSpeedInHz(500); stepper->runForward();
+        waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.5f), 5000);
+        stepper->stopMove(); while (stepper->isRunning()) { yield(); }
     }
+    // Etwas weiter CCW fahren für Anlauf
+    stepper->setSpeedInHz(500); stepper->runBackward();
+    waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.3f), 5000);
+    stepper->stopMove(); while (stepper->isRunning()) { yield(); }
 
-    // PCNT sync — max. Weg: 1,5 rev CW bis A1 + Sensorbreite ≪ 32767
     pcnt_counter_pause(PCNT_UNIT_0);
     pcnt_counter_clear(PCNT_UNIT_0);
     pcnt_counter_resume(PCNT_UNIT_0);
-    pcntStepperBase = stepper->getCurrentPosition();
-    sensorHit = false;
-
-    // --- A1: CW 500sps bis Sensor aktiv — ISR erfasst Einschalt-Kante ---
-    addLog("A1: CW 500sps bis Sensor...");
+    pcntStepperBase = stepper ? stepper->getCurrentPosition() : 0;
+    
+    // --- Phase 1: CW 500sps bis A1 ---
+    addLog("Scan: Suche A1...");
     stepper->setSpeedInHz(500);
     stepper->runForward();
     if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 1.5f), 20000)) {
-        addLog("Err: kein Sensor (A1)");
-        stepper->stopMove();
-        while (stepper->isRunning()) { yield(); }
-        return;
+        addLog("Err: A1 nicht gefunden");
+        stepper->stopMove(); return;
     }
-    long sCW = (long)lastSensorRaw + pcntStepperBase;  // A1: ISR-erfasste Einschaltposition
-    addLog("A1=" + String(sCW));
-
-    // Auf Kriechgang abremsen — A2 wird durch ISR unabhängig von Momentangeschwindigkeit erfasst
-    stepper->setSpeedInHz(20);
+    long a1 = (long)lastSensorRaw + pcntStepperBase;
+    
+    // --- Phase 2: Weiter CW 500sps bis A2 ---
+    addLog("Scan: Suche A2...");
     sensorHit = false;
-
-    // --- A2: weiter CW 20sps bis Sensor inaktiv — ISR erfasst Ausschalt-Kante ---
-    addLog("A2: 20sps durch Sensor...");
-    if (!waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.5f), 20000)) {
-        addLog("Err: Sensor verlässt nicht (A2)");
-        stepper->stopMove();
-        while (stepper->isRunning()) { yield(); }
-        return;
+    if (!waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.5f), 10000)) {
+        addLog("Err: A2 nicht gefunden");
+        stepper->stopMove(); return;
     }
-    long eCW = (long)lastSensorRaw + pcntStepperBase;  // A2: ISR-erfasste Ausschaltposition
-    stepper->stopMove();
-    while (stepper->isRunning()) { yield(); }
-    addLog("A2=" + String(eCW));
+    long a2 = (long)lastSensorRaw + pcntStepperBase;
+    stepper->stopMove(); while (stepper->isRunning()) { yield(); }
 
-    if (eCW <= sCW) {
-        addLog("Err: A2<=A1 (" + String(eCW) + "<=" + String(sCW) + ") — Sensor prüfen");
-        return;
-    }
-    long width  = eCW - sCW;
-    long center = sCW + width / 2;
-    float widthDeg = (float)width * 360.0f / (float)stepsPerRev;
-    addLog("Breite=" + String(width) + "steps (" + String(widthDeg, 1) + "°) Center=" + String(center));
+    if (a2 <= a1) { addLog("Err: A2<=A1 — Sensor defekt?"); return; }
 
-    // Offsets relativ zu Center speichern (triggerStart negativ, triggerEnd positiv)
-    sys.cal[0].triggerStart  = sCW - center;   // z.B. -25 steps (A1 ist links von Center)
-    sys.cal[0].triggerCenter = 0;              // Center = 0° per Definition
-    sys.cal[0].triggerEnd    = eCW - center;   // z.B. +25 steps (A2 ist rechts von Center)
+    long width  = a2 - a1;
+    long center = a1 + width / 2;
+    
+    sys.cal[0].triggerStart  = a1 - center; // Offset von Mitte (negativ)
+    sys.cal[0].triggerCenter = 0;           // Mitte ist 0
+    sys.cal[0].triggerEnd    = a2 - center; // Offset von Mitte (positiv)
     sys.cal[0].valid = true;
     saveCalibration(0);
 
-    // Zum Mittelpunkt fahren, als 0° deklarieren
+    addLog("Cal: A1=" + String(a1) + " A2=" + String(a2) + " Mitte=" + String(center));
+    
+    // Zur Mitte fahren und 0° setzen
+    stepper->setSpeedInHz(400);
     stepper->moveTo(center);
     while (stepper->isRunning()) { yield(); }
     stepper->setCurrentPosition(0);
@@ -458,7 +430,7 @@ void characterizeSensor(int i) {
     }
     setMicrosteps(64);
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
-    addLog("Kalibrierung OK — 0° = Sensormitte (" + String(widthDeg, 1) + "° Breite)");
+    addLog("Kalibrierung OK — 0° gesetzt.");
 }
 
 void learnSGProfile(int i) {

@@ -2,7 +2,7 @@
 
 **Hardware:** FYSETC E4 · ESP32 · TMC2209 · NEMA17 (36BYG1204-A-6QHT, Pancake)
 **Sensor:** NPN-Hallsensor an GPIO 15 (TACHO_PIN), Pull-up intern
-**Stand:** 2026-03-26 | aktuell: v3.6.15
+**Stand:** 2026-03-26 | aktuell: v3.7.0
 
 ---
 
@@ -91,33 +91,33 @@ Noise-Filter: nur updaten wenn Periode ≥ 5 ms (eliminiert Bounce).
 - `triggerCenter` = 0 (per Definition)
 - `triggerEnd` = `eCW − center` (positiv, z. B. +25 steps)
 
-### Kalibrierung — characterizeSensor (ab v3.6.15)
+### Kalibrierung — characterizeSensor (ab v3.7.0)
 ```
-  CCW ←─────────────────────────────────── CW →
-                     Motor fährt →→→→→→→
-  ─────────────────┬────SENSOR─────┬──────────
-                  A1 (ON)        A2 (OFF)
-                         ↑
-                      Center = 0°
+  CCW ←──────────────────────────────────────────── CW →
+                              Motor fährt →→→→→→→→→→
+  ──────────┬─── Anlauf ───┬───────SENSOR────┬──────────
+            │  CCW 0.3rev  │   A1(ON)  A2(OFF)│
+            └──────────────┘         ↑
+                                  Center = 0°
 ```
-1. **P0** (optional): Sensor bei Start bereits aktiv → CW bis inaktiv (clean start außerhalb)
-2. PCNT reset — `pcntStepperBase = stepper->getCurrentPosition()`
-3. **A1:** CW 500 sps bis Sensor ON → ISR erfasst `sCW` exakt (Einschaltkante)
-4. Speed auf 20 sps reduzieren (Präzision A2)
-5. **A2:** weiter CW bis Sensor OFF → ISR erfasst `eCW` exakt (Ausschaltkante)
+1. **P0** (wenn nötig): Sensor bereits aktiv → CW bis OFF (aus Sensor herausfahren)
+2. CCW 500 sps, 0.3 rev Anlaufstrecke (reproduzierbarer Startpunkt links von A1)
+3. PCNT reset — `pcntStepperBase = stepper->getCurrentPosition()`
+4. **A1:** CW 500 sps bis Sensor ON → ISR erfasst `a1` exakt
+5. **A2:** CW 500 sps weiter bis Sensor OFF → ISR erfasst `a2` exakt
 6. `stopMove()` + `while(isRunning())`
-7. `center = sCW + (eCW − sCW) / 2` → `moveTo(center)` → `setCurrentPosition(0)`
-8. `triggerStart = sCW − center` (negativ), `triggerEnd = eCW − center` (positiv), `triggerCenter = 0`
+7. `center = a1 + (a2 − a1) / 2` → `setSpeedInHz(400)` → `moveTo(center)` → `setCurrentPosition(0)`
+8. `triggerStart = a1 − center` (negativ), `triggerEnd = a2 − center` (positiv), `triggerCenter = 0`
 
-### Homing — homeMotor (ab v3.6.14)
-1. CW 1200 sps bis Sensor LOW (Schnellsuche)
-2. `stopMove()` + `while(isRunning())` — **Motor vollständig stoppen**
-3. CCW 400 sps bis Sensor HIGH (Sensor verlassen)
+### Homing — homeMotor (ab v3.6.14/v3.7.0)
+1. CW 1200 sps bis Sensor ON — Schnellsuche, max. 1,5 rev
+2. `stopMove()` + `while(isRunning())` — Motor vollständig stoppen
+3. CCW 400 sps bis Sensor OFF — Sensor verlassen
 4. `stopMove()` + `while(isRunning())`
 5. PCNT reset — `pcntStepperBase = stepper->getCurrentPosition()`
-6. CW 200 sps bis Sensor LOW → ISR erfasst `sCW_abs` (exakt wie in Calib A1)
-7. `stopMove()` + `while(isRunning())` — **Motor muss stehen vor setCurrentPosition!**
-8. `overshoot = curPos − sCW_abs`
+6. CW 200 sps bis Sensor ON → ISR erfasst `a1_abs` (exakte Einschaltkante)
+7. `stopMove()` + `while(isRunning())` — **muss vollständig stehen vor setCurrentPosition!**
+8. `overshoot = curPos − a1_abs`
 9. `setCurrentPosition(triggerStart + overshoot)` → `moveTo(0)` → Sensormitte = 0°
 
 ---
@@ -182,7 +182,10 @@ Bei 400 RPM mit TPWMTHRS=0 (erzwungen StealthChop), Strom-Sweep:
 | v3.6.12 | 2026-03-26 | Sensor-Kalibrierung neu (CCW→CW→20sps, Center=0°); `gotoCardinal()`; Tacho-Debounce 5 ms |
 | v3.6.13 | 2026-03-26 | Bugfix H1 (NVS-Inkompatibilität), H2 (P1-Race), H3 (TPWMTHRS nach Home) |
 | v3.6.14 | 2026-03-26 | Bugfix H4 (alle `stopMove()` ohne `while(isRunning())`); PCNT-ISR in homeMotor; P1 500sps |
-| **v3.6.15** | 2026-03-26 | Bugfix C1 (characterizeSensor Fahrtrichtungsfehler): A1→A2 CW-Durchfahrt statt CCW+Wende |
+| v3.6.15 | 2026-03-26 | Bugfix C2 (characterizeSensor Fahrtrichtungsfehler): A1→A2 CW-Durchfahrt statt CCW+Wende |
+| v3.6.16 | 2026-03-26 | characterizeSensor: CCW-Anlauf 0.3 rev vor A1-Suche (reproduzierbarer Startpunkt); A2 auf 500 sps (kein 20sps-Kriechgang) |
+| v3.6.17 | 2026-03-26 | homeMotor: Kommentare und Variablen aufgeräumt (`a1_abs` statt `sCW_abs`); characterizeSensor-Logik finalisiert |
+| ⭐ **v3.7.0** | 2026-03-26 | **MEILENSTEIN** — Calib + Homing vollständig funktionsfähig. Alle bekannten Bugs (H1–H4, C2) geschlossen. |
 
 ---
 
@@ -202,10 +205,11 @@ Bei 400 RPM mit TPWMTHRS=0 (erzwungen StealthChop), Strom-Sweep:
 | H3 | 3.6.13 | 🟡 | TPWMTHRS nach Home falsch | `applyDriverSettings` mit 64MS, dann `setMicrosteps(16)` ohne Neuberechnung | `applyDriverSettings` am Ende von homeMotor |
 | H4 | 3.6.14 | 🔴 | homeMotor fährt falsche Richtung | `stopMove()` ohne `while(isRunning())` → `setCurrentPosition()` während Motor noch läuft | Alle `stopMove()` + wait; PCNT-ISR für exakte Sensorposition |
 | C2 | 3.6.15 | 🔴 | Kalibrierung findet Sensor nie, 0° falsch, Homing falsch | Falsche Fahrtrichtung nach P1 (siehe Abschnitt 6.1) | A1→A2 CW-Durchfahrt, kein CCW-Start |
+| C3 | 3.6.17 | 🟡 | A1-/A2-Fehlerpath: `stopMove()` ohne `while(isRunning())` | Motor läuft nach Fehler-Return noch aus | Bekannt, unkritisch (Funktion bricht ab, Motor decel von selbst) |
 
 ---
 
-### 6.1 Bug C2 — Detailanalyse: Kalibrierung und Homing (v3.6.12–3.6.14)
+### 6.1 Bug C2 — Detailanalyse: Kalibrierung und Homing (v3.6.12–3.6.15)
 
 **Symptom:** Kalibrierung hängt oder setzt 0° an die falsche Position. Homing fährt danach nicht auf 0°.
 
@@ -298,4 +302,4 @@ Der Fahrtrichtungsfehler ist strukturell unmöglich, da der Motor durchgehend CW
 | T1 | runInertiaTest mit a_max >100k sps² | Reale Stall-Grenze bei extremen Rampen |
 | T2 | Microstep-Wechsel 16MS → 4MS während Parcour | Kurzrampen unter 10 Umdrehungen |
 | T3 | Belasteter Welle (Gewicht auf Teller) | Minimum-Strom und max. SG unter Last |
-| T4 | Kalibrierung + Homing nach v3.6.15 verifizieren | A1→A2 korrekt? 0° landet auf Sensormitte? |
+| T4 | Kalibrierung + Homing nach v3.7.0 verifizieren | A1→A2 korrekt? 0° landet auf Sensormitte? Parcour startet/endet sauber? |
