@@ -49,7 +49,10 @@ void IRAM_ATTR tachoISR() {
         pulseCount++;
         // millis() is ARDUINO_ISR_ATTR in ESP32 Arduino — safe to call from ISR
         unsigned long now = millis();
-        if (lastTachoLowMs > 0) tachoPeriodMs = now - lastTachoLowMs;
+        if (lastTachoLowMs > 0) {
+            unsigned long p = now - lastTachoLowMs;
+            if (p >= 5) tachoPeriodMs = p;   // ignore bounces / noise < 5 ms apart
+        }
         lastTachoLowMs = now;
     }
 }
@@ -246,6 +249,37 @@ bool waitForSensorTimed(bool state, long maxSteps, unsigned long timeoutMs) {
     return true;
 }
 
+// --- CARDINAL ANGLES ---
+// Moves to the nearest 0°/90°/180°/270° position (multiples of stepsPerRev/4).
+// Call after setMicrosteps(64) so stepsPerRev=12800 and cardinals are consistent.
+void gotoCardinal() {
+    if (!stepper || !sys.cal[0].valid) return;
+    long pos     = stepper->getCurrentPosition();
+    long rev     = (long)stepsPerRev;
+    long halfRev = rev / 2;
+    long posInRev = pos % rev;
+    if (posInRev < 0) posInRev += rev;
+    long bestDelta = rev;
+    int  bestQ     = 0;
+    for (int q = 0; q < 4; q++) {
+        long card  = (long)q * rev / 4;
+        long delta = posInRev - card;
+        if (delta >  halfRev) delta -= rev;
+        if (delta < -halfRev) delta += rev;
+        if (abs(delta) < abs(bestDelta)) { bestDelta = delta; bestQ = q; }
+    }
+    long target = pos - bestDelta;
+    if (target == pos) return;
+    addLog("→" + String(bestQ * 90) + "° (step " + String(target) + ")");
+    stepper->setSpeedInHz((uint32_t)rpmToSps(300.0f));
+    stepper->setAcceleration(8000);
+    stepper->moveTo(target);
+    while (stepper->isRunning()) { yield(); }
+}
+
+// --- HOMING ---
+// Requires valid calibration. triggerStart stores the step offset from center where
+// the sensor turns ON in CW direction (negative value). Center = 0°.
 void homeMotor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
@@ -254,90 +288,118 @@ void homeMotor(int i) {
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
     }
-    stepper->setSpeedInHz(1200); stepper->setAcceleration(2000);
+    stepper->setAcceleration(2000);
+    // Fast CW search for sensor
+    stepper->setSpeedInHz(1200);
     stepper->runForward();
-    if (!waitForSensorTimed(LOW, 8000, 10000)) { addLog("Err: Not found"); stepper->stopMove(); return; }
+    if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 1.5f), 15000)) {
+        addLog("Err: Sensor nicht gefunden"); stepper->stopMove(); return;
+    }
     stepper->stopMove();
+    // Back off CCW past sensor, then approach CW slowly for precision
     stepper->setSpeedInHz(400); stepper->runBackward();
-    waitForSensorTimed(HIGH, 1000, 2000); stepper->stopMove();
+    waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.3f), 3000);
+    stepper->stopMove();
     stepper->setSpeedInHz(200); stepper->runForward();
-    waitForSensorTimed(LOW, 500, 2000); stepper->stopMove();
-    stepper->setCurrentPosition(0);
-    stepper->moveTo(sys.cal[0].triggerCenter);
-    while(stepper->isRunning()) { yield(); }
+    waitForSensorTimed(LOW, (long)(stepsPerRev * 0.5f), 5000);
+    stepper->stopMove();
+    // Position at sensor ON-edge (CW) = triggerStart offset from center
+    if (sys.cal[0].valid) {
+        stepper->setCurrentPosition(sys.cal[0].triggerStart);
+        stepper->moveTo(0); // → Center = 0°
+        while (stepper->isRunning()) { yield(); }
+    } else {
+        stepper->setCurrentPosition(0);
+    }
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
     }
     setMicrosteps(64);
-    addLog("Home.");
+    addLog("Home @0°");
 }
 
+// --- SENSOR CHARACTERIZATION ---
+// Procedure:
+//   P1: CCW 200sps until sensor (approaches from left)
+//   P2: CW 200sps until sensor LOW  (consistent CW approach)
+//   P3: Continue CW at 20sps through sensor → record ON (sCW) and OFF (eCW) steps
+// Center = (sCW+eCW)/2 → declared as position 0 (0°)
+// triggerStart = sCW - center  (negative offset, sensor turns on before center)
+// triggerEnd   = eCW - center  (positive offset, sensor turns off after center)
 void characterizeSensor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
     setMicrosteps(16);
-    addLog("Mapping...");
+    addLog("Sensor-Kalibrierung...");
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
     }
-    stepper->setAcceleration(30000);
+    stepper->setAcceleration(2000);
 
-    // --- PHASE 1: 360° blind search ---
-    // Scans one full revolution at 1200 sps. Guaranteed to find the sensor
-    // regardless of start position. Eliminates the need to home before calibrating.
-    addLog("360 scan...");
-    stepper->setSpeedInHz(1200);
-    stepper->runForward();
-    if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 1.1f), 5000)) {
-        addLog("Err: No sensor in 360"); stepper->stopMove(); return;
+    // --- P1: CCW 200sps bis Sensor LOW — stellt sicher, wir sind links vom Sensor ---
+    addLog("P1: CCW 200sps...");
+    stepper->setSpeedInHz(200);
+    stepper->runBackward();
+    if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 1.5f), 25000)) {
+        addLog("Err: kein Sensor (CCW)"); stepper->stopMove(); return;
     }
     stepper->stopMove();
-    // Back off 0.8 rev so the precise CW pass has a clean run-up from before the sensor.
-    stepper->move(-(long)(stepsPerRev * 0.8f));
+    // 0.3 rev zurück CW als Anlaufstrecke
+    stepper->move((long)(stepsPerRev * 0.3f));
     while (stepper->isRunning()) { yield(); }
 
-    // --- PCNT sync at this approach position ---
-    // Max PCNT travel ahead: ~1 rev CW + 0.8 rev fwd + 1 rev CCW = ~2.8 rev = ~9000 steps
-    // Well within ±32767 signed 16-bit range.
+    // PCNT sync — Maximalweg ab hier: 0.7 rev CW + Sensorbreite (~50 steps) ≪ 32767
     pcnt_counter_pause(PCNT_UNIT_0);
     pcnt_counter_clear(PCNT_UNIT_0);
     pcnt_counter_resume(PCNT_UNIT_0);
     pcntStepperBase = stepper ? stepper->getCurrentPosition() : 0;
 
-    // --- PHASE 2: CW precision pass ---
+    // --- P2: CW 200sps bis Sensor LOW — ISR erfasst Einschaltposition ---
+    addLog("P2: CW 200sps bis Sensor...");
     sensorHit = false;
-    stepper->setSpeedInHz(400); stepper->runForward();
-    if (!waitForSensorTimed(LOW, stepsPerRev, 12000)) { addLog("Err: CW entry"); stepper->stopMove(); return; }
-    long sCW = (long)lastSensorRaw + pcntStepperBase;
+    stepper->setSpeedInHz(200);
+    stepper->runForward();
+    if (!waitForSensorTimed(LOW, stepsPerRev, 12000)) {
+        addLog("Err: kein Sensor (CW)"); stepper->stopMove(); return;
+    }
+    long sCW = (long)lastSensorRaw + pcntStepperBase; // Einschaltpos (CW)
 
+    // Ohne Stopp auf Kriechgang wechseln (FAS bremst sanft ab)
+    stepper->setSpeedInHz(20);
+
+    // --- P3: 20sps bis Sensor HIGH — ISR erfasst Ausschaltposition ---
+    addLog("P3: 20sps durch Sensor...");
     sensorHit = false;
-    stepper->setSpeedInHz(200); stepper->runForward(); waitForSensorTimed(HIGH, 1000, 3000);
-    long eCW = (long)lastSensorRaw + pcntStepperBase;
+    if (!waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.5f), 15000)) {
+        addLog("Err: Sensor verlässt nicht"); stepper->stopMove(); return;
+    }
+    long eCW = (long)lastSensorRaw + pcntStepperBase; // Ausschaltpos (CW)
     stepper->stopMove();
-    addLog("CW: " + String(sCW) + "-" + String(eCW) + " (" + String(eCW-sCW) + " steps)");
 
-    // Move 0.8 rev past the sensor before reversing
-    stepper->move((long)(stepsPerRev * 0.8f)); while(stepper->isRunning()) { yield(); }
+    if (eCW <= sCW) { addLog("Err: eCW<=sCW — Sensor-Reihenfolge prüfen"); return; }
+    long center = (sCW + eCW) / 2;
+    float widthDeg = (float)(eCW - sCW) * 360.0f / (float)stepsPerRev;
+    addLog("Sensor EIN=" + String(sCW) + " AUS=" + String(eCW)
+           + " (" + String(eCW-sCW) + " steps, " + String(widthDeg,1) + "°)");
+    addLog("Center=" + String(center) + " → wird 0°");
 
-    // --- PHASE 3: CCW precision pass ---
-    sensorHit = false;
-    stepper->setSpeedInHz(400); stepper->runBackward();
-    waitForSensorTimed(LOW, stepsPerRev, 12000);
-    long eCCW = (long)lastSensorRaw + pcntStepperBase;
+    // Offsets relativ zu Center speichern (triggerStart ist negativ)
+    sys.cal[0].triggerStart  = sCW - center;   // z.B. -25 steps
+    sys.cal[0].triggerCenter = 0;              // Center = 0° per Definition
+    sys.cal[0].triggerEnd    = eCW - center;   // z.B. +25 steps
+    sys.cal[0].valid = true;
+    saveCalibration(0);
 
-    sensorHit = false;
-    stepper->setSpeedInHz(200); stepper->runBackward(); waitForSensorTimed(HIGH, 1000, 3000);
-    long sCCW = (long)lastSensorRaw + pcntStepperBase;
-    stepper->stopMove();
-    addLog("CCW: " + String(sCCW) + "-" + String(eCCW) + " (" + String(eCCW-sCCW) + " steps)");
+    // Zur Center-Position fahren und als 0 setzen
+    stepper->moveTo(center);
+    while (stepper->isRunning()) { yield(); }
+    stepper->setCurrentPosition(0);
 
-    // Center = average of CW midpoint and CCW midpoint (hysteresis-cancelled)
-    sys.cal[0].triggerCenter = ((sCW+eCW)/2 + (sCCW+eCCW)/2) / 2;
-    sys.cal[0].triggerStart  = sCW;
-    sys.cal[0].triggerEnd    = eCW;
-    sys.cal[0].valid = true; saveCalibration(0);
-    addLog("Center: " + String(sys.cal[0].triggerCenter));
-    homeMotor(0);
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
+    }
+    setMicrosteps(64);
+    addLog("Kalibrierung OK — 0° gesetzt");
 }
 
 void learnSGProfile(int i) {
@@ -431,6 +493,7 @@ void runSpeedTest(int i) {
     setMicrosteps(64);
     // Fix 4: restore driver settings so values are active without re-power
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
+    gotoCardinal();
 }
 
 void runInertiaTest(int i) {
@@ -452,6 +515,7 @@ void runInertiaTest(int i) {
     sys.cal[0].maxAccel = acc - 2000; saveCalibration(0);
     setMicrosteps(64);
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
+    gotoCardinal();
 }
 
 void runCoastTest(int i) {
@@ -468,11 +532,13 @@ void runCoastTest(int i) {
     addLog("Pulses: " + String(getPulseCount()));
     setMicrosteps(64);
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
+    gotoCardinal();
 }
 
 void runKatapult(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
+    gotoCardinal(); // Start auf Kardinalpunkt
     addLog("=== KATAPULT ===");
     // clearTelemetry() is called by the caller (TaskCore1 standalone) or by the parcour sequence
 
@@ -631,12 +697,14 @@ void runKatapult(int i) {
     // Restore normal settings
     setMicrosteps(64); // set MS first so applyDriverSettings gets correct stepsPerRev
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
+    gotoCardinal(); // Ende auf Kardinalpunkt
     addLog("=== KATAPULT DONE ===");
 }
 
 void runPerformanceShow(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
+    gotoCardinal(); // Start auf Kardinalpunkt
     addLog("=== VORFÜHRUNG ===");
 
     // All vars declared before any potential goto
@@ -764,6 +832,7 @@ cleanup:
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
     }
+    gotoCardinal(); // Ende auf Kardinalpunkt
     addLog("=== VORFÜHRUNG DONE ===");
 }
 

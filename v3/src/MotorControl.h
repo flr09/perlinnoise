@@ -6,7 +6,7 @@
 #include <FastAccelStepper.h> // New: Hardware-Timer Stepper
 
 // --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.6.11"
+#define FW_VERSION "3.6.12"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
@@ -109,6 +109,7 @@ void runKatapult(int i);
 void runPerformanceShow(int i);
 void setMotorPower(int i, bool on);
 void setMicrosteps(uint16_t ms);
+void gotoCardinal();
 void addLog(String msg);
 
 // --- TACHO RPM ---
