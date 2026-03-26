@@ -6,7 +6,7 @@
 #include <FastAccelStepper.h> // New: Hardware-Timer Stepper
 
 // --- HARDWARE PINS (FYSETC E4) ---
-#define FW_VERSION "3.6.14"
+#define FW_VERSION "3.6.15"
 #define R_SENSE 0.11f
 #define ENABLE_PIN 25
 #define SERIAL_PORT Serial2
