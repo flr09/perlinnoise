@@ -1,6 +1,6 @@
 # Physikalische Grenzen & Microstep-Strategie
 
-**Stand:** 2026-03-26 | **Motor:** NEMA 17, TMC2209, FYSETC E4
+**Stand:** 2026-03-26 (aktualisiert nach KATAPULT-Lauf) | **Motor:** NEMA 17, TMC2209, FYSETC E4
 
 ---
 
@@ -101,22 +101,23 @@ Wechselpunkt: Motor unter ~50 SPS (= fast stehend) → MRES wechseln → neu bes
 | # | Test | Zweck | Status |
 |---|------|-------|--------|
 | T1 | `runInertiaTest` mit neuem Code (E1-Fix) | Reales a_max messen | 🕒 Ausstehend |
-| T2 | `runCoastTest` bei 2500 RPM | Bremsweg-Basis | 🕒 Ausstehend |
-| T3 | Parcour 200–2500 RPM vollständig | SG-Profil über gesamten Bereich | 🕒 Ausstehend (maxRpm zurücksetzen) |
-| T4 | **KATAPULT Phase A** | SG-Stall-Map pro MS-Stufe [32…1] | 🕒 Ausstehend |
-| T5 | **KATAPULT Phase C** | Ghost-Mode: minimaler Strom (StealthChop) | 🕒 Ausstehend |
+| T2 | Coast bei 2500 RPM (KATAPULT Phase C verbessert) | Bremsweg-Basis mit realer Spinup-Zeit | 🕒 Ausstehend |
+| T3 | Parcour 200–2500 RPM vollständig | SG-Profil über gesamten Bereich | 🕒 Ausstehend |
+| T4 | KATAPULT Phase A — Hunt-Fix (Start ≥600 RPM) | Reale Stall-Grenze pro MS-Stufe | 🕒 Nach v3.6.10 |
+| T5 | Ghost-Mode mit belasteter Welle | Minimum Betriebsstrom unter Last | 🕒 Ausstehend |
 
 ---
 
 ## 5. Empfehlung für nächsten Parcour
 
-Basierend auf den Telemetrie-Daten:
+Basierend auf allen bisherigen Telemetrie-Daten:
 
 ```
-Zielgeschwindigkeit: 2300 RPM (sicherer SG-Buffer)
-Beschleunigung:      100.000 sps² (testen — T1)
-Microsteps:          16 MS (aktuell) → 4 MS für schnelle Segmente (T4 erst)
-Bremsrampe:          symmetrisch zur Beschleunigungsrampe
+Zielgeschwindigkeit: 2000 RPM (verifiziert stabil, SG 100–120)
+Beschleunigung:      100.000 sps² (Phase B bestätigt, kein Stall)
+Microsteps:          16 MS (Phase A Hunt erst nach Fix nutzbar)
+Bremsrampe:          symmetrisch (100k sps²)
+Ghost-Dauerbetrieb:  ≥100 mA empfohlen (unter Last; 50 mA nur Freilauf)
 ```
 
 ---
@@ -158,3 +159,134 @@ Phase C — Coast + Ghost Mode:
   (Bedingung für SpreadCycle: TSTEP ≤ TPWMTHRS; mit TPWMTHRS=0 niemals erfüllt)
 - `en_spreadCycle(false)` deaktiviert SpreadCycle-Override zusätzlich
 - Minimum-Strom-Verifikation: erwartet ≥70 % der Soll-Umdrehungen (10 rev in 1,5 s @ 400 RPM)
+
+---
+
+## 7. KATAPULT-Erstlauf: Messergebnisse & Analyse (2026-03-26)
+
+**Datei:** `parcour_2026-03-26T06-12-38.csv` | **Firmware:** v3.6.9
+
+### Phase A — Stall-Hunt: Bug identifiziert
+
+Alle 6 MS-Stufen stallen sofort bei 200 RPM mit SG = 2–12:
+
+| MS | SPS | RPM | SG_RESULT | Bewertung |
+|----|-----|-----|-----------|-----------|
+| 32 | 21333 | 200 | 12 | Abbruch (< 20) |
+| 16 | 10666 | 200 | 2 | Abbruch |
+| 8 | 5333 | 200 | 2 | Abbruch |
+| 4 | 2665 | 200 | 2 | Abbruch |
+| 2 | 1333 | 200 | 2 | Abbruch |
+| 1 | 666 | 200 | 2 | Abbruch |
+
+**Ursache:** SG_RESULT ist bei niedrigen Drehzahlen prinzipbedingt unzuverlässig. Der TMC2209
+liefert sinnvolle StallGuard-Werte erst oberhalb von `TCOOLTHRS` (hier ≈50 RPM-Äquivalent in
+TSTEP). Bei 200 RPM ist das Drehmomentmuster der Spulen zu schwach um einen Unterschied zu
+einem echten Stall zu machen — SG fällt auf nahe 0, obwohl der Motor frei dreht.
+
+**Folge im Code:** Fallback greift korrekt — `bestMs=16`, `bestAbsRpm=2000 RPM` (hartcodiert).
+
+**Fix für v3.6.10:**
+- Hunt erst ab **≥600 RPM** starten (sicher über TCOOLTHRS)
+- Alternativ: SG erst nach ≥500ms bei konstanter Geschwindigkeit samplen (nicht direkt nach Settle)
+- Threshold 20 bleibt, aber nur gültig wenn `cs_actual > 0` (Strom fließt wirklich)
+
+---
+
+### Phase B — Full-Load Launch 3×CW + 3×CCW: Voller Erfolg
+
+**Konfiguration:** bestMs=16 (Fallback), 2000 RPM, a=100.000 sps²
+
+**Beschleunigungsrampe (gemessen):**
+- 0 → 106.666 SPS in **≈1100 ms** ✅ (theoretisch: 106.666/100.000 = 1067 ms)
+- Kein Stall in keinem der 6 Runs
+
+**SG-Werte im eingeschwungenen Zustand (≈2000 RPM):**
+
+| Richtung | SG_RESULT (Steady-State) | cs_actual | stall |
+|----------|--------------------------|-----------|-------|
+| CW Run 1 | 100–118 | 28 | 0 |
+| CW Run 2 | 100–120 | 28 | 0 |
+| CW Run 3 | 100–108 | 28 | 0 |
+| CCW Run 1 | 96–220 | 28 | 0 |
+| CCW Run 2 | 96–206 | 28 | 0 |
+| CCW Run 3 | 100–170 | 28 | 0 |
+
+**SG während CCW-Hochlauf:** bis **506** (nahe am Maximum 511) — Motor hat bei 100k sps²
+Beschleunigung maximales Drehmoment, StallGuard sieht volle Reserve. Kein Stall. ✅
+
+**Vergleich mit altem Parcour-Test (30k sps²):**
+- Alter Test @ 2000 RPM: SG ≈ 96–120
+- Phase B @ 2000 RPM: SG ≈ 100–118
+- **Identisch** — 100k sps² Beschleunigung verschlechtert den Steady-State nicht. ✅
+
+**Fazit Phase B:** a=100.000 sps² bei 2000 RPM ist **produktionsreif**. Die aggressivere
+Rampe ist für kurze Positionswechsel geeignet, ohne SG-Reserve zu opfern.
+
+---
+
+### Phase C — Coast: Schnelles Abbremsen bestätigt
+
+**Beobachtung:** Erster Tacho-Wert nach `toff=0`: **4080 RPM** (17 Pulse in 250ms).
+Ab zweitem Sample: **0 RPM** — Motor physisch gestoppt.
+
+**Interpretation:**
+Der Spinup (delay=2000ms, a=30k sps²) erreicht nur ~1125 RPM (30k×2s = 60k SPS ≠ Ziel 106k).
+Der erste Coast-Wert 4080 RPM ist rechnerisch zu hoch — wahrscheinliche Ursache ist die
+**Richtungsumkehr**: Phase B endet CCW, Phase C läuft CW. Der physische Motor kann durch
+Massenträgheit + entgegenkommende CW-Schritte kurzzeitig schneller werden (Überschwingen).
+
+**Kernerkenntnis:** Der Motor bremst nach `toff=0` in **unter 500ms** auf Stillstand — durch:
+- Back-EMF (wirkt als Bremse bei offenen Spulen)
+- Cogging-Torque (magnetische Rastmomente)
+- Lagerreibung
+
+`olb=1` (Open Load Phase B) ab Stillstand: **erwartetes Verhalten** bei `toff=0`. ✅
+
+**Fix für v3.6.10:** Spinup-Zeit von 2s auf **≥4s** erhöhen, damit echte Zielgeschwindigkeit
+erreicht wird bevor Freilauf beginnt. Pulszähler-Reset nach dem Spinup beibehalten.
+
+---
+
+### Phase C — Ghost Mode (StealthChop): Überraschend niedrig
+
+**Konfiguration:** StealthChop erzwungen (`TPWMTHRS=0`), 400 RPM, Strom-Sweep 400→50 mA
+
+| Strom | SG | cs_actual | ola | Ergebnis |
+|-------|----|-----------|-----|----------|
+| 400 mA | 62 | 12 | 1 | ✅ OK |
+| 350 mA | 14 | 10 | 0 | ✅ OK |
+| 300 mA | 32 | 8 | 1 | ✅ OK |
+| 250 mA | 74 | 7 | 1 | ✅ OK |
+| 200 mA | 106 | 5 | 1 | ✅ OK |
+| 150 mA | 64 | 3 | 1 | ✅ OK |
+| 100 mA | 70 | 2 | 1 | ✅ OK |
+| **50 mA** | 100 | **0** | 1 | ✅ OK |
+
+**Motor läuft bei 50 mA / cs=0 durch alle 1,5s-Fenster** — sehr bemerkenswert.
+
+**Interpretation der Grenzwerte:**
+- `cs_actual = 0` bei 50 mA: TMC2209 liefert nahezu keinen Strom mehr.
+- `ola = 1` (Open Load) ab 400 mA schon aktiv: Bei StealthChop + sehr niedrigem Strom
+  erkennt der Treiber die Spule als "offen" — kein echter Fehler, sondern Artefakt der
+  Strommessung bei minimaler PWM-Einschaltzeit.
+- **spd=0 in allen Zeilen**: Telemetrie wird nach `stopMove()` geschrieben — korrekt,
+  FAS-Geschwindigkeit ist dann 0. Die physische Drehung findet vorher statt. ✅
+
+**Einschränkung:** Bei 50 mA dreht der Motor **durch Massenträgheit**, nicht durch echtes
+Drehmoment. Für einen **unbelasteten** Freilauf (z. B. Schleife auf einer Rolle) könnte 50 mA
+ausreichen. Für Positionierung unter Last empfohlen: **≥150 mA** (cs≥3, ola=0 konsistent).
+
+**SG in StealthChop:** Nicht für Stall-Detektion verwertbar — andere Physik als SpreadCycle.
+Die hohen SG-Werte (62–106) sind kein Widerspruch zu niedrigem cs_actual.
+
+---
+
+### Bekannte Bugs & geplante Fixes (→ v3.6.10)
+
+| ID | Symptom | Ursache | Fix |
+|----|---------|---------|-----|
+| A1 | Phase A stalled bei allen MS @ 200 RPM | SG unter TCOOLTHRS unbrauchbar | Hunt ab ≥600 RPM starten |
+| A2 | SG-Threshold 20 zu aggressiv | Niedrig-RPM SG prinzipbedingt ~0 | SG nur auswerten wenn `cs_actual > 0` |
+| C1 | Spinup erreicht nur ~1125 RPM statt 2000 | delay=2000ms + a=30k sps² zu langsam | Spinup-Zeit auf ≥4s (oder a auf ≥60k sps²) |
+| G1 | Ghost-Verifikation bei cs=0/ola=1 nicht aussagekräftig | Motor dreht durch Trägheit, nicht Strom | Loop abbrechen wenn `ola=1` bei mehreren Samples |
