@@ -80,7 +80,7 @@ unsigned long telemStart = 0;
 static unsigned long lastTelemMs = 0;
 
 void clearTelemetry() {
-    telemCSV = "ts_ms,phase,val,pos_steps,spd_sps,sg_result,cs_actual,cur_a,cur_b,stall,otpw,ot,ola,olb\n";
+    telemCSV = "ts_ms,phase,val,pos_steps,spd_sps,real_rpm,sg_result,cs_actual,cur_a,cur_b,stall,otpw,ot,ola,olb\n";
     telemStart = millis(); lastTelemMs = 0;
 }
 
@@ -89,9 +89,10 @@ void recordTelemetry(const char* phase, float val) {
     if (telemCSV.length() > TELEM_MAX_BYTES || now - lastTelemMs < TELEM_INTERVAL_MS) return;
     lastTelemMs = now;
     if (!stepper) return;
-    char line[128];
-    snprintf(line, sizeof(line), "%lu,%s,%.0f,%ld,%d,%u,%u,%d,%d,%d,%d,%d,%d,%d\n",
+    char line[140];
+    snprintf(line, sizeof(line), "%lu,%s,%.0f,%ld,%d,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d\n",
         now - telemStart, phase, val, stepper->getCurrentPosition(), (int)(stepper->getCurrentSpeedInMilliHz() / 1000),
+        getTachoRpm(),
         tCache.sg, tCache.cs, tCache.cur_a, tCache.cur_b,
         tCache.stall, tCache.otpw, tCache.ot, tCache.ola, tCache.olb);
     telemCSV += line;
@@ -475,11 +476,10 @@ void runKatapult(int i) {
     addLog("=== KATAPULT ===");
     // clearTelemetry() is called by the caller (TaskCore1 standalone) or by the parcour sequence
 
+    uint16_t runMA = sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT;
+
     // ===== PHASE A: Stall-Hunt per MS level =====
     addLog("--- A: Stall-Hunt ---");
-    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
-    }
     stepper->setAcceleration(30000);
     const uint16_t msLevels[6] = {32, 16, 8, 4, 2, 1};
     float msMaxRpm[6] = {0};
@@ -490,12 +490,20 @@ void runKatapult(int i) {
         uint16_t ms = msLevels[li];
         stepper->stopMove(); while (stepper->isRunning()) { yield(); }
         setMicrosteps(ms);
-        // Fix 3: StallGuard unreliable below TCOOLTHRS (~600 RPM); start hunt above that
+        // Per-MS: recalculate TPWMTHRS/TCOOLTHRS for new stepsPerRev, then force SpreadCycle
+        applyDriverSettings(runMA);
+        if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
+        }
         float testRpm = 600.0f;
         bool done = false;
         Serial.printf("[KAT-A] MS=%d (hunt from %.0f RPM)\n", ms, testRpm);
         while (testRpm <= 2500.0f && !done) {
             float tgtSps = rpmToSps(testRpm);
+            // Reset tacho for fresh measurement — ISR: first LOW skips period, second sets it
+            portENTER_CRITICAL(&motorMux);
+            tachoPeriodMs = 0; lastTachoLowMs = 0;
+            portEXIT_CRITICAL(&motorMux);
             stepper->setSpeedInHz((uint32_t)tgtSps);
             stepper->runForward();
             // Wait for motor to reach target speed (30k sps² accel, max 4 sec)
@@ -504,15 +512,20 @@ void runKatapult(int i) {
                 if (stepper->getCurrentSpeedInMilliHz() / 1000.0f >= tgtSps * 0.93f) break;
                 yield();
             }
-            delay(80); // brief SG settle
-            uint16_t sg = tCache.sg;
-            float actualRpm = spsToRpm(stepper->getCurrentSpeedInMilliHz() / 1000.0f);
-            Serial.printf("[KAT-A] MS=%d RPM=%.0f SG=%d cs=%d\n", ms, actualRpm, sg, tCache.cs);
+            // 400ms settle: allows tacho to measure 2+ revolutions even at 600 RPM (100ms/rev)
+            delay(400);
+            uint16_t realRpm   = getTachoRpm();
+            uint16_t sg        = tCache.sg;
+            float    actualRpm = spsToRpm(stepper->getCurrentSpeedInMilliHz() / 1000.0f);
+            bool tachoStall = (realRpm == 0 || (float)realRpm < testRpm * 0.5f);
+            bool sgStall    = (tCache.cs > 0 && sg < 20);
+            Serial.printf("[KAT-A] MS=%d RPM=%.0f tach=%d SG=%d cs=%d tStall=%d\n",
+                          ms, actualRpm, realRpm, sg, tCache.cs, tachoStall);
             recordTelemetry("HUNT", actualRpm);
-            // Fix 3: only trust SG when cs_actual > 0 (real current flowing)
-            if (tCache.cs > 0 && sg < 20) {
+            if (tachoStall || sgStall) {
                 done = true;
-                addLog("A: MS=" + String(ms) + " lim=" + String(actualRpm,0) + " RPM SG=" + String(sg));
+                addLog("A: MS=" + String(ms) + " lim=" + String(actualRpm,0)
+                       + " tach=" + String(realRpm) + " SG=" + String(sg));
             } else {
                 msMaxRpm[li] = actualRpm;
                 testRpm += 200.0f;
@@ -627,10 +640,15 @@ void runPerformanceShow(int i) {
     addLog("=== VORFÜHRUNG ===");
 
     // All vars declared before any potential goto
-    uint16_t runMA   = sys.cal[0].learnedCurrentMA > 0  ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT;
-    float    maxRpm  = sys.cal[0].maxRpm   > 600.0f     ? sys.cal[0].maxRpm            : 2000.0f;
-    float    maxAcc  = sys.cal[0].maxAccel > 1000.0f    ? sys.cal[0].maxAccel           : 100000.0f;
+    uint16_t runMA    = sys.cal[0].learnedCurrentMA > 0  ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT;
+    float    maxRpm   = sys.cal[0].maxRpm   > 600.0f     ? sys.cal[0].maxRpm            : 2000.0f;
+    float    maxAcc   = sys.cal[0].maxAccel > 1000.0f    ? sys.cal[0].maxAccel           : 100000.0f;
     uint16_t silentMA = (uint16_t)(runMA / 2 > 150 ? runMA / 2 : 150);
+    // Katapult-Finale vars (declared here to avoid jump-over-initialization with goto)
+    unsigned long katT0        = 0;
+    uint16_t      katCur       = 0;
+    unsigned long katCoastStart= 0;
+    uint32_t      katPrevP     = 0;
 
     // --- 1/4: SILENT — StealthChop, halber Strom, sehr langsam ---
     addLog("[1/4] Silent @150 RPM StealthChop " + String(silentMA) + "mA");
@@ -650,11 +668,14 @@ void runPerformanceShow(int i) {
     while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
     delay(600);
 
-    // --- 2/4: AGILITY — SpreadCycle, gelernte Maximalwerte, schnelle Bursts ---
+    // --- 2/4: AGILITY — auto StealthChop/SpreadCycle, gelernte Maximalwerte, schnelle Bursts ---
+    // TPWMTHRS = maxRpm/2: below half-speed → StealthChop, above → SpreadCycle (TMC auto-switch)
     addLog("[2/4] Agility @" + String(maxRpm,0) + " RPM  a=" + String(maxAcc/1000.0f,0) + "k sps²");
     applyDriverSettings(runMA);
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
+        driverX.en_spreadCycle(false);
+        driverX.TPWMTHRS(rpmToTpwmthrs(maxRpm / 2.0f)); // auto-switch at half speed
+        xSemaphoreGive(uartMutex);
     }
     stepper->setSpeedInHz((uint32_t)rpmToSps(maxRpm));
     stepper->setAcceleration((uint32_t)maxAcc);
@@ -686,18 +707,54 @@ void runPerformanceShow(int i) {
     }
     delay(300);
 
-    // --- 4/4: GHOST FINALE — Flüstermodus 150 mA ---
-    addLog("[4/4] Ghost @250 RPM  150 mA  StealthChop");
+    // --- 4/4: KATAPULT FINALE — max Beschleunigung → Strom reduzieren → Coast ---
+    addLog("[4/4] Katapult-Finale @" + String(maxRpm,0) + " RPM  " + String(runMA) + "mA→100mA→Coast");
+    setMicrosteps(16);
+    applyDriverSettings(runMA);
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        driverX.toff(5); driverX.en_spreadCycle(false);
-        driverX.TPWMTHRS(0);
-        driverX.rms_current(150); driverX.pwm_autoscale(true); xSemaphoreGive(uartMutex);
+        driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
     }
-    stepper->setSpeedInHz((uint32_t)rpmToSps(250.0f));
-    stepper->setAcceleration(2000);
-    stepper->move((long)(stepsPerRev * 2));
-    while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
-    delay(500);
+    stepper->setSpeedInHz((uint32_t)rpmToSps(maxRpm));
+    stepper->setAcceleration((uint32_t)min(maxAcc, 100000.0f));
+    stepper->runForward();
+    // Warte bis Vollgas erreicht
+    katT0 = millis();
+    while (millis() - katT0 < 5000) {
+        if (sys.pendingStop) goto cleanup;
+        if (stepper->getCurrentSpeedInMilliHz() / 1000.0f >= rpmToSps(maxRpm) * 0.93f) break;
+        yield();
+    }
+    // Stufenweise Stromreduktion während Vollbetrieb (runMA → ~70% → ~50% → ... → 100mA)
+    katCur = runMA;
+    while (katCur > 100) {
+        if (sys.pendingStop) goto cleanup;
+        katCur = (uint16_t)(katCur * 0.7f);
+        if (katCur < 100) katCur = 100;
+        if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            driverX.rms_current(katCur); xSemaphoreGive(uartMutex);
+        }
+        addLog("  cur=" + String(katCur) + "mA");
+        delay(400);
+    }
+    // Coast: Strom abschneiden, Rotor läuft frei unter Trägheit aus
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.toff(0); xSemaphoreGive(uartMutex);
+    }
+    stepper->stopMove();
+    portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
+    katCoastStart = millis(); katPrevP = 0;
+    addLog("  Coast...");
+    while (millis() - katCoastStart < 3000) {
+        if (sys.pendingStop) goto cleanup;
+        delay(250);
+        { uint32_t p = getPulseCount();
+          float rpmC = (float)(p - katPrevP) * (60000.0f / 250.0f);
+          recordTelemetry("KAT_COAST", rpmC);
+          katPrevP = p; }
+    }
+    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        driverX.toff(5); xSemaphoreGive(uartMutex);
+    }
 
 cleanup:
     stepper->stopMove();
