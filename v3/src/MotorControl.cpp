@@ -185,6 +185,12 @@ void loadCalibration() {
         String key = "m" + String(i) + "_" + String(sizeof(CalibrationData));
         if (prefs.getBytesLength(key.c_str()) == sizeof(CalibrationData))
             prefs.getBytes(key.c_str(), &sys.cal[i], sizeof(CalibrationData));
+        // v3.6.12 coordinate change: triggerCenter is now always 0 (center = zero by definition).
+        // Old firmware stored triggerCenter as absolute PCNT step position (~hundreds–thousands).
+        // If triggerCenter != 0, this is old-format data → discard to prevent wrong moveTo(0).
+        if (sys.cal[i].valid && sys.cal[i].triggerCenter != 0) {
+            sys.cal[i] = CalibrationData(); // reset to default (valid=false)
+        }
     }
     prefs.end();
 }
@@ -315,6 +321,9 @@ void homeMotor(int i) {
         driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
     }
     setMicrosteps(64);
+    // TPWMTHRS/TCOOLTHRS were computed at 64MS during setMotorPower() → re-apply now
+    // that stepsPerRev is back at 12800 so thresholds are correct.
+    applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
     addLog("Home @0°");
 }
 
@@ -344,8 +353,10 @@ void characterizeSensor(int i) {
         addLog("Err: kein Sensor (CCW)"); stepper->stopMove(); return;
     }
     stepper->stopMove();
-    // 0.3 rev zurück CW als Anlaufstrecke
-    stepper->move((long)(stepsPerRev * 0.3f));
+    while (stepper->isRunning()) { yield(); } // warten bis vollständig gestoppt
+    // 0.5 rev CW Anlaufstrecke: sicher außerhalb Sensorzone für P2-Anfahrt
+    stepper->setSpeedInHz(200);
+    stepper->move((long)(stepsPerRev * 0.5f));
     while (stepper->isRunning()) { yield(); }
 
     // PCNT sync — Maximalweg ab hier: 0.7 rev CW + Sensorbreite (~50 steps) ≪ 32767

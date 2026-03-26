@@ -1,6 +1,6 @@
 # Physikalische Grenzen & Microstep-Strategie
 
-**Stand:** 2026-03-26 (aktualisiert nach KATAPULT-Lauf) | **Motor:** NEMA 17, TMC2209, FYSETC E4
+**Stand:** 2026-03-26 (aktualisiert v3.6.13) | **Motor:** NEMA 17, TMC2209, FYSETC E4
 
 ---
 
@@ -290,3 +290,75 @@ Die hohen SG-Werte (62–106) sind kein Widerspruch zu niedrigem cs_actual.
 | A2 | SG-Threshold 20 zu aggressiv | Niedrig-RPM SG prinzipbedingt ~0 | SG nur auswerten wenn `cs_actual > 0` |
 | C1 | Spinup erreicht nur ~1125 RPM statt 2000 | delay=2000ms + a=30k sps² zu langsam | Spinup-Zeit auf ≥4s (oder a auf ≥60k sps²) |
 | G1 | Ghost-Verifikation bei cs=0/ola=1 nicht aussagekräftig | Motor dreht durch Trägheit, nicht Strom | Loop abbrechen wenn `ola=1` bei mehreren Samples |
+
+---
+
+## 8. Tele-Analyse v3.6.11 (parcour_2026-03-26T08-44-52.csv)
+
+### real_rpm: Erste Ergebnisse & Diagnose
+
+`real_rpm`-Spalte ab v3.6.11 in der CSV. Zwei Messergebnisse:
+- **real_rpm=0** durchgehend in SPEED/HUNT-Phasen
+- **real_rpm=9999** (gecapped) in genau 2 Zeilen (LAUNCH_CW und LAUNCH_CCW)
+
+**Ursache:** Sensor-Bounce erzeugt eine kurze Periode (~6 ms) → `60000/6 = 10000 → 9999`.
+Nach dem Bounce-Pulse liegt `lastTachoLowMs` auf `now_noise`; die nächste echte Umdrehung
+setzt `tachoPeriodMs = now_real - now_noise ≈ 24ms` → 2500 RPM korrekt, aber Telemetrie-Fenster
+verpasst diese. **Fix in v3.6.13: ISR-Noise-Filter ≥5 ms.**
+
+### Stall-Nachweis bei 2500 RPM (Zeilen 111–114)
+
+```
+LAUNCH_CW,2500 → spd_sps: 15k→30k (FAS rampt weiter)
+                  sg_result=0, ola=1, olb=1
+```
+
+FAS kennt den physischen Stall nicht (kein Positions-Feedback → Schleppfehler).
+Das ist der Schlüsselbefund für die Notwendigkeit von `real_rpm` als echte Schleppfehler-Kolonne.
+
+### KAT_COAST (neu in v3.6.11)
+
+- `spd_sps` zeigt saubere Deceleration 123k→15k sps (FAS trackt über PCNT/RMT)
+- `val=0`, `real_rpm=0`: Tacho zählt nicht während Coast — behoben durch ISR-Noise-Filter
+
+---
+
+## 9. Firmware-Versionshistorie
+
+| Version | Datum | Kernänderungen |
+|---------|-------|----------------|
+| v3.6.8 | — | Letzte stabile vor dieser Entwicklungsreihe |
+| v3.6.9 | 2026-03-26 | Tacho RPM, KATAPULT Phase A/B/C, CCW Timeout 5→12s |
+| v3.6.10 | 2026-03-26 | KATAPULT → grüner Parcour-Toggle; VORFÜHRMODUS; Fix 1–4 |
+| v3.6.11 | 2026-03-26 | `real_rpm`-Spalte; Tacho-Stall-Detektion in Hunt; StealthChop Auto-Switch; Katapult-Finale |
+| v3.6.12 | 2026-03-26 | Sensor-Kalibrierung neu (CCW→CW→20sps), `gotoCardinal()`, Tacho-Debounce 5ms |
+| v3.6.13 | 2026-03-26 | Bugfix: NVS-Inkompatibilität (alter `triggerCenter`), P1-Stopp-Race, `applyDriverSettings` nach homeMotor |
+
+### v3.6.12/13 Koordinatensystem (neu)
+
+```
+  CCW ←───────────────────────────────────── CW
+        triggerStart        triggerEnd
+            │                    │
+   ─────────┼────── SENSOR ──────┼────────
+        sCW (ON)            eCW (OFF)
+                  ↑ CENTER = 0° ↑
+              triggerCenter = 0
+```
+
+- `triggerStart` = `sCW − center` (negativ, z. B. −25 steps)
+- `triggerCenter` = 0 (per Definition)
+- `triggerEnd` = `eCW − center` (positiv, z. B. +25 steps)
+
+**homeMotor**: findet Sensor LOW (CW-Anfahrt 200 sps), `setCurrentPosition(triggerStart)`,
+`moveTo(0)` = genau zur Mitte.
+
+**gotoCardinal**: nach jedem Test/Show → nächster 0°/90°/180°/270°-Punkt.
+
+### v3.6.13 Bug-Tabelle
+
+| ID | Symptom | Ursache | Fix |
+|----|---------|---------|-----|
+| H1 | homeMotor fährt irgendwohin | Alte NVS-Cal: `triggerCenter≠0`, `triggerStart` absolute statt relativ | `loadCalibration()`: invalidiert wenn `triggerCenter≠0` |
+| H2 | Kalibrierung unpräzise | `move(0.3 rev)` ohne Warten auf Stopp nach P1 | `while(isRunning()) yield()` + explizit `setSpeedInHz(200)` |
+| H3 | TPWMTHRS nach Home falsch | `applyDriverSettings` mit 64MS aufgerufen, dann `setMicrosteps(16)` ändert `stepsPerRev` | `applyDriverSettings` am Ende von homeMotor wiederholen |
