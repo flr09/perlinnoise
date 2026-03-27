@@ -2,7 +2,7 @@
 
 **Hardware:** FYSETC E4 · ESP32 · TMC2209 · NEMA17 (36BYG1204-A-6QHT, Pancake)
 **Sensor:** NPN-Hallsensor an GPIO 15 (TACHO_PIN), Pull-up intern
-**Stand:** 2026-03-26 | aktuell: v3.7.0
+**Stand:** 2026-03-26 | aktuell: v3.6.18
 
 ---
 
@@ -91,7 +91,7 @@ Noise-Filter: nur updaten wenn Periode ≥ 5 ms (eliminiert Bounce).
 - `triggerCenter` = 0 (per Definition)
 - `triggerEnd` = `eCW − center` (positiv, z. B. +25 steps)
 
-### Kalibrierung — characterizeSensor (ab v3.7.0)
+### Kalibrierung — characterizeSensor (ab v3.6.18)
 ```
   CCW ←──────────────────────────────────────────── CW →
                               Motor fährt →→→→→→→→→→
@@ -109,7 +109,7 @@ Noise-Filter: nur updaten wenn Periode ≥ 5 ms (eliminiert Bounce).
 7. `center = a1 + (a2 − a1) / 2` → `setSpeedInHz(400)` → `moveTo(center)` → `setCurrentPosition(0)`
 8. `triggerStart = a1 − center` (negativ), `triggerEnd = a2 − center` (positiv), `triggerCenter = 0`
 
-### Homing — homeMotor (ab v3.6.14/v3.7.0)
+### Homing — homeMotor (ab v3.6.18)
 1. CW 1200 sps bis Sensor ON — Schnellsuche, max. 1,5 rev
 2. `stopMove()` + `while(isRunning())` — Motor vollständig stoppen
 3. CCW 400 sps bis Sensor OFF — Sensor verlassen
