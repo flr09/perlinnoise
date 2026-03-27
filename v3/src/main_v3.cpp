@@ -188,11 +188,11 @@ void TaskCore1(void * pvParameters) {
                 int m = sys.pendingTest; sys.pendingTest = -1;
                 sys.opState = MOTOR_TESTING;
                 clearTelemetry();
-                if (sys.parcour.doSpeed)    runSpeedTest(m);
-                if (sys.parcour.doAccel)    runInertiaTest(m);
-                if (sys.parcour.doCoast)    runCoastTest(m);
-                if (sys.parcour.doKatapult) runKatapult(m);
-                if (sys.parcour.doFreq)     runFreqSweep(m);
+                if (sys.parcour.doSpeed && !sys.pendingStop)    runSpeedTest(m);
+                if (sys.parcour.doAccel && !sys.pendingStop) { delay(100); runInertiaTest(m); }
+                if (sys.parcour.doCoast && !sys.pendingStop) { delay(100); runCoastTest(m); }
+                if (sys.parcour.doKatapult && !sys.pendingStop) { delay(100); runKatapult(m); }
+                if (sys.parcour.doFreq && !sys.pendingStop) { delay(100); runFreqSweep(m); }
                 sys.opState = MOTOR_IDLE;
             }
             else if (sys.pendingKatapult != -1) {
@@ -278,9 +278,12 @@ void setup() {
         r->send(200, "text/plain", "OK");
     });
     server.on("/telemetry", HTTP_GET, [](AsyncWebServerRequest *r){
-        AsyncWebServerResponse *res = r->beginResponse(200, "text/csv", telemCSV);
+        portENTER_CRITICAL(&motorMux);
+        String csvCopy = telemCSV;  // Erst kopieren, dann Critical Section verlassen — beginResponse macht 52KB-Malloc
+        portEXIT_CRITICAL(&motorMux);
+        AsyncWebServerResponse *res = r->beginResponse(200, "text/csv", csvCopy);
         res->addHeader("Content-Disposition", "attachment; filename=\"parcour.csv\"");
-        res->addHeader("Access-Control-Allow-Origin", "*"); 
+        res->addHeader("Access-Control-Allow-Origin", "*");
         r->send(res);
     });
     server.on("/pcnt", HTTP_GET, [](AsyncWebServerRequest *r){
