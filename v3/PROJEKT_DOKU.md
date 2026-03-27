@@ -1,7 +1,7 @@
 # PerlinNoise v3 — Projektdokumentation
 
 **Hardware:** FYSETC E4 · ESP32 · TMC2209 · NEMA17 (36BYG1204-A-6QHT, Pancake)
-**Sensor:** NPN-Hallsensor an GPIO 15 (TACHO_PIN), Pull-up intern
+**Sensor:** Induktiver Näherungssensor AZ-Delivery LJ12A3-4-Z/BX an GPIO 15 (TACHO_PIN) — wird später gegen anderes Modell getauscht
 **Stand:** 2026-03-27 | aktuell: v3.7.1
 
 ---
@@ -18,9 +18,28 @@
 | UART TX | 22 |
 | TACHO_PIN | 15 |
 
+### Sensor — LJ12A3-4-Z/BX (induktiv, NPN NO)
+
+| Eigenschaft | Wert |
+|-------------|------|
+| Typ | Induktiver Näherungssensor |
+| Schaltlogik | NPN, Normally Open (NO) |
+| Versorgung | 6–36V DC |
+| Erfassungsbereich | 4 mm (Metall) |
+| Ausgang | Open Collector: LOW wenn Metall erkannt, floating sonst |
+| ESP32-Anschluss | Pull-up intern auf 3,3V — GPIO liest LOW = getriggert |
+
+**Spannungssicherheit:** NPN-Ausgang sinks nur gegen GND — kein Spannungsübertrag an ESP32-GPIO, solange Pull-up auf 3,3V. Versorgung des Sensors (z. B. 12V) spielt keine Rolle.
+
+**Bibliotheken:** Kein spezialisierter Stack nötig (digitaler Schalter). Optionen:
+- **Aktuelle Implementierung:** IRAM_ATTR ISR + 5 ms Noise-Filter. Geeignet für Tacho (schnelle Periodenmessung) und Sensorsuche (`waitForSensorTimed`).
+- **[Bounce2](https://github.com/thomasfredericks/Bounce2):** Robusteres Edge-Debouncing für `waitForSensorTimed`-Pfade; nicht sinnvoll in der ISR (zu langsam). Nachrüsten wenn Bounce-Probleme auftreten.
+
+**Geplanter Tausch:** Sensor wird später gegen anderes Modell ersetzt — NVS-Kalibrierung bleibt kompatibel (Grad-basiert, unabhängig von Sensorbreite).
+
 ### Hardware-Vorfälle
 **2026-03-24 — PNP statt NPN am TACHO_PIN:**
-Ein PNP-Schalter wurde irrtümlich an GPIO 15 betrieben. PNP schaltet Versorgungsspannung auf den Pin — ESP32 ist nur 3,3V-tolerant. Risiko: GPIO 15 intern beschädigt. Inzwischen durch korrekten NPN-Schalter ersetzt. Validierung: bei Magnetnähe muss Web-UI "HIT" zwischen TRUE/FALSE wechseln.
+Ein PNP-Schalter wurde irrtümlich an GPIO 15 betrieben. PNP schaltet Versorgungsspannung auf den Pin — ESP32 ist nur 3,3V-tolerant. Risiko: GPIO 15 intern beschädigt. Inzwischen durch korrekten NPN-Schalter (LJ12A3-4-Z/BX) ersetzt. Validierung: bei Metall in Erfassungsbereich muss Web-UI "HIT" zwischen TRUE/FALSE wechseln.
 
 ### Single-Motor-Modus
 Derzeit nur Motor X (Index 0) aktiv. Y/Z/E-Treiber instanziiert, aber nicht konfiguriert.
