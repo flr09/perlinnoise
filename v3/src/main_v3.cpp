@@ -119,7 +119,6 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="tog off" id="tog_freq" onclick="toggle('freq')">FREQ-SWEEP</div>
       </div>
       <button class="btn test" onclick="cmd('test', 0)" style="margin-top:15px;">START PARCOUR</button>
-      <button class="btn" onclick="cmd('freqsweep', 0)" style="margin-top:8px; background:#1a3a4a; border-color:#00bcd4; color:#00bcd4; font-weight:bold;">&#8771; FREQ SWEEP</button>
       <button class="btn" onclick="cmd('show', 0)" style="margin-top:8px; background:#6a1b9a; border-color:#7b1fa2; font-weight:bold;">&#9733; VORFÜHRMODUS</button>
     </div>
 

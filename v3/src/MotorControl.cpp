@@ -650,7 +650,15 @@ void runFreqSweep(int idx) {
     if (!stepper || !sys.cal[idx].valid) {
         addLog("FreqSweep: keine Kalibrierung"); return;
     }
-    // Convert degree limits to steps for amplitude calculation
+
+    // Motor-Setup VOR ampLimit: degToSteps() nutzt stepsPerRev —
+    // muss 64MS sein damit ampLimit korrekt berechnet wird.
+    setMotorPower(0, true);
+    setMicrosteps(64);
+    applyDriverSettings(sys.cal[idx].learnedCurrentMA > 0
+                        ? sys.cal[idx].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
+
+    // Convert degree limits to steps for amplitude calculation (64MS / stepsPerRev=12800)
     long ampLimit = min(abs(degToSteps(sys.cal[idx].triggerStartDeg)),
                         abs(degToSteps(sys.cal[idx].triggerEndDeg)));
     if (ampLimit < FREQ_AMP_MIN_STEPS) { addLog("FreqSweep: calib range zu klein"); return; }
@@ -659,17 +667,13 @@ void runFreqSweep(int idx) {
                    ? rpmToSps(sys.cal[idx].maxRpm)
                    : (float)sys.currentMaxSpd;
 
-    setMicrosteps(64);
-    applyDriverSettings(sys.cal[idx].learnedCurrentMA > 0
-                        ? sys.cal[idx].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
-
     addLog("=== FreqSweep " + String(FREQ_MIN_HZ,0) + "→" + String(FREQ_MAX_HZ,0)
            + " Hz  " + String(FREQ_SWEEP_S,0) + "s ===");
 
-    // Start from center
+    // Start from 0° (Sensormitte — neuralgischer Punkt)
     stepper->setSpeedInHz((uint32_t)rpmToSps(600.0f));
     stepper->setAcceleration(20000);
-    stepper->moveTo(0);
+    moveToDeg(0.0f);
     while (stepper->isRunning()) { yield(); }
 
     unsigned long tStart   = millis();
@@ -707,7 +711,7 @@ void runFreqSweep(int idx) {
     }
 
     sys.pendingStop = false;
-    stepper->moveTo(0);
+    moveToDeg(0.0f);
     while (stepper->isRunning()) { yield(); }
     addLog("=== FreqSweep DONE ===");
 }
