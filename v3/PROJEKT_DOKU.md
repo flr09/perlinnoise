@@ -2,7 +2,7 @@
 
 **Hardware:** FYSETC E4 · ESP32 · TMC2209 · NEMA17 (36BYG1204-A-6QHT, Pancake)
 **Sensor:** Induktiver Näherungssensor AZ-Delivery LJ12A3-4-Z/BX an GPIO 15 (TACHO_PIN) — wird später gegen anderes Modell getauscht
-**Stand:** 2026-03-27 | aktuell: v3.7.1
+**Stand:** 2026-03-27 | aktuell: v3.7.2
 
 ---
 
@@ -32,8 +32,8 @@
 **Spannungssicherheit:** NPN-Ausgang sinks nur gegen GND — kein Spannungsübertrag an ESP32-GPIO, solange Pull-up auf 3,3V. Versorgung des Sensors (z. B. 12V) spielt keine Rolle.
 
 **Bibliotheken:**
-- **[Bounce2](https://github.com/thomasfredericks/Bounce2)** (`thomasfredericks/Bounce2 @ ^2.71`) — aktiv in `waitForSensorTimed` (Homing/Calib-Sensorsuche). Debounce-Intervall 5 ms, deckt sich mit ISR-Noise-Filter.
-- **ISR (`tachoISR`):** Bounce2 nicht anwendbar (nicht ISR-safe). Bleibt direkter Hardware-Register-Read mit eigenem 5 ms-Filter.
+- **Bounce2 entfernt** (Fix F12/R1): Software-Entprellung und zeitkritische ISR-Erfassung behinderten sich gegenseitig. Ersetzt durch ISR-Hardware-Latch (`if (!sensorHit)`).
+- **ISR (`tachoISR`):** Direkter Hardware-Register-Read (PCNT). Latch sichert, dass nur die erste Flanke nach Reset erfasst wird — kein Überschreiben durch Jitter an der Schaltschwelle.
 
 **Geplanter Tausch:** Sensor wird später gegen anderes Modell ersetzt — NVS-Kalibrierung bleibt kompatibel (Grad-basiert, unabhängig von Sensorbreite).
 
@@ -228,6 +228,7 @@ Bei 400 RPM mit TPWMTHRS=0 (erzwungen StealthChop), Strom-Sweep:
 | ⭐ **v3.7.0** | 2026-03-26 | **MEILENSTEIN** — Calib + Homing vollständig funktionsfähig. Alle bekannten Bugs (H1–H4, C2) geschlossen. |
 | v3.6.19 | 2026-03-26 | Grad-absolutes Koordinatensystem: `CalibrationData` auf `triggerStartDeg`/`triggerEndDeg` (float°) umgestellt. NVS-Versionierung `nvsVersion=3619`. |
 | v3.7.1 | 2026-03-27 | Phase 1 Modularisierung (Config/Types/IModule/Sensor/Driver/Telemetry). Driver-Layer Winkel-API (`degToSteps`, `moveToDeg`, …). FreqSweep: kontinuierlicher Chirp 10–200 Hz. `lroundf` für Microstep-Skalierung und Kalibrierungsmitte. |
+| v3.7.10 | 2026-03-27 | **MEILENSTEIN** — Successive Approximation Kalibrierung. 5-Hit Filter gegen EMI-Rauschen am FYSETC E4. 3-faches Antasten beider Sensor-Flanken bei 100 sps zur präzisen Mittenbestimmung. |
 
 ---
 
@@ -247,16 +248,22 @@ Bei 400 RPM mit TPWMTHRS=0 (erzwungen StealthChop), Strom-Sweep:
 | H3 | 3.6.13 | 🟡 | TPWMTHRS nach Home falsch | `applyDriverSettings` mit 64MS, dann `setMicrosteps(16)` ohne Neuberechnung | `applyDriverSettings` am Ende von homeMotor |
 | H4 | 3.6.14 | 🔴 | homeMotor fährt falsche Richtung | `stopMove()` ohne `while(isRunning())` → `setCurrentPosition()` während Motor noch läuft | Alle `stopMove()` + wait; PCNT-ISR für exakte Sensorposition |
 | C2 | 3.6.15 | 🔴 | Kalibrierung findet Sensor nie, 0° falsch, Homing falsch | Falsche Fahrtrichtung nach P1 (siehe Abschnitt 6.1) | A1→A2 CW-Durchfahrt, kein CCW-Start |
-| C3 | 3.6.17 | 🟡 | A1-/A2-Fehlerpath: `stopMove()` ohne `while(isRunning())` | Motor läuft nach Fehler-Return noch aus | Bekannt, unkritisch (Funktion bricht ab, Motor decel von selbst) |
+| C3 | 3.6.17 | 🟡 | A1-/A2-Fehlerpath: `stopMove()` ohne `while(isRunning())` | Motor läuft nach Fehler-Return noch aus | ✅ v3.7.2: Alle Fehlerpfade in characterizeSensor haben jetzt `while(isRunning())` |
 | F11| 3.7.1 | 🟡 | UI "Offline" | `sys.log` enthält unmaskierte `\n`, korrumpiert JSON | ✅ `logData.replace('"','\'')` + `\n`/`\r`-Escaping vor JSON-Einbettung |
 | F12| 3.7.1 | 🔴 | `Err: A2<=A1` | ISR überschreibt `lastSensorRaw` während Entprellphase | ✅ ISR-Latch: `if (!sensorHit)` — nur erste Flanke nach Reset wird erfasst |
 | F13| 3.7.1 | 🟡 | 1-4 Schritte Drift | `pcntStepperBase` Setzen während RMT-Buffer aktiv | ✅ `delay(2)` nach `while(isRunning())` vor PCNT-Reset in homeMotor + characterizeSensor |
 | F14| 3.7.1 | 🔴 | Homing verschoben | Microstep-Umschaltung nach `moveToDeg(0)`, ±1 Step Restfehler wird ×4 | ✅ `setPositionDeg(0.0f)` nach `while(isRunning())` in homeMotor, vor `setMicrosteps(64)` |
-| C4 | 3.7.1 | 🟡 | Back-Off-Timeout in homeMotor ignoriert | `waitForSensorTimed(HIGH, …)` Rückgabewert ungeprüft → bei Timeout PCNT-Sync falsch, A1-Position verfälscht | Offen — Rückgabewert prüfen, Fehlerpath analog A1-Suche |
-| R1 | 3.7.1 | 🔴 | `Err: A2<=A1` | **Doppel-Monitoring:** ISR und Bounce2 kämpfen um `TACHO_PIN`. ISR speichert Jitter, Bounce2 filtert ihn. | ✅ Kein aktiver Konflikt: ISR=Kantenpräzision (PCNT, F12-Latch), Bounce2=Zustandsbestätigung. `lastSensorRaw` ist 5ms vor Bounce2-Return eingefroren. By design korrekt. |
+| F15| 3.7.2 | 🔴 | PCNT zählt nicht | `pcnt_unit_config` allein aktiviert Input-Buffer für RMT-Feedback nicht | ✅ `gpio_set_direction(X_STEP, GPIO_MODE_INPUT_OUTPUT)` in Sensor.cpp |
+| B5 | 3.7.2 | 🟡 | Debugging schwer | `Err: A2<=A1` ohne Kontextwerte | ✅ Verbessertes Logging für `a1`, `a2`, `raw` und `abs` in MotorControl.cpp |
+| C4 | 3.7.1 | 🟡 | Back-Off-Timeout in homeMotor ignoriert | `waitForSensorTimed(HIGH, …)` Rückgabewert ungeprüft → bei Timeout PCNT-Sync falsch, A1-Position verfälscht | ✅ v3.7.2: Fehlerpath mit Abort + Log hinzugefügt |
+| R1 | 3.7.1 | 🔴 | `Err: A2<=A1` | **Doppel-Monitoring:** ISR und Bounce2 kämpfen um `TACHO_PIN`. ISR speichert Jitter, Bounce2 filtert ihn weg — Konflikt. | ✅ Bounce2 aus Sensor-Modul entfernt. ISR-Latch (F12) allein liefert präzise erste Flanke. `waitForSensorTimed` nutzt `digitalRead`, kein Bounce2. |
 | R2 | 3.7.1 | 🟡 | Zyklus-Verzögerung | **UART-Overhead:** `updateTelemCache` und Steuer-Funktionen fragen TMC-Register redundant ab. | Kein identifizierbarer redundanter Read. `applyDriverSettings` nach MS-Switch notwendig (TPWMTHRS-Neuberechnung). Niedrige Priorität. |
 | R3 | 3.7.1 | 🟡 | Anzeige-Jitter | **Berechnungs-Split:** Winkel-Normalisierung findet redundant in FW und UI-JS statt. | Kein Bug: JS drei-Term-Min für 360°/0°-Wrap nötig (z.B. pos=5°, Marker=360°). FW gibt konsistenten 0-360-Bereich. Beide Ebenen notwendig. |
 | R4 | 3.7.1 | 🟡 | Datenverlust | **Buffer-Reset:** Standalone-Katapult/FreqSweep riefen `clearTelemetry()` auf und löschten Parcour-Daten. | ✅ `clearTelemetry()` aus `pendingKatapult`- und `pendingFreqSweep`-Pfaden entfernt — nur Parcour-Start löscht. |
+| B1 | 3.7.2 | 🔴 | `setMicrosteps(64)` silently skipped | `learnSGProfile`/`runCoastTest`: `stopMove()` ohne `while(isRunning())` — `setMicrosteps` Guard `stepper->isRunning()` überspringt MS-Switch → 16MS bleibt aktiv | ✅ `while(isRunning())` nach `stopMove()` hinzugefügt |
+| B2 | 3.7.2 | 🔴 | `Err: A2<=A1` (Restrisiko) | `sensorLatchReset()` für A2 direkt nach A1-Erkennung → Motor noch an A1-Grenze → ISR fängt sofortigen HIGH-Jitter als A2 ein | ✅ Safety-Margin: Latch erst armen wenn Motor ≥ stepsPerRev/20 tief im Sensorfeld ist |
+| B3 | 3.7.2 | 🟡 | Calib startet mit falschem Startpunkt | Prep-Phase `waitForSensorTimed` Rückgabewerte ignoriert → bei Timeout fährt Calib mit falscher Position weiter | ✅ Alle Prep-Fehlerpfade mit Abort + Log |
+| B4 | 3.7.2 | 🟡 | sys.log wächst unbegrenzt | `addLog()` appended ohne Limit → ESP32 Heap-Erschöpfung bei langen Läufen | ✅ Trim auf 4000 Zeichen wenn >8000 |
 
 ---
 

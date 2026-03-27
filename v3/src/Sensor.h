@@ -1,12 +1,11 @@
 #pragma once
 #include <Arduino.h>
-#include <Bounce2.h>
 #include "Config.h"
 #include "driver/pcnt.h"
 
 // PCNT-based position capture at sensor edge (ISR-safe, no Flash access).
 // lastSensorRaw + pcntStepperBase = absolute FAS position at sensor edge.
-extern volatile int16_t  lastSensorRaw;
+extern volatile long     lastSensorRaw;
 extern volatile bool     sensorHit;
 extern long              pcntStepperBase;
 
@@ -15,9 +14,13 @@ extern volatile unsigned long tachoPeriodMs;
 extern volatile unsigned long lastTachoLowMs;
 extern volatile uint32_t      pulseCount;
 
-extern Bounce sensorBounce;
-
 void     initSensor();
 uint16_t getTachoRpm();
 uint32_t getPulseCount();
 bool     waitForSensorTimed(bool state, long maxSteps, unsigned long timeoutMs);
+bool     waitForSensorStable(bool state, long maxSteps, unsigned long timeoutMs);
+
+// --- LATCH API (Fix F12) ---
+void sensorLatchEnable(bool enable);
+void sensorLatchReset();
+void enablePcntInputBuffer();

@@ -6,6 +6,7 @@
 #include <ArduinoOTA.h>
 #include <ElegantOTA.h>
 #include "MotorControl.h"
+#include "CalibTest.h"
 #include "wifi_settings.h"
 
 AsyncWebServer server(80);
@@ -49,7 +50,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <a href="http://perlin-bench.local/">← HAUPT-UI</a>
             <a href="/update">OTA UPDATE</a>
         </div>
-        <span class="version" id="fwVer">V3 SINGLE-MOTOR v3.6.7</span>
+        <span class="version" id="fwVer">V3 SINGLE-MOTOR v3.7.4</span>
     </div>
 
     <div class="card">
@@ -206,6 +207,10 @@ void TaskCore1(void * pvParameters) {
                 int m = sys.pendingShow; sys.pendingShow = -1;
                 sys.opState = MOTOR_SHOWING;   runPerformanceShow(m); sys.opState = MOTOR_IDLE;
             }
+            else if (sys.pendingCalibTest != -1) {
+                int m = sys.pendingCalibTest; sys.pendingCalibTest = -1;
+                sys.opState = MOTOR_CALIBRATING; characterizeSensorTest(m); sys.opState = MOTOR_IDLE;
+            }
         }
         updateMotors();
         yield();
@@ -222,7 +227,7 @@ void setup() {
     
     ArduinoOTA.setHostname("perlin-v3"); ArduinoOTA.begin();
     
-    server.on("/", [](AsyncWebServerRequest *r){ r->send_P(200, "text/html", index_html); });
+    server.on("/", [](AsyncWebServerRequest *r){ r->send(200, "text/html", index_html); });
     server.on("/status", [](AsyncWebServerRequest *r){
         portENTER_CRITICAL(&motorMux);
         String logData = sys.log; sys.log = "";
@@ -265,8 +270,9 @@ void setup() {
             sys.parcour.doFreq     =  r->hasParam("freq")     && r->getParam("freq")->value()     == "1";
             sys.pendingTest = m;
         }
-        else if(a=="katapult")  sys.pendingKatapult  = m;
-        else if(a=="freqsweep") sys.pendingFreqSweep = m;
+        else if(a=="katapult")   sys.pendingKatapult  = m;
+        else if(a=="freqsweep")  sys.pendingFreqSweep = m;
+        else if(a=="calibtest")  sys.pendingCalibTest = m;
         else if(a=="show")      sys.pendingShow      = m;
         else if(a=="stop") { sys.pendingStop = true; sys.pendingPower = 0; }
         r->send(200, "text/plain", "OK");
@@ -276,6 +282,11 @@ void setup() {
         res->addHeader("Content-Disposition", "attachment; filename=\"parcour.csv\"");
         res->addHeader("Access-Control-Allow-Origin", "*"); 
         r->send(res);
+    });
+    server.on("/pcnt", HTTP_GET, [](AsyncWebServerRequest *r){
+        int16_t v = 0;
+        pcnt_get_counter_value(PCNT_UNIT_0, &v);
+        r->send(200, "text/plain", "PCNT: " + String(v) + " | Pos: " + String(stepper ? stepper->getCurrentPosition() : 0));
     });
     
     ElegantOTA.begin(&server, "admin", "12345678"); ElegantOTA.setAutoReboot(true);
