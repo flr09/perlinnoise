@@ -310,7 +310,63 @@ Der Fahrtrichtungsfehler ist strukturell unmöglich, da der Motor durchgehend CW
 
 ---
 
-## 7. Telemetrie-Analyse
+## 7. FreqSweep — Implementierung
+
+### Prinzip: Kontinuierlicher Chirp via FastAccelStepper
+
+Kein externer Frequenzgenerator-Chip oder Timer nötig. FastAccelStepper nutzt intern das **ESP32-RMT-Peripheral** (Hardware-Pulsgenerator) und berechnet Dreieck-Rampen nativ.
+
+```
+f(t) = FREQ_MIN + (FREQ_MAX - FREQ_MIN) × (elapsed / tDur)   ← linearer Chirp
+amp  = FREQ_ACCEL_MAX / (16 × f²)    ← aus Dreiecksprofil-Physik:
+                                         th = 1/(2f),  th = 2×√(amp/a)  →  amp = a / (16f²)
+peak_v = √(a × amp)                  ← Spitzengeschwindigkeit
+```
+
+Pro Halbschwingung:
+```
+setAcceleration(FREQ_ACCEL_MAX)   ← maximale Beschleunigung
+setSpeedInHz(peak_v)              ← FAS-Obergrenze (cap bei cal.maxRpm)
+moveToDeg(±ampDeg)                ← FAS erzeugt Dreieck: Voll-Rampe rauf + runter
+while (isRunning()) { ... }       ← warten, dann sofort nächste Halbschwingung
+```
+
+### Nutzbare Frequenzbandbreite (theoretisch, @ 64MS / FREQ_ACCEL_MAX=500000 sps²)
+
+| f (Hz) | amp (Steps @ 64MS) | amp (°) | peak_v (sps) |
+|--------|-------------------|---------|--------------|
+| 10 | 312 | 8.8° | 12 500 |
+| 30 | 35 | 1.0° | 4 167 |
+| 60 | 8 | 0.23° | 2 000 |
+| 100 | 3 | 0.08° | 1 250 |
+| 130 | 1.8 → **< 3 → Abbruch** | — | — |
+
+Effektive Obergrenze: **~120–130 Hz** bei FREQ_ACCEL_MAX=500000.
+
+### Konfiguration (Config.h)
+
+```cpp
+#define FREQ_MIN_HZ        10.0f    // Sweep-Start
+#define FREQ_MAX_HZ       200.0f    // Sweep-Ende (rechnerisch; real ~130 Hz Limit)
+#define FREQ_SWEEP_S       30.0f    // Gesamtdauer
+#define FREQ_ACCEL_MAX   500000UL   // sps² — höher → höhere nutzbare Frequenz
+#define FREQ_AMP_MIN_STEPS    3     // Abbruch wenn Amplitude < 3 Steps
+```
+
+### Startbedingung
+
+FreqSweep beginnt immer bei **0° (Sensormitte)**. Voraussetzung: Motor wurde kalibriert und gehomt.
+Aufruf nur über Parcour-Toggle FREQ-SWEEP (kein standalone-Button).
+
+### Bekannte Grenzen
+
+- Sinusförmige Bewegung nicht möglich ohne Echtzeit-Geschwindigkeitsnachführung via Hardware-Timer
+- Frequenzen > ~130 Hz physikalisch nicht erreichbar (Amplitude < 3 Steps → Abbruch)
+- Bei sehr kleinen Amplituden (<5°): Positionsgenauigkeit durch Microstep-Raster begrenzt
+
+---
+
+## 8. Telemetrie-Analyse
 
 ### CSV-Format (ab v3.6.11)
 `ts_ms, phase, val, pos_steps, spd_sps, real_rpm, sg_result, cs_actual, cur_a, cur_b, stall, otpw, ot, ola, olb`
