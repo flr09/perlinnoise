@@ -412,3 +412,30 @@ Aufruf nur über Parcour-Toggle FREQ-SWEEP (kein standalone-Button).
 | T4 | Kalibrierung + Homing nach v3.7.1 verifizieren | A1→A2 korrekt? 0° landet auf Sensormitte? Parcour startet/endet sauber? |
 | T5 | FreqSweep 10–200 Hz am echten Motor messen | Welche Frequenzen sind tatsächlich erreichbar? Wann fällt Amplitude unter Limit? Telemetrie auswerten. |
 | T6 | Bug C4 beheben (Back-Off-Timeout homeMotor) | `waitForSensorTimed` Rückgabewert prüfen, bei Timeout sauber abbrechen |
+
+---
+
+## 9. Vorschläge
+
+### S1 — Vollständige Modularisierung
+Trotz Aufsplittung in Driver/Sensor/Telemetry ist `MotorControl.cpp` noch ein Monolith (>30KB).
+**Ziel:** Verlagerung der Test-Abläufe (Phase 6) und der Kalibrierungs-Logik (Phase 3) in eigene Plugin-Klassen, um `MotorControl` als reine Koordinationsinstanz zu nutzen.
+
+### S2 — Logischer Interlock (State-Machine)
+Das System verlässt sich auf `pending...` Flags ohne gegenseitige Verriegelung.
+**Gefahr:** Überlappende Befehle (z. B. Homing während laufendem Test) führen zu unvorhersehbarem mechanischem Verhalten.
+**Ziel:** Einführung einer State-Machine (IDLE, CALIBRATING, HOMING, RUNNING_TEST, ERROR).
+
+### S3 — UART-Entkopplung
+`updateTelemCache()` macht zeitintensive UART-Abfragen in `TaskCore1`.
+**Gefahr:** Blockade oder Jitter der Realtime-Logik (besonders bei schnellen FreqSweeps).
+**Ziel:** Telemetrie-Update in einen Low-Priority Task auf Core 0 auslagern.
+
+### S4 — NVS Flash-Schutz (Dirty-Bit)
+Jeder `saveCalibration` Aufruf schreibt physisch in den Flash.
+**Gefahr:** Unnötiger Verschleiß der Flash-Zellen bei häufigen Tests.
+**Ziel:** Nur schreiben, wenn sich Daten real geändert haben (Dirty-Bit Vergleich).
+
+### S5 — Dynamischer Tacho-Filter
+Der 5ms Hardcoded Filter in der ISR begrenzt die maximale Drehzahl.
+**Ziel:** Konfigurierbarer oder drehzahlabhängiger Filterwert in `Config.h`.
