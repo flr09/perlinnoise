@@ -8,16 +8,16 @@ struct MotorState {
 };
 
 struct CalibrationData {
-    long     triggerStart  = 0;
-    long     triggerEnd    = 0;
-    long     triggerCenter = 0;
-    float    maxRpm        = 0;
-    float    maxAccel      = 0;
-    bool     valid         = false;
+    float    triggerStartDeg = 0; // CW edge offset from center in degrees
+    float    triggerEndDeg   = 0; // CCW edge offset from center in degrees
+    float    maxRpm          = 0;
+    float    maxAccel        = 0;
+    bool     valid           = false;
     uint16_t learnedCurrentMA = 0;
     uint8_t  sgThrs           = 0;
     uint8_t  stableRuns       = 0;
     uint32_t tpwmThrs         = 0;
+    uint32_t nvsVersion       = 3619; // NVS structure version
 };
 
 struct ParcourConfig {

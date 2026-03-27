@@ -16,7 +16,8 @@ void addLog(String msg) {
 
 void saveCalibration(int i) {
     prefs.begin("cal", false);
-    String key = "m" + String(i) + "_" + String(sizeof(CalibrationData));
+    // FIXED KEY for structure-independent rollbacks
+    String key = "m" + String(i) + "_stable";
     prefs.putBytes(key.c_str(), &sys.cal[i], sizeof(CalibrationData));
     prefs.end();
 }
@@ -24,14 +25,13 @@ void saveCalibration(int i) {
 void loadCalibration() {
     prefs.begin("cal", true);
     for (int i = 0; i < 4; i++) {
-        String key = "m" + String(i) + "_" + String(sizeof(CalibrationData));
-        if (prefs.getBytesLength(key.c_str()) == sizeof(CalibrationData))
+        String key = "m" + String(i) + "_stable";
+        if (prefs.getBytesLength(key.c_str()) == sizeof(CalibrationData)) {
             prefs.getBytes(key.c_str(), &sys.cal[i], sizeof(CalibrationData));
-        // v3.6.12 coordinate change: triggerCenter is now always 0 (center = zero by definition).
-        // Old firmware stored triggerCenter as absolute PCNT step position (~hundreds–thousands).
-        // If triggerCenter != 0, this is old-format data → discard to prevent wrong moveTo(0).
-        if (sys.cal[i].valid && sys.cal[i].triggerCenter != 0) {
-            sys.cal[i] = CalibrationData(); // reset to default (valid=false)
+            // Check NVS version to ensure data compatibility
+            if (sys.cal[i].nvsVersion != 3619) sys.cal[i].valid = false;
+        } else {
+            sys.cal[i].valid = false;
         }
     }
     prefs.end();
@@ -39,14 +39,12 @@ void loadCalibration() {
 
 void initMotors() {
     loadCalibration();
-    uartMutex = xSemaphoreCreateMutex(); // must be created before initDriver() uses it
-    initSensor();   // PCNT must be configured BEFORE FastAccelStepper (see Sensor.cpp)
-    initDriver();   // FAS + TMC2209 init runs after PCNT
+    uartMutex = xSemaphoreCreateMutex();
+    initSensor();
+    initDriver();
 }
 
 // --- CARDINAL ANGLES ---
-// Moves to the nearest 0°/90°/180°/270° position (multiples of stepsPerRev/4).
-// Call after setMicrosteps(64) so stepsPerRev=12800 and cardinals are consistent.
 void gotoCardinal() {
     if (!stepper || !sys.cal[0].valid) return;
     long pos     = stepper->getCurrentPosition();
@@ -65,7 +63,7 @@ void gotoCardinal() {
     }
     long target = pos - bestDelta;
     if (target == pos) return;
-    addLog("→" + String(bestQ * 90) + "° (step " + String(target) + ")");
+    addLog("→" + String(bestQ * 90) + "°");
     stepper->setSpeedInHz((uint32_t)rpmToSps(300.0f));
     stepper->setAcceleration(8000);
     stepper->moveTo(target);
@@ -73,16 +71,12 @@ void gotoCardinal() {
 }
 
 // --- HOMING ---
-// Homing approach (v3.6.17 - Single-Pass Logic):
-// 1. Fast CW search until sensor is hit (A1).
-// 2. Back off CCW to clear sensor.
-// 3. Slow CW precision approach to find A1 again.
-// 4. Use triggerStart (offset from center) to find 0°.
+// Uses degree-based offsets for resolution-independent positioning.
 void homeMotor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
     setMicrosteps(16);
-    addLog("Homing...");
+    addLog("Homing (Deg-Mode)...");
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
     }
@@ -111,7 +105,7 @@ void homeMotor(int i) {
     pcntStepperBase = stepper->getCurrentPosition();
     sensorHit = false;
 
-    // Slow CW precision A1
+    // Slow CW precision A1 (TriggerStart)
     stepper->setSpeedInHz(200);
     stepper->runForward();
     if (!waitForSensorTimed(LOW, (long)(stepsPerRev * 0.5f), 5000)) {
@@ -125,35 +119,30 @@ void homeMotor(int i) {
     if (sys.cal[0].valid) {
         long curPos = stepper->getCurrentPosition();
         long overshot = curPos - a1_abs;
-        // Position neu deklarieren: a1_abs ist triggerStart (z.B. -25)
-        stepper->setCurrentPosition(sys.cal[0].triggerStart + overshot);
-        stepper->moveTo(0); // Fahre zur Sensormitte
+        
+        // Convert triggerStartDeg back to steps at CURRENT microsteps (16MS)
+        long triggerStartSteps = (long)(sys.cal[0].triggerStartDeg * (float)stepsPerRev / 360.0f);
+        
+        stepper->setCurrentPosition(triggerStartSteps + overshot);
+        stepper->moveTo(0); // Fahre zur Sensormitte (0 Grad)
         while (stepper->isRunning()) { yield(); }
-        addLog("Home @0°");
+        addLog("Home @0° (Deg OK)");
     } else {
         stepper->setCurrentPosition(0);
-        addLog("Home (kein Cal)");
+        addLog("Home (uncal)");
     }
     
-    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
-    }
     setMicrosteps(64);
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
 }
 
 // --- SENSOR CHARACTERIZATION ---
-// Procedure (v3.6.17 - Single-Pass CW):
-// 1. Ensure we start outside sensor (move CCW if active).
-// 2. Approach from left (CW) -> find A1 (ON-edge).
-// 3. Continue CW -> find A2 (OFF-edge).
-// 4. Center = (A1 + A2) / 2.
-// 5. Return to Center and set 0°.
+// Stores results in Degrees to be microstep-independent.
 void characterizeSensor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
     setMicrosteps(16);
-    addLog("Kalibrierung (Single-Pass CW)...");
+    addLog("Calib (Single-Pass CW / Deg)...");
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
         driverX.en_spreadCycle(true); xSemaphoreGive(uartMutex);
     }
@@ -165,7 +154,6 @@ void characterizeSensor(int i) {
         waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.5f), 5000);
         stepper->stopMove(); while (stepper->isRunning()) { yield(); }
     }
-    // Etwas weiter CCW fahren für Anlauf
     stepper->setSpeedInHz(500); stepper->runBackward();
     waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.3f), 5000);
     stepper->stopMove(); while (stepper->isRunning()) { yield(); }
@@ -197,26 +185,24 @@ void characterizeSensor(int i) {
 
     if (a2 <= a1) { addLog("Err: A2<=A1 — Sensor defekt?"); return; }
 
-    long width  = a2 - a1;
-    long center = a1 + width / 2;
+    long widthSteps = a2 - a1;
+    long centerSteps = a1 + widthSteps / 2;
     
-    sys.cal[0].triggerStart  = a1 - center; // Offset von Mitte (negativ)
-    sys.cal[0].triggerCenter = 0;           // Mitte ist 0
-    sys.cal[0].triggerEnd    = a2 - center; // Offset von Mitte (positiv)
+    // Store results as Degrees (resolution independent)
+    sys.cal[0].triggerStartDeg = (float)(a1 - centerSteps) * 360.0f / (float)stepsPerRev;
+    sys.cal[0].triggerEndDeg   = (float)(a2 - centerSteps) * 360.0f / (float)stepsPerRev;
     sys.cal[0].valid = true;
+    sys.cal[0].nvsVersion = 3619;
     saveCalibration(0);
 
-    addLog("Cal: A1=" + String(a1) + " A2=" + String(a2) + " Mitte=" + String(center));
+    addLog("Cal Deg: Start=" + String(sys.cal[0].triggerStartDeg, 2) + "°");
     
-    // Zur Mitte fahren und 0° setzen
+    // Zur Mitte fahren (0 Grad deklarieren)
     stepper->setSpeedInHz(400);
-    stepper->moveTo(center);
+    stepper->moveTo(centerSteps);
     while (stepper->isRunning()) { yield(); }
     stepper->setCurrentPosition(0);
 
-    if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-        driverX.en_spreadCycle(false); xSemaphoreGive(uartMutex);
-    }
     setMicrosteps(64);
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
     addLog("Kalibrierung OK — 0° gesetzt.");
@@ -671,7 +657,10 @@ void runFreqSweep(int idx) {
     if (!stepper || !sys.cal[idx].valid) {
         addLog("FreqSweep: keine Kalibrierung"); return;
     }
-    long ampLimit = min(abs(sys.cal[idx].triggerStart), abs(sys.cal[idx].triggerEnd));
+    // Convert degree limits back to steps for amplitude calculation
+    long triggerStartSteps = (long)(sys.cal[idx].triggerStartDeg * (float)stepsPerRev / 360.0f);
+    long triggerEndSteps   = (long)(sys.cal[idx].triggerEndDeg   * (float)stepsPerRev / 360.0f);
+    long ampLimit = min(abs(triggerStartSteps), abs(triggerEndSteps));
     if (ampLimit < FREQ_AMP_MIN_STEPS) { addLog("FreqSweep: calib range zu klein"); return; }
 
     float maxSps = sys.cal[idx].maxRpm > 100.0f
