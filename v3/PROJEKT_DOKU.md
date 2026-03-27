@@ -253,6 +253,10 @@ Bei 400 RPM mit TPWMTHRS=0 (erzwungen StealthChop), Strom-Sweep:
 | F13| 3.7.1 | 🟡 | 1-4 Schritte Drift | `pcntStepperBase` Setzen während RMT-Buffer aktiv | ✅ `delay(2)` nach `while(isRunning())` vor PCNT-Reset in homeMotor + characterizeSensor |
 | F14| 3.7.1 | 🔴 | Homing verschoben | Microstep-Umschaltung nach `moveToDeg(0)`, ±1 Step Restfehler wird ×4 | ✅ `setPositionDeg(0.0f)` nach `while(isRunning())` in homeMotor, vor `setMicrosteps(64)` |
 | C4 | 3.7.1 | 🟡 | Back-Off-Timeout in homeMotor ignoriert | `waitForSensorTimed(HIGH, …)` Rückgabewert ungeprüft → bei Timeout PCNT-Sync falsch, A1-Position verfälscht | Offen — Rückgabewert prüfen, Fehlerpath analog A1-Suche |
+| R1 | 3.7.1 | 🔴 | `Err: A2<=A1` | **Doppel-Monitoring:** ISR und Bounce2 kämpfen um `TACHO_PIN`. ISR speichert Jitter, Bounce2 filtert ihn. | ✅ Kein aktiver Konflikt: ISR=Kantenpräzision (PCNT, F12-Latch), Bounce2=Zustandsbestätigung. `lastSensorRaw` ist 5ms vor Bounce2-Return eingefroren. By design korrekt. |
+| R2 | 3.7.1 | 🟡 | Zyklus-Verzögerung | **UART-Overhead:** `updateTelemCache` und Steuer-Funktionen fragen TMC-Register redundant ab. | Kein identifizierbarer redundanter Read. `applyDriverSettings` nach MS-Switch notwendig (TPWMTHRS-Neuberechnung). Niedrige Priorität. |
+| R3 | 3.7.1 | 🟡 | Anzeige-Jitter | **Berechnungs-Split:** Winkel-Normalisierung findet redundant in FW und UI-JS statt. | Kein Bug: JS drei-Term-Min für 360°/0°-Wrap nötig (z.B. pos=5°, Marker=360°). FW gibt konsistenten 0-360-Bereich. Beide Ebenen notwendig. |
+| R4 | 3.7.1 | 🟡 | Datenverlust | **Buffer-Reset:** Standalone-Katapult/FreqSweep riefen `clearTelemetry()` auf und löschten Parcour-Daten. | ✅ `clearTelemetry()` aus `pendingKatapult`- und `pendingFreqSweep`-Pfaden entfernt — nur Parcour-Start löscht. |
 
 ---
 

@@ -182,11 +182,11 @@ void TaskCore1(void * pvParameters) {
         }
         if (sys.pendingKatapult != -1) {
             int m = sys.pendingKatapult; sys.pendingKatapult = -1;
-            clearTelemetry(); runKatapult(m);
+            runKatapult(m);   // R4: kein clearTelemetry — Parcour-Daten bleiben erhalten
         }
         if (sys.pendingFreqSweep != -1) {
             int m = sys.pendingFreqSweep; sys.pendingFreqSweep = -1;
-            clearTelemetry(); runFreqSweep(m);
+            runFreqSweep(m);  // R4: kein clearTelemetry
         }
         if (sys.pendingShow != -1) { int m = sys.pendingShow; sys.pendingShow = -1; runPerformanceShow(m); }
         updateMotors();
