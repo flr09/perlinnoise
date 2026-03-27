@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include <Bounce2.h>
 #include "Config.h"
 #include "driver/pcnt.h"
 
@@ -13,6 +14,8 @@ extern long              pcntStepperBase;
 extern volatile unsigned long tachoPeriodMs;
 extern volatile unsigned long lastTachoLowMs;
 extern volatile uint32_t      pulseCount;
+
+extern Bounce sensorBounce;
 
 void     initSensor();
 uint16_t getTachoRpm();

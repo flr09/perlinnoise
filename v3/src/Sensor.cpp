@@ -1,11 +1,14 @@
 #include "Sensor.h"
 #include <FastAccelStepper.h>
+#include <Bounce2.h>
 
 // Defined in MotorControl.cpp — shared globals
 extern portMUX_TYPE   motorMux;
 extern FastAccelStepper* stepper;
 
 // --- GLOBALS ---
+Bounce sensorBounce;
+
 volatile int16_t  lastSensorRaw  = 0;
 volatile bool     sensorHit      = false;
 long              pcntStepperBase = 0;
@@ -55,12 +58,13 @@ bool waitForSensorTimed(bool state, long maxSteps, unsigned long timeoutMs) {
     if (!stepper) return false;
     unsigned long start    = millis();
     long          startPos = stepper->getCurrentPosition();
-    while (digitalRead(TACHO_PIN) != state) {
+    while (true) {
+        sensorBounce.update();
+        if (sensorBounce.read() == state) return true;
         if (millis() - start > timeoutMs ||
             abs(stepper->getCurrentPosition() - startPos) > maxSteps) return false;
         yield();
     }
-    return true;
 }
 
 void initSensor() {
@@ -87,6 +91,7 @@ void initSensor() {
     pcnt_counter_clear(PCNT_UNIT_0);
     pcnt_counter_resume(PCNT_UNIT_0);
 
-    pinMode(TACHO_PIN, INPUT_PULLUP);
+    sensorBounce.attach(TACHO_PIN, INPUT_PULLUP);
+    sensorBounce.interval(5);  // 5 ms — entspricht ISR-Noise-Filter
     attachInterrupt(digitalPinToInterrupt(TACHO_PIN), tachoISR, CHANGE);
 }

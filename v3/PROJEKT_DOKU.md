@@ -31,9 +31,9 @@
 
 **Spannungssicherheit:** NPN-Ausgang sinks nur gegen GND — kein Spannungsübertrag an ESP32-GPIO, solange Pull-up auf 3,3V. Versorgung des Sensors (z. B. 12V) spielt keine Rolle.
 
-**Bibliotheken:** Kein spezialisierter Stack nötig (digitaler Schalter). Optionen:
-- **Aktuelle Implementierung:** IRAM_ATTR ISR + 5 ms Noise-Filter. Geeignet für Tacho (schnelle Periodenmessung) und Sensorsuche (`waitForSensorTimed`).
-- **[Bounce2](https://github.com/thomasfredericks/Bounce2):** Robusteres Edge-Debouncing für `waitForSensorTimed`-Pfade; nicht sinnvoll in der ISR (zu langsam). Nachrüsten wenn Bounce-Probleme auftreten.
+**Bibliotheken:**
+- **[Bounce2](https://github.com/thomasfredericks/Bounce2)** (`thomasfredericks/Bounce2 @ ^2.71`) — aktiv in `waitForSensorTimed` (Homing/Calib-Sensorsuche). Debounce-Intervall 5 ms, deckt sich mit ISR-Noise-Filter.
+- **ISR (`tachoISR`):** Bounce2 nicht anwendbar (nicht ISR-safe). Bleibt direkter Hardware-Register-Read mit eigenem 5 ms-Filter.
 
 **Geplanter Tausch:** Sensor wird später gegen anderes Modell ersetzt — NVS-Kalibrierung bleibt kompatibel (Grad-basiert, unabhängig von Sensorbreite).
 
