@@ -47,26 +47,23 @@ void initMotors() {
 // --- CARDINAL ANGLES ---
 void gotoCardinal() {
     if (!stepper || !sys.cal[0].valid) return;
-    long pos     = stepper->getCurrentPosition();
-    long rev     = (long)stepsPerRev;
-    long halfRev = rev / 2;
-    long posInRev = pos % rev;
-    if (posInRev < 0) posInRev += rev;
-    long bestDelta = rev;
-    int  bestQ     = 0;
+    float posDeg    = getPositionDeg();
+    float posInRev  = fmodf(posDeg, 360.0f);
+    if (posInRev < 0.0f) posInRev += 360.0f;
+    float bestDelta = 360.0f;
+    int   bestQ     = 0;
     for (int q = 0; q < 4; q++) {
-        long card  = (long)q * rev / 4;
-        long delta = posInRev - card;
-        if (delta >  halfRev) delta -= rev;
-        if (delta < -halfRev) delta += rev;
-        if (abs(delta) < abs(bestDelta)) { bestDelta = delta; bestQ = q; }
+        float card  = q * 90.0f;
+        float delta = posInRev - card;
+        if (delta >  180.0f) delta -= 360.0f;
+        if (delta < -180.0f) delta += 360.0f;
+        if (fabsf(delta) < fabsf(bestDelta)) { bestDelta = delta; bestQ = q; }
     }
-    long target = pos - bestDelta;
-    if (target == pos) return;
+    if (fabsf(bestDelta) < 0.1f) return;
     addLog("→" + String(bestQ * 90) + "°");
     stepper->setSpeedInHz((uint32_t)rpmToSps(300.0f));
     stepper->setAcceleration(8000);
-    stepper->moveTo(target);
+    moveToDeg(posDeg - bestDelta);
     while (stepper->isRunning()) { yield(); }
 }
 
@@ -120,11 +117,8 @@ void homeMotor(int i) {
         long curPos = stepper->getCurrentPosition();
         long overshot = curPos - a1_abs;
         
-        // Convert triggerStartDeg back to steps at CURRENT microsteps (16MS)
-        long triggerStartSteps = (long)(sys.cal[0].triggerStartDeg * (float)stepsPerRev / 360.0f);
-        
-        stepper->setCurrentPosition(triggerStartSteps + overshot);
-        stepper->moveTo(0); // Fahre zur Sensormitte (0 Grad)
+        stepper->setCurrentPosition(degToSteps(sys.cal[0].triggerStartDeg) + overshot);
+        moveToDeg(0.0f); // Fahre zur Sensormitte (0 Grad)
         while (stepper->isRunning()) { yield(); }
         addLog("Home @0° (Deg OK)");
     } else {
@@ -185,23 +179,22 @@ void characterizeSensor(int i) {
 
     if (a2 <= a1) { addLog("Err: A2<=A1 — Sensor defekt?"); return; }
 
-    long widthSteps = a2 - a1;
-    long centerSteps = a1 + widthSteps / 2;
-    
+    long centerSteps = (long)lroundf((float)(a1 + a2) / 2.0f);
+
     // Store results as Degrees (resolution independent)
-    sys.cal[0].triggerStartDeg = (float)(a1 - centerSteps) * 360.0f / (float)stepsPerRev;
-    sys.cal[0].triggerEndDeg   = (float)(a2 - centerSteps) * 360.0f / (float)stepsPerRev;
+    sys.cal[0].triggerStartDeg = stepsToDeg(a1 - centerSteps);
+    sys.cal[0].triggerEndDeg   = stepsToDeg(a2 - centerSteps);
     sys.cal[0].valid = true;
     sys.cal[0].nvsVersion = 3619;
     saveCalibration(0);
 
     addLog("Cal Deg: Start=" + String(sys.cal[0].triggerStartDeg, 2) + "°");
-    
+
     // Zur Mitte fahren (0 Grad deklarieren)
     stepper->setSpeedInHz(400);
     stepper->moveTo(centerSteps);
     while (stepper->isRunning()) { yield(); }
-    stepper->setCurrentPosition(0);
+    setPositionDeg(0.0f);
 
     setMicrosteps(64);
     applyDriverSettings(sys.cal[0].learnedCurrentMA > 0 ? sys.cal[0].learnedCurrentMA : MOTOR_CURRENT_DEFAULT);
@@ -313,8 +306,8 @@ void runInertiaTest(int i) {
     while(acc <= 40000 && !failed) {
         stepper->setAcceleration(acc);
         portENTER_CRITICAL(&motorMux); pulseCount = 0; portEXIT_CRITICAL(&motorMux);
-        stepper->move(stepsPerRev * 2); while(stepper->isRunning()) { yield(); }
-        stepper->move(-stepsPerRev * 2); while(stepper->isRunning()) { yield(); }
+        moveByDeg(720.0f); while(stepper->isRunning()) { yield(); }
+        moveByDeg(-720.0f); while(stepper->isRunning()) { yield(); }
         if (getPulseCount() < 4) failed = true;
         else acc += 2000;
     }
@@ -535,10 +528,10 @@ void runPerformanceShow(int i) {
     }
     stepper->setSpeedInHz((uint32_t)rpmToSps(150.0f));
     stepper->setAcceleration(2000);
-    stepper->move((long)(stepsPerRev * 3));
+    moveByDeg(1080.0f);
     while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
     delay(400);
-    stepper->move(-(long)(stepsPerRev * 3));
+    moveByDeg(-1080.0f);
     while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
     delay(600);
 
@@ -555,11 +548,11 @@ void runPerformanceShow(int i) {
     stepper->setAcceleration((uint32_t)maxAcc);
     for (int run = 0; run < 3; run++) {
         addLog("  Burst " + String(run+1) + "/3  CW");
-        stepper->move((long)(stepsPerRev * 4));
+        moveByDeg(1440.0f);
         while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
         delay(80);
         addLog("  Burst " + String(run+1) + "/3  CCW");
-        stepper->move(-(long)(stepsPerRev * 4));
+        moveByDeg(-1440.0f);
         while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
         delay(80);
     }
@@ -575,7 +568,7 @@ void runPerformanceShow(int i) {
     stepper->setSpeedInHz((uint32_t)rpmToSps(300.0f));
     stepper->setAcceleration(8000);
     for (int step = 0; step < 4; step++) {
-        stepper->move((long)(stepsPerRev / 4));   // genau +90°
+        moveByDeg(90.0f);   // genau +90°
         while (stepper->isRunning()) { if (sys.pendingStop) goto cleanup; yield(); }
         delay(900);                                // Pause: UI-Dot leuchtet auf
     }
@@ -657,10 +650,9 @@ void runFreqSweep(int idx) {
     if (!stepper || !sys.cal[idx].valid) {
         addLog("FreqSweep: keine Kalibrierung"); return;
     }
-    // Convert degree limits back to steps for amplitude calculation
-    long triggerStartSteps = (long)(sys.cal[idx].triggerStartDeg * (float)stepsPerRev / 360.0f);
-    long triggerEndSteps   = (long)(sys.cal[idx].triggerEndDeg   * (float)stepsPerRev / 360.0f);
-    long ampLimit = min(abs(triggerStartSteps), abs(triggerEndSteps));
+    // Convert degree limits to steps for amplitude calculation
+    long ampLimit = min(abs(degToSteps(sys.cal[idx].triggerStartDeg)),
+                        abs(degToSteps(sys.cal[idx].triggerEndDeg)));
     if (ampLimit < FREQ_AMP_MIN_STEPS) { addLog("FreqSweep: calib range zu klein"); return; }
 
     float maxSps = sys.cal[idx].maxRpm > 100.0f

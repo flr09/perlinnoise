@@ -211,11 +211,11 @@ void setup() {
         String logData = sys.log; sys.log = "";
         portEXIT_CRITICAL(&motorMux);
         
-        long pos = 0; float spd = 0;
-        if(stepper) { pos = stepper->getCurrentPosition(); spd = stepper->getCurrentSpeedInMilliHz() / 1000.0f; }
+        float spd = stepper ? stepper->getCurrentSpeedInMilliHz() / 1000.0f : 0.0f;
         // Normalize angle to 0–360 (handles negative positions from CCW motion)
-        long sr = (long)stepsPerRev;
-        float angleDeg = ((pos % sr + sr) % sr) * 360.0f / sr;
+        float rawDeg   = getPositionDeg();
+        float angleDeg = fmodf(rawDeg, 360.0f);
+        if (angleDeg < 0.0f) angleDeg += 360.0f;
         String j = "{\"hit\":" + String(digitalRead(TACHO_PIN)==LOW?"true":"false");
         j += ",\"fw\":\"" + String(FW_VERSION) + "\",\"rpm\":" + String(getTachoRpm());
         j += ",\"log\":\"" + logData + "\"";

@@ -2,7 +2,7 @@
 
 **Hardware:** FYSETC E4 · ESP32 · TMC2209 · NEMA17 (36BYG1204-A-6QHT, Pancake)
 **Sensor:** NPN-Hallsensor an GPIO 15 (TACHO_PIN), Pull-up intern
-**Stand:** 2026-03-26 | aktuell: v3.6.18
+**Stand:** 2026-03-27 | aktuell: v3.7.1
 
 ---
 
@@ -77,7 +77,7 @@ Noise-Filter: nur updaten wenn Periode ≥ 5 ms (eliminiert Bounce).
 - `en_spreadCycle(false)` + `TPWMTHRS>0` → Auto-Switch TMC intern
 - `applyDriverSettings(runMA)` muss nach `setMicrosteps()` aufgerufen werden (nutzt aktuelles `stepsPerRev`)
 
-### Koordinatensystem (ab v3.6.12)
+### Koordinatensystem (ab v3.6.19 — Grad-absolut)
 ```
   CCW ←──────────────────────────────── CW
         triggerStart      triggerEnd
@@ -85,13 +85,33 @@ Noise-Filter: nur updaten wenn Periode ≥ 5 ms (eliminiert Bounce).
   ───────────┼──── SENSOR ─────┼────────
           sCW (ON)         eCW (OFF)
                     ↑ CENTER = 0° ↑
-                triggerCenter = 0
 ```
-- `triggerStart` = `sCW − center` (negativ, z. B. −25 steps)
-- `triggerCenter` = 0 (per Definition)
-- `triggerEnd` = `eCW − center` (positiv, z. B. +25 steps)
+- `triggerStartDeg` = `stepsToDeg(a1 − center)` (negativ, z. B. −2.8°)
+- `triggerEndDeg`   = `stepsToDeg(a2 − center)` (positiv, z. B. +2.8°)
+- Alle Winkelwerte in `CalibrationData` als `float` Grad — **nie als Schritte**.
+- `nvsVersion = 3619` invalidiert ältere NVS-Strukturen automatisch bei Ladezeit.
 
-### Kalibrierung — characterizeSensor (ab v3.6.18)
+### Driver-Layer Winkel-API (ab v3.7.1)
+
+Alle Module greifen ausschließlich über diese Funktionen auf Motorpositionen zu.
+Kein Modul außerhalb von Driver.cpp/h darf `stepsPerRev` direkt multiplizieren oder `stepper->moveTo(steps)` mit inline-Konvertierung aufrufen.
+
+```cpp
+// Driver.h (inline — immer aktuelles stepsPerRev)
+long  degToSteps(float deg)   // deg * stepsPerRev / 360
+float stepsToDeg(long steps)  // steps * 360 / stepsPerRev
+
+// Driver.cpp
+void  moveToDeg(float deg)      // stepper->moveTo(degToSteps(deg))
+void  moveByDeg(float deg)      // stepper->move(degToSteps(deg))
+void  setPositionDeg(float deg) // stepper->setCurrentPosition(degToSteps(deg))
+float getPositionDeg()          // stepsToDeg(stepper->getCurrentPosition())
+```
+
+Vorteil: Microstep-Wechsel (z. B. 16MS → 64MS) skaliert `stepsPerRev` atomisch in `setMicrosteps()`.
+Alle nachgelagerten Berechnungen (`moveToDeg`, `degToSteps`) nutzen automatisch den neuen Wert — keine verstreuten `deg * stepsPerRev / 360`-Ausdrücke.
+
+### Kalibrierung — characterizeSensor (ab v3.7.1)
 ```
   CCW ←──────────────────────────────────────────── CW →
                               Motor fährt →→→→→→→→→→
@@ -106,10 +126,11 @@ Noise-Filter: nur updaten wenn Periode ≥ 5 ms (eliminiert Bounce).
 4. **A1:** CW 500 sps bis Sensor ON → ISR erfasst `a1` exakt
 5. **A2:** CW 500 sps weiter bis Sensor OFF → ISR erfasst `a2` exakt
 6. `stopMove()` + `while(isRunning())`
-7. `center = a1 + (a2 − a1) / 2` → `setSpeedInHz(400)` → `moveTo(center)` → `setCurrentPosition(0)`
-8. `triggerStart = a1 − center` (negativ), `triggerEnd = a2 − center` (positiv), `triggerCenter = 0`
+7. `center = lroundf((a1 + a2) / 2.0f)` — gerundete Mitte (kein Integer-Truncation-Fehler bei ungeradem Abstand)
+8. `triggerStartDeg = stepsToDeg(a1 − center)`, `triggerEndDeg = stepsToDeg(a2 − center)` → NVS
+9. `moveTo(center)` → `setPositionDeg(0.0f)` → Sensormitte ist 0°
 
-### Homing — homeMotor (ab v3.6.18)
+### Homing — homeMotor (ab v3.7.1)
 1. CW 1200 sps bis Sensor ON — Schnellsuche, max. 1,5 rev
 2. `stopMove()` + `while(isRunning())` — Motor vollständig stoppen
 3. CCW 400 sps bis Sensor OFF — Sensor verlassen
@@ -118,7 +139,7 @@ Noise-Filter: nur updaten wenn Periode ≥ 5 ms (eliminiert Bounce).
 6. CW 200 sps bis Sensor ON → ISR erfasst `a1_abs` (exakte Einschaltkante)
 7. `stopMove()` + `while(isRunning())` — **muss vollständig stehen vor setCurrentPosition!**
 8. `overshoot = curPos − a1_abs`
-9. `setCurrentPosition(triggerStart + overshoot)` → `moveTo(0)` → Sensormitte = 0°
+9. `setCurrentPosition(degToSteps(triggerStartDeg) + overshoot)` → `moveToDeg(0.0f)` → Sensormitte = 0°
 
 ---
 
@@ -186,6 +207,8 @@ Bei 400 RPM mit TPWMTHRS=0 (erzwungen StealthChop), Strom-Sweep:
 | v3.6.16 | 2026-03-26 | characterizeSensor: CCW-Anlauf 0.3 rev vor A1-Suche (reproduzierbarer Startpunkt); A2 auf 500 sps (kein 20sps-Kriechgang) |
 | v3.6.17 | 2026-03-26 | homeMotor: Kommentare und Variablen aufgeräumt (`a1_abs` statt `sCW_abs`); characterizeSensor-Logik finalisiert |
 | ⭐ **v3.7.0** | 2026-03-26 | **MEILENSTEIN** — Calib + Homing vollständig funktionsfähig. Alle bekannten Bugs (H1–H4, C2) geschlossen. |
+| v3.6.19 | 2026-03-26 | Grad-absolutes Koordinatensystem: `CalibrationData` auf `triggerStartDeg`/`triggerEndDeg` (float°) umgestellt. NVS-Versionierung `nvsVersion=3619`. |
+| v3.7.1 | 2026-03-27 | Phase 1 Modularisierung (Config/Types/IModule/Sensor/Driver/Telemetry). Driver-Layer Winkel-API (`degToSteps`, `moveToDeg`, …). FreqSweep: kontinuierlicher Chirp 10–200 Hz. `lroundf` für Microstep-Skalierung und Kalibrierungsmitte. |
 
 ---
 
@@ -206,6 +229,7 @@ Bei 400 RPM mit TPWMTHRS=0 (erzwungen StealthChop), Strom-Sweep:
 | H4 | 3.6.14 | 🔴 | homeMotor fährt falsche Richtung | `stopMove()` ohne `while(isRunning())` → `setCurrentPosition()` während Motor noch läuft | Alle `stopMove()` + wait; PCNT-ISR für exakte Sensorposition |
 | C2 | 3.6.15 | 🔴 | Kalibrierung findet Sensor nie, 0° falsch, Homing falsch | Falsche Fahrtrichtung nach P1 (siehe Abschnitt 6.1) | A1→A2 CW-Durchfahrt, kein CCW-Start |
 | C3 | 3.6.17 | 🟡 | A1-/A2-Fehlerpath: `stopMove()` ohne `while(isRunning())` | Motor läuft nach Fehler-Return noch aus | Bekannt, unkritisch (Funktion bricht ab, Motor decel von selbst) |
+| C4 | 3.7.1 | 🟡 | Back-Off-Timeout in homeMotor ignoriert | `waitForSensorTimed(HIGH, …)` Rückgabewert ungeprüft → bei Timeout PCNT-Sync falsch, A1-Position verfälscht | Offen — Rückgabewert prüfen, Fehlerpath analog A1-Suche |
 
 ---
 
@@ -302,4 +326,6 @@ Der Fahrtrichtungsfehler ist strukturell unmöglich, da der Motor durchgehend CW
 | T1 | runInertiaTest mit a_max >100k sps² | Reale Stall-Grenze bei extremen Rampen |
 | T2 | Microstep-Wechsel 16MS → 4MS während Parcour | Kurzrampen unter 10 Umdrehungen |
 | T3 | Belasteter Welle (Gewicht auf Teller) | Minimum-Strom und max. SG unter Last |
-| T4 | Kalibrierung + Homing nach v3.7.0 verifizieren | A1→A2 korrekt? 0° landet auf Sensormitte? Parcour startet/endet sauber? |
+| T4 | Kalibrierung + Homing nach v3.7.1 verifizieren | A1→A2 korrekt? 0° landet auf Sensormitte? Parcour startet/endet sauber? |
+| T5 | FreqSweep 10–200 Hz am echten Motor messen | Welche Frequenzen sind tatsächlich erreichbar? Wann fällt Amplitude unter Limit? Telemetrie auswerten. |
+| T6 | Bug C4 beheben (Back-Off-Timeout homeMotor) | `waitForSensorTimed` Rückgabewert prüfen, bei Timeout sauber abbrechen |

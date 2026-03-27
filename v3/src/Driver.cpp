@@ -48,7 +48,7 @@ void setMicrosteps(uint16_t ms) {
     portENTER_CRITICAL(&motorMux);
     long oldPos = stepper ? stepper->getCurrentPosition() : 0;
     float factor = (float)ms / (float)currentMicrosteps;
-    if (stepper) stepper->setCurrentPosition((long)((float)oldPos * factor));
+    if (stepper) stepper->setCurrentPosition((long)lroundf((float)oldPos * factor));
     currentMicrosteps = ms;
     stepsPerRev = 200 * ms;
     portEXIT_CRITICAL(&motorMux);
@@ -77,6 +77,12 @@ void setMotorPower(int i, bool on) {
         addLog("M0 OFF");
     }
 }
+
+// --- ANGLE-ABSOLUTE API ---
+void  moveToDeg(float deg)      { if (stepper) stepper->moveTo(degToSteps(deg)); }
+void  moveByDeg(float deg)      { if (stepper) stepper->move(degToSteps(deg)); }
+void  setPositionDeg(float deg) { if (stepper) stepper->setCurrentPosition(degToSteps(deg)); }
+float getPositionDeg()          { return stepper ? stepsToDeg(stepper->getCurrentPosition()) : 0.0f; }
 
 // --- INIT ---
 void initDriver() {

@@ -18,6 +18,18 @@ float    rpmToSps(float rpm);
 float    spsToRpm(float sps);
 uint32_t rpmToTpwmthrs(float rpm);
 
+// --- ANGLE-ABSOLUTE API ---
+// degToSteps / stepsToDeg always use the current stepsPerRev.
+// After setMicrosteps(), the same physical angle maps to the correct new step count.
+// All higher-level modules (Calib, Test, FreqSweep) use these — never stepsPerRev directly.
+inline long  degToSteps(float deg)  { return (long)lroundf(deg * (float)stepsPerRev / 360.0f); }
+inline float stepsToDeg(long steps) { return (float)steps * 360.0f / (float)stepsPerRev; }
+
+void  moveToDeg(float deg);        // stepper->moveTo(degToSteps(deg))  — non-blocking
+void  moveByDeg(float deg);        // stepper->move(degToSteps(deg))    — non-blocking
+void  setPositionDeg(float deg);   // stepper->setCurrentPosition(degToSteps(deg))
+float getPositionDeg();            // stepsToDeg(stepper->getCurrentPosition())
+
 void initDriver();
 void applyDriverSettings(uint16_t runMA);
 void setMicrosteps(uint16_t ms);
