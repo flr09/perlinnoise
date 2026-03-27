@@ -2,3 +2,5 @@
 .venv/
 *.pyc
 __pycache__/
+# WiFi credentials — lokal befüllen, nie einchecken
+wifi_settings.h
