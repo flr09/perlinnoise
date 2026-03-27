@@ -22,8 +22,12 @@ volatile uint32_t      pulseCount     = 0;
 // pcnt_get_counter_value() is NOT IRAM_ATTR in ESP-IDF v4 → Flash fault when cache
 // is disabled (WiFi init, OTA). PCNT peripheral registers are always accessible.
 void IRAM_ATTR tachoISR() {
-    lastSensorRaw = (int16_t)(PCNT.cnt_unit[PCNT_UNIT_0].val & 0xFFFF);
-    sensorHit = true;
+    // F12: Latch — nur erste Flanke nach sensorHit=false erfassen.
+    // Bounce überschreibt lastSensorRaw nicht mehr.
+    if (!sensorHit) {
+        lastSensorRaw = (int16_t)(PCNT.cnt_unit[PCNT_UNIT_0].val & 0xFFFF);
+        sensorHit = true;
+    }
     if (digitalRead(TACHO_PIN) == LOW) {
         pulseCount++;
         // millis() is ARDUINO_ISR_ATTR in ESP32 Arduino — safe to call from ISR

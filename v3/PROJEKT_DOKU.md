@@ -248,6 +248,10 @@ Bei 400 RPM mit TPWMTHRS=0 (erzwungen StealthChop), Strom-Sweep:
 | H4 | 3.6.14 | 🔴 | homeMotor fährt falsche Richtung | `stopMove()` ohne `while(isRunning())` → `setCurrentPosition()` während Motor noch läuft | Alle `stopMove()` + wait; PCNT-ISR für exakte Sensorposition |
 | C2 | 3.6.15 | 🔴 | Kalibrierung findet Sensor nie, 0° falsch, Homing falsch | Falsche Fahrtrichtung nach P1 (siehe Abschnitt 6.1) | A1→A2 CW-Durchfahrt, kein CCW-Start |
 | C3 | 3.6.17 | 🟡 | A1-/A2-Fehlerpath: `stopMove()` ohne `while(isRunning())` | Motor läuft nach Fehler-Return noch aus | Bekannt, unkritisch (Funktion bricht ab, Motor decel von selbst) |
+| F11| 3.7.1 | 🟡 | UI "Offline" | `sys.log` enthält unmaskierte `\n`, korrumpiert JSON | ✅ `logData.replace('"','\'')` + `\n`/`\r`-Escaping vor JSON-Einbettung |
+| F12| 3.7.1 | 🔴 | `Err: A2<=A1` | ISR überschreibt `lastSensorRaw` während Entprellphase | ✅ ISR-Latch: `if (!sensorHit)` — nur erste Flanke nach Reset wird erfasst |
+| F13| 3.7.1 | 🟡 | 1-4 Schritte Drift | `pcntStepperBase` Setzen während RMT-Buffer aktiv | ✅ `delay(2)` nach `while(isRunning())` vor PCNT-Reset in homeMotor + characterizeSensor |
+| F14| 3.7.1 | 🔴 | Homing verschoben | Microstep-Umschaltung nach `moveToDeg(0)`, ±1 Step Restfehler wird ×4 | ✅ `setPositionDeg(0.0f)` nach `while(isRunning())` in homeMotor, vor `setMicrosteps(64)` |
 | C4 | 3.7.1 | 🟡 | Back-Off-Timeout in homeMotor ignoriert | `waitForSensorTimed(HIGH, …)` Rückgabewert ungeprüft → bei Timeout PCNT-Sync falsch, A1-Position verfälscht | Offen — Rückgabewert prüfen, Fehlerpath analog A1-Suche |
 
 ---

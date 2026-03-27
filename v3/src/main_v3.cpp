@@ -209,6 +209,10 @@ void setup() {
         portENTER_CRITICAL(&motorMux);
         String logData = sys.log; sys.log = "";
         portEXIT_CRITICAL(&motorMux);
+        // F11: Zeichen maskieren die JSON-String korrumpieren würden
+        logData.replace("\"", "'");
+        logData.replace("\n", "\\n");
+        logData.replace("\r", "");
         
         float spd = stepper ? stepper->getCurrentSpeedInMilliHz() / 1000.0f : 0.0f;
         // Normalize angle to 0–360 (handles negative positions from CCW motion)

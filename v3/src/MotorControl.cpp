@@ -94,6 +94,7 @@ void homeMotor(int i) {
     stepper->runBackward();
     waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.3f), 3000);
     stepper->stopMove(); while (stepper->isRunning()) { yield(); }
+    delay(2); // F13: RMT-Buffer leerlaufen lassen bevor PCNT-Base gesetzt wird
 
     // PCNT sync for precision A1
     pcnt_counter_pause(PCNT_UNIT_0);
@@ -120,6 +121,7 @@ void homeMotor(int i) {
         stepper->setCurrentPosition(degToSteps(sys.cal[0].triggerStartDeg) + overshot);
         moveToDeg(0.0f); // Fahre zur Sensormitte (0 Grad)
         while (stepper->isRunning()) { yield(); }
+        setPositionDeg(0.0f); // F14: 0-Punkt bei 16MS festnageln — dann MS-Switch 0*4=0 exakt
         addLog("Home @0° (Deg OK)");
     } else {
         stepper->setCurrentPosition(0);
@@ -151,6 +153,7 @@ void characterizeSensor(int i) {
     stepper->setSpeedInHz(500); stepper->runBackward();
     waitForSensorTimed(HIGH, (long)(stepsPerRev * 0.3f), 5000);
     stepper->stopMove(); while (stepper->isRunning()) { yield(); }
+    delay(2); // F13: RMT-Buffer leerlaufen lassen bevor PCNT-Base gesetzt wird
 
     pcnt_counter_pause(PCNT_UNIT_0);
     pcnt_counter_clear(PCNT_UNIT_0);
