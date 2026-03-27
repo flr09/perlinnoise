@@ -42,6 +42,11 @@
 #define FREQ_ACCEL_MAX   500000UL   // steps/s² — max accel / no ramp
 #define FREQ_AMP_MIN_STEPS    3     // abort when amplitude falls below this
 
+// --- SENSOR ---
+// ISR Noise-Filter: Bounce-Pulse kürzer als dieser Wert werden ignoriert.
+// Obergrenze: 60000 / (FILTER_MS × stepsPerRev) ~ 12.000 RPM @ 5ms/16MS
+#define TACHO_NOISE_FILTER_MS  5
+
 // --- TELEMETRY ---
 #define TELEM_INTERVAL_MS  50
 #define TELEM_MAX_BYTES    52000

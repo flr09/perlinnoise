@@ -421,21 +421,16 @@ Aufruf nur über Parcour-Toggle FREQ-SWEEP (kein standalone-Button).
 Trotz Aufsplittung in Driver/Sensor/Telemetry ist `MotorControl.cpp` noch ein Monolith (>30KB).
 **Ziel:** Verlagerung der Test-Abläufe (Phase 6) und der Kalibrierungs-Logik (Phase 3) in eigene Plugin-Klassen, um `MotorControl` als reine Koordinationsinstanz zu nutzen.
 
-### S2 — Logischer Interlock (State-Machine)
-Das System verlässt sich auf `pending...` Flags ohne gegenseitige Verriegelung.
-**Gefahr:** Überlappende Befehle (z. B. Homing während laufendem Test) führen zu unvorhersehbarem mechanischem Verhalten.
-**Ziel:** Einführung einer State-Machine (IDLE, CALIBRATING, HOMING, RUNNING_TEST, ERROR).
+### S2 — Logischer Interlock (State-Machine) ✅
+**Implementiert v3.7.1.** `MotorOpState`-Enum in `Types.h` (IDLE/HOMING/CALIBRATING/LEARNING/TESTING/SHOWING). `sys.opState` wird in `TaskCore1` um jeden blockierenden Aufruf gesetzt/gelöscht. `/cmd`-Handler lehnt alle Befehle außer `stop`/`pwr` mit HTTP 409 ab wenn `opState != IDLE`. JS zeigt "BUSY — CMD ignoriert" im Log. `/status` liefert `"op":"homing"` etc. für UI-Anzeige in der Navigationsleiste.
 
-### S3 — UART-Entkopplung
-`updateTelemCache()` macht zeitintensive UART-Abfragen in `TaskCore1`.
-**Gefahr:** Blockade oder Jitter der Realtime-Logik (besonders bei schnellen FreqSweeps).
-**Ziel:** Telemetrie-Update in einen Low-Priority Task auf Core 0 auslagern.
+### S3 — UART-Entkopplung ✅
+**Bereits implementiert.** `updateTelemCache()` läuft in einem eigenen FreeRTOS-Task auf **Core 0** (`xTaskCreatePinnedToCore(..., 0)`). Motor-Task auf Core 1 unberührt. Kein Handlungsbedarf.
 
 ### S4 — NVS Flash-Schutz (Dirty-Bit)
 Jeder `saveCalibration` Aufruf schreibt physisch in den Flash.
 **Gefahr:** Unnötiger Verschleiß der Flash-Zellen bei häufigen Tests.
 **Ziel:** Nur schreiben, wenn sich Daten real geändert haben (Dirty-Bit Vergleich).
 
-### S5 — Dynamischer Tacho-Filter
-Der 5ms Hardcoded Filter in der ISR begrenzt die maximale Drehzahl.
-**Ziel:** Konfigurierbarer oder drehzahlabhängiger Filterwert in `Config.h`.
+### S5 — Dynamischer Tacho-Filter ✅
+**Implementiert v3.7.1.** `TACHO_NOISE_FILTER_MS 5` in `Config.h`. ISR nutzt den Wert statt Hardcode. Obergrenze: 60.000 / (5ms × 3200 Steps) ≈ 3.750 RPM messbar bei 16MS; bei 64MS ≈ 937 RPM — ausreichend für aktuelle Anwendung. Anpassbar ohne Code-Änderung.

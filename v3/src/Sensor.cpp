@@ -34,7 +34,7 @@ void IRAM_ATTR tachoISR() {
         unsigned long now = millis();
         if (lastTachoLowMs > 0) {
             unsigned long p = now - lastTachoLowMs;
-            if (p >= 5) tachoPeriodMs = p;   // ignore bounces / noise < 5 ms apart
+            if (p >= TACHO_NOISE_FILTER_MS) tachoPeriodMs = p;
         }
         lastTachoLowMs = now;
     }

@@ -132,7 +132,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     function cmd(a, m) {
         let url = `/cmd?a=${a}&m=${m}`;
         if(a==='test') url += `&speed=${cfg.speed}&accel=${cfg.accel}&coast=${cfg.coast}&katapult=${cfg.katapult}&freq=${cfg.freq}`;
-        fetch(url);
+        fetch(url).then(r => { if(r.status === 409) addLog('BUSY — ' + a.toUpperCase() + ' ignoriert'); });
     }
     function addLog(msg) {
       const log = document.getElementById('log');
@@ -156,7 +156,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         const pBtn = document.getElementById('pwr0');
         pBtn.innerText = s.m[0].e ? 'POWER ON' : 'POWER OFF';
         pBtn.className = s.m[0].e ? 'btn on' : 'btn';
-        if(s.fw) document.getElementById('fwVer').innerText = 'V3 SINGLE-MOTOR v' + s.fw;
+        if(s.fw) document.getElementById('fwVer').innerText = 'V3 SINGLE-MOTOR v' + s.fw + (s.op && s.op!=='idle' ? ' [' + s.op.toUpperCase() + ']' : '');
         if(s.log) s.log.split('\\n').forEach(l => { if(l.length > 2) addLog(l); });
       }).catch(e => console.log("Offline..."));
     }, 350);
@@ -167,28 +167,46 @@ const char index_html[] PROGMEM = R"rawliteral(
 
 void TaskCore1(void * pvParameters) {
     for(;;) {
-        if (sys.pendingPower   >= 0) { setMotorPower(0, sys.pendingPower); sys.pendingPower = -1; }
-        if (sys.pendingHome    != -1) { int m = sys.pendingHome;   sys.pendingHome   = -1; homeMotor(m); }
-        if (sys.pendingCalib   != -1) { int m = sys.pendingCalib;  sys.pendingCalib  = -1; characterizeSensor(m); }
-        if (sys.pendingLearn   != -1) { int m = sys.pendingLearn;  sys.pendingLearn  = -1; learnSGProfile(m); }
-        if (sys.pendingTest    != -1) {
-            int m = sys.pendingTest; sys.pendingTest = -1;
-            clearTelemetry();
-            if (sys.parcour.doSpeed)    runSpeedTest(m);
-            if (sys.parcour.doAccel)    runInertiaTest(m);
-            if (sys.parcour.doCoast)    runCoastTest(m);
-            if (sys.parcour.doKatapult) runKatapult(m);
-            if (sys.parcour.doFreq)     runFreqSweep(m);
+        // STOP und POWER immer zulassen — werden in updateMotors() / pendingPower behandelt
+        if (sys.pendingPower >= 0) { setMotorPower(0, sys.pendingPower); sys.pendingPower = -1; }
+
+        if (sys.opState == MOTOR_IDLE) {
+            if (sys.pendingHome != -1) {
+                int m = sys.pendingHome; sys.pendingHome = -1;
+                sys.opState = MOTOR_HOMING;    homeMotor(m);         sys.opState = MOTOR_IDLE;
+            }
+            else if (sys.pendingCalib != -1) {
+                int m = sys.pendingCalib; sys.pendingCalib = -1;
+                sys.opState = MOTOR_CALIBRATING; characterizeSensor(m); sys.opState = MOTOR_IDLE;
+            }
+            else if (sys.pendingLearn != -1) {
+                int m = sys.pendingLearn; sys.pendingLearn = -1;
+                sys.opState = MOTOR_LEARNING;  learnSGProfile(m);    sys.opState = MOTOR_IDLE;
+            }
+            else if (sys.pendingTest != -1) {
+                int m = sys.pendingTest; sys.pendingTest = -1;
+                sys.opState = MOTOR_TESTING;
+                clearTelemetry();
+                if (sys.parcour.doSpeed)    runSpeedTest(m);
+                if (sys.parcour.doAccel)    runInertiaTest(m);
+                if (sys.parcour.doCoast)    runCoastTest(m);
+                if (sys.parcour.doKatapult) runKatapult(m);
+                if (sys.parcour.doFreq)     runFreqSweep(m);
+                sys.opState = MOTOR_IDLE;
+            }
+            else if (sys.pendingKatapult != -1) {
+                int m = sys.pendingKatapult; sys.pendingKatapult = -1;
+                sys.opState = MOTOR_TESTING;   runKatapult(m);       sys.opState = MOTOR_IDLE;
+            }
+            else if (sys.pendingFreqSweep != -1) {
+                int m = sys.pendingFreqSweep; sys.pendingFreqSweep = -1;
+                sys.opState = MOTOR_TESTING;   runFreqSweep(m);      sys.opState = MOTOR_IDLE;
+            }
+            else if (sys.pendingShow != -1) {
+                int m = sys.pendingShow; sys.pendingShow = -1;
+                sys.opState = MOTOR_SHOWING;   runPerformanceShow(m); sys.opState = MOTOR_IDLE;
+            }
         }
-        if (sys.pendingKatapult != -1) {
-            int m = sys.pendingKatapult; sys.pendingKatapult = -1;
-            runKatapult(m);   // R4: kein clearTelemetry — Parcour-Daten bleiben erhalten
-        }
-        if (sys.pendingFreqSweep != -1) {
-            int m = sys.pendingFreqSweep; sys.pendingFreqSweep = -1;
-            runFreqSweep(m);  // R4: kein clearTelemetry
-        }
-        if (sys.pendingShow != -1) { int m = sys.pendingShow; sys.pendingShow = -1; runPerformanceShow(m); }
         updateMotors();
         yield();
     }
@@ -219,7 +237,9 @@ void setup() {
         float rawDeg   = getPositionDeg();
         float angleDeg = fmodf(rawDeg, 360.0f);
         if (angleDeg < 0.0f) angleDeg += 360.0f;
+        const char* opNames[] = {"idle","homing","calib","learn","test","show"};
         String j = "{\"hit\":" + String(digitalRead(TACHO_PIN)==LOW?"true":"false");
+        j += ",\"op\":\"" + String(opNames[sys.opState]) + "\"";
         j += ",\"fw\":\"" + String(FW_VERSION) + "\",\"rpm\":" + String(getTachoRpm());
         j += ",\"log\":\"" + logData + "\"";
         j += ",\"m\":[{\"p\":" + String(angleDeg, 1) + ",\"s\":" + String(spd) + ",\"e\":" + String(sys.m[0].enabled?"true":"false") + "}]}";
@@ -228,6 +248,11 @@ void setup() {
     server.on("/cmd", [](AsyncWebServerRequest *r){
         if(!r->hasParam("a")) { r->send(400); return; }
         String a = r->getParam("a")->value(); int m = r->hasParam("m")?r->getParam("m")->value().toInt():0;
+        // S2: Interlock — nur STOP und PWR während laufender Operation erlaubt
+        if (a != "stop" && a != "pwr" && sys.opState != MOTOR_IDLE) {
+            r->send(409, "text/plain", "BUSY");
+            return;
+        }
         if(a=="pwr") sys.pendingPower = !sys.m[m].enabled;
         else if(a=="home") sys.pendingHome = m;
         else if(a=="cal") sys.pendingCalib = m;

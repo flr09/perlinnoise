@@ -1,6 +1,16 @@
 #pragma once
 #include <Arduino.h>
 
+// --- Motor operation state (S2: State-Machine Interlock) ---
+enum MotorOpState : uint8_t {
+    MOTOR_IDLE        = 0,
+    MOTOR_HOMING      = 1,
+    MOTOR_CALIBRATING = 2,
+    MOTOR_LEARNING    = 3,
+    MOTOR_TESTING     = 4,
+    MOTOR_SHOWING     = 5
+};
+
 struct MotorState {
     float posDeg  = 0;
     float speed   = 0;
@@ -30,7 +40,8 @@ struct ParcourConfig {
 };
 
 struct SystemState {
-    bool   hit = false;
+    bool         hit     = false;
+    MotorOpState opState = MOTOR_IDLE;
     String log = "";
     MotorState      m[4];
     CalibrationData cal[4];
