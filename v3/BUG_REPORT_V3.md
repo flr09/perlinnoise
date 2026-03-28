@@ -13,10 +13,16 @@
 - **Symptom:** 0-Punkt verschiebt sich je nach Anfahrtrichtung.
 - **Fix (v3.7.10):** Jede Sensorflanke (A1 links, A2 rechts) wird **3-mal angetastet** und der Durchschnitt gebildet. Dies eliminiert mechanische und elektronische Varianzen.
 
-### [S2] Emergency Stop reagiert nicht während Suche
-- **Fix (v3.7.10):** `waitForSensorStable` prüft in jeder Iteration `sys.pendingStop`.
+### [R5] Homing/Calib Instabilität in v3.7.15
+- **Symptom:** Homing fährt unvorhersehbar oder bricht ab.
+- **Ursache:** "Fast Homing" via ISR-Snapshot (v3.7.15) war zu anfällig für EMI-Peaks bei 800 sps.
+- **Fix (v3.7.20):** 
+    1. Revert auf **3.7.11 Robust Logic**.
+    2. `touchEdge` nutzt wieder **3 Samples** und Stillstands-Position.
+    3. `homeMotor` nutzt wieder die dedizierte `touchEdge`-Phase nach der Schnellsuche.
+    4. EMI-Filter (5-hit, 100µs) aus 3.7.15 wurden für zusätzliche Stabilität beibehalten.
 
-## Verifizierte Parameter (v3.7.10)
+## Verifizierte Parameter (v3.7.20)
 - **FW-Build:** SUCCESS
-- **Methode:** Successive Approximation (Grob -> Fein -> 3x Antasten)
-- **Status:** Stabil gegen EMI-Rauschen am FYSETC E4.
+- **Methode:** Revert to 3.7.11 Robust (3-Touch) + 3.7.15 EMI Filter.
+- **Status:** Stabilisiert.

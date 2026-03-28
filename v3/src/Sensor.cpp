@@ -2,6 +2,7 @@
 #include <FastAccelStepper.h>
 #include <Bounce2.h>
 #include "Types.h"
+#include "soc/io_mux_reg.h"
 
 extern portMUX_TYPE   motorMux;
 extern FastAccelStepper* stepper;
@@ -21,6 +22,12 @@ Bounce tachoDebouncer = Bounce();
 
 // ISR nur für Tacho (Drehzahlmessung)
 void IRAM_ATTR tachoISR() {
+    // Snapshot für präzises Antasten/Homing
+    if (!sensorHit && stepper) {
+        lastSensorRaw = stepper->getCurrentPosition();
+        sensorHit = true;
+    }
+
     if (digitalRead(TACHO_PIN) == LOW) {
         pulseCount++;
         unsigned long now = millis();
@@ -35,17 +42,20 @@ void IRAM_ATTR tachoISR() {
 // Robuste Status-Prüfung: Muss N-mal hintereinander den Zielzustand liefern
 bool checkSensorStable(bool targetState, int requiredHits) {
     int hits = 0;
-    for (int i = 0; i < 50; i++) { // Max 50 Versuche
+    for (int i = 0; i < 50; i++) {
         if (digitalRead(TACHO_PIN) == targetState) hits++;
         else hits = 0;
         if (hits >= requiredHits) return true;
-        delayMicroseconds(50);
+        delayMicroseconds(50); // Reverted to 3.7.11 value
     }
     return false;
 }
 
-void sensorLatchReset() { sensorHit = false; }
-void sensorLatchEnable(bool enable) { (void)enable; }
+void sensorLatchReset() { 
+    portENTER_CRITICAL(&motorMux);
+    sensorHit = false; 
+    portEXIT_CRITICAL(&motorMux);
+}
 
 uint16_t getTachoRpm() {
     unsigned long period, lastT;
@@ -53,7 +63,8 @@ uint16_t getTachoRpm() {
     period = tachoPeriodMs;
     lastT  = lastTachoLowMs;
     portEXIT_CRITICAL(&motorMux);
-    if (period == 0 || (millis() - lastT > 2000)) return 0;
+    // W2: Division by zero protection
+    if (period < 6 || millis() - lastT > 2000) return 0;
     return (uint16_t)min(9999UL, 60000UL / period);
 }
 
@@ -62,19 +73,18 @@ uint32_t getPulseCount() {
     return c;
 }
 
-// Angepasst für 5-Hits Logik
 bool waitForSensorStable(bool state, long maxSteps, unsigned long timeoutMs) {
     if (!stepper) return false;
     unsigned long start = millis();
     long startPos = stepper->getCurrentPosition();
     while (true) {
         if (checkSensorStable(state, 5)) return true;
+        // W3: Always check pendingStop
         if (sys.pendingStop || millis() - start > timeoutMs || abs(stepper->getCurrentPosition() - startPos) > maxSteps) return false;
         yield();
     }
 }
 
-// Legacy wrapper
 bool waitForSensorTimed(bool state, long maxSteps, unsigned long timeoutMs) {
     return waitForSensorStable(state, maxSteps, timeoutMs);
 }
@@ -86,4 +96,8 @@ void initSensor() {
     attachInterrupt(digitalPinToInterrupt(TACHO_PIN), tachoISR, CHANGE);
 }
 
-void enablePcntInputBuffer() {}
+// F15 Fix: Enable Input Buffer on Step/Dir Pins
+void enablePcntInputBuffer() {
+    PIN_INPUT_ENABLE(IO_MUX_GPIO27_REG);
+    PIN_INPUT_ENABLE(IO_MUX_GPIO26_REG);
+}

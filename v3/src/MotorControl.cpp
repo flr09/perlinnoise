@@ -1,4 +1,5 @@
 #include "MotorControl.h"
+#include "Programs.h"
 #include <Preferences.h>
 
 Preferences prefs;
@@ -9,7 +10,7 @@ SemaphoreHandle_t uartMutex = NULL;
 void addLog(String msg) {
     portENTER_CRITICAL(&motorMux);
     sys.log += msg + "\\n";
-    if (sys.log.length() > 8000) sys.log = sys.log.substring(sys.log.length() - 4000);
+    if (sys.log.length() > 6000) sys.log = sys.log.substring(3000);
     portEXIT_CRITICAL(&motorMux);
     Serial.println(msg);
 }
@@ -50,7 +51,7 @@ long touchEdge(bool state, int dir, uint32_t speed) {
         stepper->setSpeedInHz(400);
         if (dir > 0) stepper->move(-(long)(stepsPerRev * 0.1f));
         else         stepper->move((long)(stepsPerRev * 0.1f));
-        while (stepper->isRunning()) yield();
+        while (stepper->isRunning()) { if (sys.pendingStop) return -1; yield(); }
         delay(100);
 
         // Dann langsam anfahren
@@ -58,7 +59,9 @@ long touchEdge(bool state, int dir, uint32_t speed) {
         if (dir > 0) stepper->runForward();
         else         stepper->runBackward();
         
-        if (!waitForSensorStable(state, (long)(stepsPerRev * 0.2f), 5000)) return -1;
+        if (!waitForSensorStable(state, (long)(stepsPerRev * 0.2f), 5000)) {
+            stepper->stopMove(); return -1;
+        }
         sum += stepper->getCurrentPosition();
         stepper->stopMove(); while (stepper->isRunning()) yield();
         delay(100);
@@ -70,7 +73,7 @@ void homeMotor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
     setMicrosteps(16);
-    addLog("Homing (Präzision)...");
+    addLog("Homing (v3.7.11 Robust)...");
     stepper->setAcceleration(2000);
     
     // Schnellsuche
@@ -87,11 +90,17 @@ void homeMotor(int i) {
     if (a1 == -1) { addLog("Err: Home-Touch"); return; }
 
     if (sys.cal[0].valid) {
+        // Sync encoder to the known trigger degree
         stepper->setCurrentPosition(degToSteps(sys.cal[0].triggerStartDeg));
+        
+        // Drive to the logical center (0°)
         moveToDeg(0.0f);
-        while (stepper->isRunning()) yield();
-        setPositionDeg(0.0f);
-        addLog("Home @0° OK");
+        while (stepper->isRunning()) { if (sys.pendingStop) break; yield(); }
+        
+        if (!sys.pendingStop) {
+            setPositionDeg(0.0f); // Final hard zero
+            addLog("Home @0° OK.");
+        }
     } else {
         stepper->setCurrentPosition(0);
         addLog("Home (uncal)");
@@ -104,7 +113,7 @@ void characterizeSensor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
     setMicrosteps(16);
-    addLog("Calib v3.7.10 (Antasten)...");
+    addLog("Calib v3.7.11 (Robust)...");
     stepper->setAcceleration(2000);
 
     // Prep: Sicherstellen dass wir draußen sind
@@ -113,49 +122,31 @@ void characterizeSensor(int i) {
         if (!waitForSensorStable(HIGH, (long)stepsPerRev, 5000)) break;
     }
     stepper->stopMove(); while (stepper->isRunning()) yield();
-    delay(200);
 
-    // 1. Grob-Suche Eintritt (1000 sps CW)
     addLog("Phase 1: Grob CW...");
     stepper->setSpeedInHz(1000);
     stepper->runForward();
-    if (!waitForSensorStable(LOW, (long)(stepsPerRev * 2.0f), 15000)) {
-        addLog("Err: Eintritt nicht gefunden");
-        stepper->stopMove(); return;
-    }
+    if (!waitForSensorStable(LOW, (long)(stepsPerRev * 2.0f), 15000)) { addLog("Err: P1"); return; }
     stepper->stopMove(); while (stepper->isRunning()) yield();
     
-    // 2. Fenster-Suche Austritt (500 sps CW)
     addLog("Phase 2: Austritt CW...");
     stepper->setSpeedInHz(500);
     stepper->runForward();
-    if (!waitForSensorStable(HIGH, (long)(stepsPerRev * 0.5f), 10000)) {
-        addLog("Err: Austritt nicht gefunden");
-        stepper->stopMove(); return;
-    }
+    if (!waitForSensorStable(HIGH, (long)(stepsPerRev * 0.5f), 10000)) { addLog("Err: P2"); return; }
     stepper->stopMove(); while (stepper->isRunning()) yield();
-    delay(200);
 
-    // 3. Fein-Antasten A2 (100 sps CCW - von rechts kommend)
     addLog("Phase 3: Antasten A2 (rechts)...");
     long a2 = touchEdge(LOW, -1, 100);
-    if (a2 == -1) { addLog("Err: A2 Touch"); return; }
-    addLog("A2: " + String(a2));
+    if (a2 == -1) { addLog("Err: P3"); return; }
 
-    // 4. Fein-Antasten A1 (100 sps CW - von links kommend)
     addLog("Phase 4: Antasten A1 (links)...");
-    // Erst ganz zurück fahren
-    stepper->setSpeedInHz(500);
-    stepper->runBackward();
+    stepper->setSpeedInHz(500); stepper->runBackward();
     waitForSensorStable(HIGH, (long)stepsPerRev, 10000);
     stepper->stopMove(); while (stepper->isRunning()) yield();
-    delay(200);
-
+    
     long a1 = touchEdge(LOW, 1, 100);
-    if (a1 == -1) { addLog("Err: A1 Touch"); return; }
-    addLog("A1: " + String(a1));
+    if (a1 == -1) { addLog("Err: P4"); return; }
 
-    // 5. Mitte setzen
     long center = (a1 + a2) / 2;
     sys.cal[0].triggerStartDeg = stepsToDeg(a1 - center);
     sys.cal[0].triggerEndDeg   = stepsToDeg(a2 - center);
@@ -163,7 +154,7 @@ void characterizeSensor(int i) {
     sys.cal[0].nvsVersion = 3619;
     saveCalibration(0);
 
-    addLog("Mitte: " + String(center));
+    addLog("Mitte (0°) gesetzt.");
     stepper->setSpeedInHz(400);
     stepper->moveTo(center);
     while (stepper->isRunning()) yield();
@@ -174,12 +165,6 @@ void characterizeSensor(int i) {
     addLog("Kalibrierung OK.");
 }
 
-void learnSGProfile(int i) { if (i==0) addLog("Skipped in v3.7.10"); }
-void runSpeedTest(int i) { if (i==0) addLog("Skipped in v3.7.10"); }
-void runInertiaTest(int i) { if (i==0) addLog("Skipped in v3.7.10"); }
-void runCoastTest(int i) { if (i==0) addLog("Skipped in v3.7.10"); }
-void runKatapult(int i) { if (i==0) addLog("Skipped in v3.7.10"); }
-void runFreqSweep(int i) { if (i==0) addLog("Skipped in v3.7.10"); }
-void runPerformanceShow(int i) { if (i==0) addLog("Skipped in v3.7.10"); }
-void updateMotors() { if (sys.pendingStop && stepper) { stepper->stopMove(); sys.pendingStop = false; } }
-void gotoCardinal() {}
+void updateMotors() {
+    if (sys.pendingStop && stepper) { stepper->stopMove(); sys.pendingStop = false; }
+}
