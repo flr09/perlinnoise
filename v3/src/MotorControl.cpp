@@ -73,7 +73,7 @@ void homeMotor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
     setMicrosteps(16);
-    addLog("Homing (v3.7.11 Robust)...");
+    addLog("Homing (Präzision)...");
     stepper->setAcceleration(2000);
     
     // Schnellsuche
@@ -90,16 +90,13 @@ void homeMotor(int i) {
     if (a1 == -1) { addLog("Err: Home-Touch"); return; }
 
     if (sys.cal[0].valid) {
-        // Sync encoder to the known trigger degree
         stepper->setCurrentPosition(degToSteps(sys.cal[0].triggerStartDeg));
-        
-        // Drive to the logical center (0°)
         moveToDeg(0.0f);
         while (stepper->isRunning()) { if (sys.pendingStop) break; yield(); }
         
         if (!sys.pendingStop) {
             setPositionDeg(0.0f); // Final hard zero
-            addLog("Home @0° OK.");
+            addLog("Home @0° OK");
         }
     } else {
         stepper->setCurrentPosition(0);
@@ -113,7 +110,7 @@ void characterizeSensor(int i) {
     if (i != 0) return;
     setMotorPower(0, true);
     setMicrosteps(16);
-    addLog("Calib v3.7.11 (Robust)...");
+    addLog("Calib v3.7.10 (Antasten)...");
     stepper->setAcceleration(2000);
 
     // Prep: Sicherstellen dass wir draußen sind
@@ -122,31 +119,49 @@ void characterizeSensor(int i) {
         if (!waitForSensorStable(HIGH, (long)stepsPerRev, 5000)) break;
     }
     stepper->stopMove(); while (stepper->isRunning()) yield();
+    delay(200);
 
+    // 1. Grob-Suche Eintritt (1000 sps CW)
     addLog("Phase 1: Grob CW...");
     stepper->setSpeedInHz(1000);
     stepper->runForward();
-    if (!waitForSensorStable(LOW, (long)(stepsPerRev * 2.0f), 15000)) { addLog("Err: P1"); return; }
+    if (!waitForSensorStable(LOW, (long)(stepsPerRev * 2.0f), 15000)) {
+        addLog("Err: Eintritt nicht gefunden");
+        stepper->stopMove(); return;
+    }
     stepper->stopMove(); while (stepper->isRunning()) yield();
     
+    // 2. Fenster-Suche Austritt (500 sps CW)
     addLog("Phase 2: Austritt CW...");
     stepper->setSpeedInHz(500);
     stepper->runForward();
-    if (!waitForSensorStable(HIGH, (long)(stepsPerRev * 0.5f), 10000)) { addLog("Err: P2"); return; }
+    if (!waitForSensorStable(HIGH, (long)(stepsPerRev * 0.5f), 10000)) {
+        addLog("Err: Austritt nicht gefunden");
+        stepper->stopMove(); return;
+    }
     stepper->stopMove(); while (stepper->isRunning()) yield();
+    delay(200);
 
+    // 3. Fein-Antasten A2 (100 sps CCW - von rechts kommend)
     addLog("Phase 3: Antasten A2 (rechts)...");
     long a2 = touchEdge(LOW, -1, 100);
-    if (a2 == -1) { addLog("Err: P3"); return; }
+    if (a2 == -1) { addLog("Err: A2 Touch"); return; }
+    addLog("A2: " + String(a2));
 
+    // 4. Fein-Antasten A1 (100 sps CW - von links kommend)
     addLog("Phase 4: Antasten A1 (links)...");
-    stepper->setSpeedInHz(500); stepper->runBackward();
+    // Erst ganz zurück fahren
+    stepper->setSpeedInHz(500);
+    stepper->runBackward();
     waitForSensorStable(HIGH, (long)stepsPerRev, 10000);
     stepper->stopMove(); while (stepper->isRunning()) yield();
-    
-    long a1 = touchEdge(LOW, 1, 100);
-    if (a1 == -1) { addLog("Err: P4"); return; }
+    delay(200);
 
+    long a1 = touchEdge(LOW, 1, 100);
+    if (a1 == -1) { addLog("Err: A1 Touch"); return; }
+    addLog("A1: " + String(a1));
+
+    // 5. Mitte setzen
     long center = (a1 + a2) / 2;
     sys.cal[0].triggerStartDeg = stepsToDeg(a1 - center);
     sys.cal[0].triggerEndDeg   = stepsToDeg(a2 - center);
@@ -154,7 +169,7 @@ void characterizeSensor(int i) {
     sys.cal[0].nvsVersion = 3619;
     saveCalibration(0);
 
-    addLog("Mitte (0°) gesetzt.");
+    addLog("Mitte: " + String(center));
     stepper->setSpeedInHz(400);
     stepper->moveTo(center);
     while (stepper->isRunning()) yield();
