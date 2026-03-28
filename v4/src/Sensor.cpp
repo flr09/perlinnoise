@@ -1,4 +1,5 @@
 #include "Sensor.h"
+#include "Watchdog.h"
 #include <FastAccelStepper.h>
 #include <Bounce2.h>
 #include "Types.h"
@@ -33,7 +34,11 @@ void IRAM_ATTR tachoISR() {
         unsigned long now = millis();
         if (lastTachoLowMs > 0) {
             unsigned long p = now - lastTachoLowMs;
-            if (p >= 10) tachoPeriodMs = p;
+            if (p >= 10) {
+                tachoPeriodMs = p;
+                // Watchdog-Hook: Schrittdelta + Periode pro Umdrehung erfassen
+                if (stepper) watchdogIsrUpdate(stepper->getCurrentPosition(), (uint32_t)p);
+            }
         }
         lastTachoLowMs = now;
     }

@@ -1,5 +1,7 @@
 #include "MotorControl.h"
 #include "Programs.h"
+#include "Watchdog.h"
+#include "MotorProfile.h"
 #include <Preferences.h>
 
 Preferences prefs;
@@ -38,6 +40,8 @@ void loadCalibration() {
 
 void initMotors() {
     loadCalibration();
+    profileLoad();
+    watchdogInit();
     uartMutex = xSemaphoreCreateMutex();
     initSensor();
     initDriver();
@@ -164,5 +168,9 @@ void characterizeSensor(int i) {
 }
 
 void updateMotors() {
-    if (sys.pendingStop && stepper) { stepper->stopMove(); sys.pendingStop = false; }
+    if (sys.pendingStop && stepper) {
+        stepper->stopMove();
+        sys.pendingStop = false;
+        watchdogEnable(false); // Watchdog bei Stop immer entsperren
+    }
 }

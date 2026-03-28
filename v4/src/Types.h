@@ -39,6 +39,17 @@ struct ParcourConfig {
     bool doFreq     = false;
 };
 
+// --- Watchdog-Zustand (Core-0-Task schreibt, Web-Handler liest) ---
+struct WatchdogState {
+    bool     active      = false;  // Watchdog scharf (nach 5 stabilen Revs)
+    bool     triggered   = false;  // Fault ausgelöst (pendingStop gesetzt)
+    uint8_t  lastFaultCode = 0;    // Bitmask: bit0=SG, bit1=StepDelta, bit2=Periode
+    uint8_t  errorCount  = 0;      // Aufeinanderfolgende fehlerhafte Umdrehungen
+    uint8_t  settleCount = 0;      // Aufeinanderfolgende gute Umdrehungen
+    long     lastDelta   = 0;      // Letzter Schritt-Delta (für Logging)
+    uint32_t lastPeriodMs = 0;     // Letzte gemessene Tacho-Periode (ms)
+};
+
 struct SystemState {
     bool         hit     = false;
     MotorOpState opState = MOTOR_IDLE;
@@ -46,6 +57,7 @@ struct SystemState {
     MotorState      m[4];
     CalibrationData cal[4];
     ParcourConfig   parcour;
+    WatchdogState   wd;
     float currentMaxSpd = 4000;
     float currentAccel  = 2000;
     volatile int  pendingHome     = -1;

@@ -1,4 +1,6 @@
 #include "Programs.h"
+#include "MotorProfile.h"
+#include "Watchdog.h"
 #include "MotorControl.h"
 #include "Driver.h"
 #include "Sensor.h"
@@ -79,26 +81,63 @@ void runSpeedTest(int i) {
     setMicrosteps(16);
     stepper->setAcceleration(30000);
     float rpm = 300.0f;
-    addLog("Speed Test...");
-    // clearTelemetry() is NOT called here anymore (Issue #4)
-    while(rpm <= PARCOUR_RPM_MAX && !sys.pendingStop) {
+    addLog("Speed Test + Profil...");
+    profileClear(); // Altes Profil verwerfen — wird neu aufgebaut
+
+    while (rpm <= PARCOUR_RPM_MAX && !sys.pendingStop) {
         stepper->setSpeedInHz((uint32_t)rpmToSps(rpm));
         stepper->runForward();
+
+        // --- Erste 500ms: Einschwingen, Telemetrie ---
         unsigned long tStart = millis();
-        while(millis() - tStart < 1000) {
+        while (millis() - tStart < 500) {
             if (sys.pendingStop) break;
             recordTelemetry("SPEED", rpm);
             yield();
         }
+
+        // --- Zweite 500ms: Profildaten sammeln (eingeschwungen) ---
+        float pSamples[8]; uint8_t nSamples = 0;
+        unsigned long tSettle = millis();
+        while (millis() - tSettle < 500) {
+            if (sys.pendingStop) break;
+            if (nSamples < 8) {
+                portENTER_CRITICAL(&motorMux);
+                unsigned long p = tachoPeriodMs;
+                portEXIT_CRITICAL(&motorMux);
+                if (p > 0) pSamples[nSamples++] = (float)p;
+            }
+            recordTelemetry("SPEED", rpm);
+            delay(60); // ~8 Samples bei 500ms
+        }
+
+        // Stall-Check
         if (getTachoRpm() < rpm * 0.8f && rpm > 400) {
-            addLog("FAIL @ " + String(rpm,0) + " RPM");
+            addLog("FAIL @ " + String(rpm, 0) + " RPM");
             break;
         }
         sys.cal[0].maxRpm = rpm;
+
+        // Profil-Stützpunkt berechnen (mind. 3 Samples)
+        if (nSamples >= 3) {
+            float mean = 0.0f;
+            for (uint8_t k = 0; k < nSamples; k++) mean += pSamples[k];
+            mean /= nSamples;
+            float variance = 0.0f;
+            for (uint8_t k = 0; k < nSamples; k++) variance += sq(pSamples[k] - mean);
+            float sigma = sqrtf(variance / nSamples);
+            profileAddPoint(rpm, mean, fmaxf(sigma, 0.5f), telemCacheSG(), telemCacheCS());
+        }
+
         rpm += PARCOUR_RPM_STEP;
     }
+
     stepper->stopMove(); waitWhileRunning();
     saveCalibration(0);
+    if (motorProfile.valid) {
+        profileSave();
+        addLog("Profil: " + String(motorProfile.count) + " Punkte gespeichert");
+    }
     setMicrosteps(64);
     applyDriverSettings(MOTOR_CURRENT_DEFAULT);
     addLog("Speed DONE.");

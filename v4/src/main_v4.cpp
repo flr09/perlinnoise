@@ -166,6 +166,9 @@ const char index_html[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
+#include "Watchdog.h"
+#include "MotorProfile.h"
+
 void TaskCore1(void * pvParameters) {
     for(;;) {
         // STOP und POWER immer zulassen — werden in updateMotors() / pendingPower behandelt
@@ -188,11 +191,13 @@ void TaskCore1(void * pvParameters) {
                 int m = sys.pendingTest; sys.pendingTest = -1;
                 sys.opState = MOTOR_TESTING;
                 clearTelemetry();
+                watchdogEnable(true); // Watchdog aktivieren — schärft sich selbst nach 5 stabilen Revs
                 if (sys.parcour.doSpeed && !sys.pendingStop)    runSpeedTest(m);
                 if (sys.parcour.doAccel && !sys.pendingStop) { delay(100); runInertiaTest(m); }
                 if (sys.parcour.doCoast && !sys.pendingStop) { delay(100); runCoastTest(m); }
                 if (sys.parcour.doKatapult && !sys.pendingStop) { delay(100); runKatapult(m); }
                 if (sys.parcour.doFreq && !sys.pendingStop) { delay(100); runFreqSweep(m); }
+                watchdogEnable(false);
                 sys.opState = MOTOR_IDLE;
             }
             else if (sys.pendingKatapult != -1) {
@@ -292,13 +297,35 @@ void setup() {
         pcnt_get_counter_value(PCNT_UNIT_0, &v);
         r->send(200, "text/plain", "PCNT: " + String(v) + " | Pos: " + String(stepper ? stepper->getCurrentPosition() : 0));
     });
-    
+
+    // Watchdog-Status + Profil-Info (JSON)
+    server.on("/watchdog", HTTP_GET, [](AsyncWebServerRequest *r){
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "{\"active\":%s,\"triggered\":%s,\"fault\":\"0b%s\","
+            "\"errCnt\":%u,\"settleCnt\":%u,"
+            "\"delta\":%ld,\"period\":%lu,"
+            "\"profile\":{\"valid\":%s,\"points\":%u}}",
+            sys.wd.active    ? "true" : "false",
+            sys.wd.triggered ? "true" : "false",
+            String(sys.wd.lastFaultCode, BIN).c_str(),
+            sys.wd.errorCount, sys.wd.settleCount,
+            sys.wd.lastDelta, (unsigned long)sys.wd.lastPeriodMs,
+            motorProfile.valid ? "true" : "false", motorProfile.count);
+        r->send(200, "application/json", buf);
+    });
+
     ElegantOTA.begin(&server, "admin", "12345678"); ElegantOTA.setAutoReboot(true);
     server.begin();
-    
+
+    // Core-0-Task: Telemetrie-Cache + Watchdog-Auswertung
     xTaskCreatePinnedToCore([](void*){
-        for(;;) { updateTelemCache(); vTaskDelay(pdMS_TO_TICKS(300)); }
-    }, "TelemCache", 2048, NULL, 1, NULL, 0);
+        for(;;) {
+            updateTelemCache();
+            watchdogUpdate();          // 2/3-Voting nach jedem neuen Tacho-Puls
+            vTaskDelay(pdMS_TO_TICKS(50)); // 50ms — schneller als 300ms für Watchdog-Reaktion
+        }
+    }, "TelemCache", 3072, NULL, 1, NULL, 0); // Stack 3KB (war 2KB — Watchdog braucht etwas mehr)
 
     xTaskCreatePinnedToCore(TaskCore1, "MotorTask", 10000, NULL, 1, NULL, 1);
 }
