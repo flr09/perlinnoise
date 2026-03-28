@@ -2,11 +2,19 @@
 #include <Arduino.h>
 #include "Config.h"
 
-extern String        telemCSV;
-extern unsigned long telemStart;
+// Telemetrie-Modul (v3.7.26 calib final)
+// Verwaltet Datensammlung auf Core 0 und CSV-Logging.
 
-void     clearTelemetry();
-void     recordTelemetry(const char* phase, float val);
-void     updateTelemCache();
-uint16_t telemCacheSG();
-uint8_t  telemCacheCS();
+#include <ESPAsyncWebServer.h>
+
+void initTelemetry();               // Startet Task auf Core 0
+void resetTelemetryBuffer();        // Leert CSV
+void recordDataPoint(const char* phase, float val); // Snapshot speichern
+void registerTelemetryHandlers(AsyncWebServer& server); // Web-Endpunkte registrieren
+
+String getTelemetryCSV();           // Für Web-UI
+
+// Zugriff auf TMC-Status (Live)
+uint16_t getLatestSgResult();
+uint8_t  getLatestCsActual();
+bool     isMotorStalled();

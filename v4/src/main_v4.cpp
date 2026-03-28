@@ -190,7 +190,7 @@ void TaskCore1(void * pvParameters) {
             else if (sys.pendingTest != -1) {
                 int m = sys.pendingTest; sys.pendingTest = -1;
                 sys.opState = MOTOR_TESTING;
-                clearTelemetry();
+                resetTelemetryBuffer();
                 watchdogEnable(true); // Watchdog aktivieren — schärft sich selbst nach 5 stabilen Revs
                 if (sys.parcour.doSpeed && !sys.pendingStop)    runSpeedTest(m);
                 if (sys.parcour.doAccel && !sys.pendingStop) { delay(100); runInertiaTest(m); }
@@ -318,14 +318,12 @@ void setup() {
     ElegantOTA.begin(&server, "admin", "12345678"); ElegantOTA.setAutoReboot(true);
     server.begin();
 
-    // Core-0-Task: Telemetrie-Cache + Watchdog-Auswertung
+    initTelemetry(); // Startet TelemetryPollTask (10Hz, Core 0) — ersetzt alten TelemCache-Task
+
+    // v4: Watchdog-Task (Core 0, 50ms — schneller als Telemetrie-Poll für zügige Fehlerreaktion)
     xTaskCreatePinnedToCore([](void*){
-        for(;;) {
-            updateTelemCache();
-            watchdogUpdate();          // 2/3-Voting nach jedem neuen Tacho-Puls
-            vTaskDelay(pdMS_TO_TICKS(50)); // 50ms — schneller als 300ms für Watchdog-Reaktion
-        }
-    }, "TelemCache", 3072, NULL, 1, NULL, 0); // Stack 3KB (war 2KB — Watchdog braucht etwas mehr)
+        for(;;) { watchdogUpdate(); vTaskDelay(pdMS_TO_TICKS(50)); }
+    }, "WatchdogTask", 3072, NULL, 1, NULL, 0);
 
     xTaskCreatePinnedToCore(TaskCore1, "MotorTask", 10000, NULL, 1, NULL, 1);
 }

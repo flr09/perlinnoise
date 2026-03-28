@@ -1,7 +1,7 @@
 #include "Watchdog.h"
 #include "MotorProfile.h"
 #include "Sensor.h"       // tachoPeriodMs, extern
-#include "Telemetry.h"    // telemCacheSG, telemCacheCS
+#include "Telemetry.h"    // getLatestSgResult, getLatestCsActual
 #include "Driver.h"       // stepsPerRev, spsToRpm, stepper
 #include "MotorControl.h" // addLog, sys, motorMux
 #include <math.h>
@@ -100,7 +100,7 @@ bool watchdogUpdate() {
     }
 
     // === Evidence C: SG_RESULT unter Threshold ===
-    bool evidC = (sys.cal[0].sgThrs > 0 && telemCacheSG() < sys.cal[0].sgThrs);
+    bool evidC = (sys.cal[0].sgThrs > 0 && getLatestSgResult() < sys.cal[0].sgThrs);
 
     int faultCount = (int)evidA + (int)evidB + (int)evidC;
     uint8_t faultCode = ((uint8_t)evidA << 2) | ((uint8_t)evidB << 1) | (uint8_t)evidC;
@@ -124,7 +124,7 @@ bool watchdogUpdate() {
                 addLog("WD FAULT 0b" + String(faultCode, BIN) +
                        " d=" + String(delta) + "/" + String(expectedSteps) +
                        " p=" + String(periodMs) + "ms" +
-                       " sg=" + String(telemCacheSG()));
+                       " sg=" + String(getLatestSgResult()));
                 return true;
             }
         }

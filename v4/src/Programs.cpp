@@ -50,7 +50,7 @@ void learnSGProfile(int i) {
         unsigned long t0 = millis();
         while (millis() - t0 < 1500) {
             if (sys.pendingStop) break;
-            uint16_t sg = telemCacheSG();
+            uint16_t sg = getLatestSgResult();
             if (sg > 0 && sg < sgMin) sgMin = sg;  // Minimum im Freilauf (konservativste Basis)
             sgSum += sg;
             samples++;
@@ -92,7 +92,7 @@ void runSpeedTest(int i) {
         unsigned long tStart = millis();
         while (millis() - tStart < 500) {
             if (sys.pendingStop) break;
-            recordTelemetry("SPEED", rpm);
+            recordDataPoint("SPEED", rpm);
             yield();
         }
 
@@ -107,7 +107,7 @@ void runSpeedTest(int i) {
                 portEXIT_CRITICAL(&motorMux);
                 if (p > 0) pSamples[nSamples++] = (float)p;
             }
-            recordTelemetry("SPEED", rpm);
+            recordDataPoint("SPEED", rpm);
             delay(60); // ~8 Samples bei 500ms
         }
 
@@ -126,7 +126,7 @@ void runSpeedTest(int i) {
             float variance = 0.0f;
             for (uint8_t k = 0; k < nSamples; k++) variance += sq(pSamples[k] - mean);
             float sigma = sqrtf(variance / nSamples);
-            profileAddPoint(rpm, mean, fmaxf(sigma, 0.5f), telemCacheSG(), telemCacheCS());
+            profileAddPoint(rpm, mean, fmaxf(sigma, 0.5f), getLatestSgResult(), getLatestCsActual());
         }
 
         rpm += PARCOUR_RPM_STEP;
@@ -180,7 +180,7 @@ void runCoastTest(int i) {
     stepper->stopMove();
     unsigned long t0 = millis();
     uint32_t p0 = getPulseCount();
-    while(millis() - t0 < 2000) { recordTelemetry("COAST", 0); yield(); }
+    while(millis() - t0 < 2000) { recordDataPoint("COAST", 0); yield(); }
     uint32_t p1 = getPulseCount();
     addLog("Coast Pulses: " + String(p1 - p0));
     
@@ -201,7 +201,7 @@ void runKatapult(int i) {
         if(sys.pendingStop) break;
         stepper->runForward();
         unsigned long t0 = millis();
-        while(millis() - t0 < 1500) { recordTelemetry("KAT_CW", launchRpm); yield(); }
+        while(millis() - t0 < 1500) { recordDataPoint("KAT_CW", launchRpm); yield(); }
         stepper->stopMove(); waitWhileRunning();
         delay(200);
     }
@@ -231,7 +231,7 @@ void runFreqSweep(int i) {
         stepper->setSpeedInHz((uint32_t)sqrtf((float)FREQ_ACCEL_MAX * (float)amp));
         stepper->setAcceleration(FREQ_ACCEL_MAX);
         stepper->moveTo(dir * amp);
-        while (stepper->isRunning()) { recordTelemetry("FS", f); yield(); }
+        while (stepper->isRunning()) { recordDataPoint("FS", f); yield(); }
         dir = -dir;
     }
     moveToDeg(0); waitWhileRunning();

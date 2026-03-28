@@ -7,6 +7,7 @@
 #include "Sensor.h"
 #include "Driver.h"
 #include "Telemetry.h"
+#include "SensorCalib.h"
 
 extern SystemState        sys;
 extern portMUX_TYPE       motorMux;
