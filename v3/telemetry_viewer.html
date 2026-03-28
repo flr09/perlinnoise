@@ -170,14 +170,16 @@ async function autoSyncLoop() {
     const res = await fetch(baseUrl + '/status');
     const s = await res.json();
     
-    if (s.op !== lastOpState) {
+    const prevOp = lastOpState;
+    lastOpState = s.op;
+
+    if (s.op !== prevOp) {
       if (s.op === 'test') {
         status('Test erkannt! Lade Daten...', 'ok');
       }
-      lastOpState = s.op;
     }
 
-    if (s.op === 'test' || (s.op === 'idle' && lastOpState === 'test')) {
+    if (s.op === 'test' || (s.op === 'idle' && prevOp === 'test')) {
       fetchFromESP();
     }
   } catch(e) { 

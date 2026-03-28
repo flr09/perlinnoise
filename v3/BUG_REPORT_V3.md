@@ -22,18 +22,12 @@
     3. `homeMotor` nutzt wieder die dedizierte `touchEdge`-Phase nach der Schnellsuche.
     4. EMI-Filter (5-hit, 100µs) aus 3.7.15 wurden für zusätzliche Stabilität beibehalten.
 
-## Verifizierte Parameter (v3.7.29)
+## Verifizierte Parameter (v3.7.30)
 - **FW-Build:** SUCCESS
-- **Methode:** Modularisierte Telemetrie-Handler, CORS-Fix für Live-Sync und Content-Disposition für CSV-Downloads.
-- **Status:** Stabilisiert. Telemetry Viewer (v3.7.29) voll funktionsfähig (Live & Paste).
+- **Methode:** Fix lastOpState Timing in Telemetry Viewer.
+- **Status:** Stabilisiert. Finaler CSV-Abruf nach Testende (test -> idle Transition) verifiziert.
 
-### [T28] Telemetrie-Ausfall & Live-Sync Bug
-- **Symptom:** Weder Live-Daten noch CSV-Abruf im Telemetry Viewer möglich (v3.7.28).
-- **Ursache:** 
-    1. Fehlende `Access-Control-Allow-Origin: *` Header führten zu CORS-Fehlern beim lokalen Ausführen des Viewers.
-    2. Fehlende `Content-Disposition` Header verhinderten korrekte Datei-Downloads.
-    3. Syntax-Fehler und fehlendes Error-Handling im JavaScript des Viewers (v3.7.28).
-- **Fix (v3.7.29):** 
-    1. Vollständige Modularisierung der Telemetrie: Web-Handler nach `Telemetry.cpp` verschoben.
-    2. CORS-Header zu `/status`, `/telemetry` und `/cmd` hinzugefügt.
-    3. `telemetry_viewer.html` repariert: Paste-Area wiederhergestellt, robustere URL-Extraktion für `/status` und detailliertes Error-Reporting.
+### [T30] Telemetrie Live-Sync Timing Bug
+- **Symptom:** Der finale CSV-Download nach Testende wurde nicht ausgelöst.
+- **Ursache:** In `autoSyncLoop` wurde `lastOpState` aktualisiert, bevor die Bedingung für den finalen Abruf (`s.op === 'idle' && lastOpState === 'test'`) geprüft wurde.
+- **Fix (v3.7.30):** Speicherung des alten Status in `prevOp` vor dem Update von `lastOpState`, um die Transition korrekt zu erkennen.
