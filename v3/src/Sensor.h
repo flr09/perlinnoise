@@ -19,8 +19,8 @@ uint16_t getTachoRpm();
 uint32_t getPulseCount();
 bool     waitForSensorTimed(bool state, long maxSteps, unsigned long timeoutMs);
 bool     waitForSensorStable(bool state, long maxSteps, unsigned long timeoutMs);
+bool     checkSensorStable(bool targetState, int requiredHits);
 
-// --- LATCH API (Fix F12) ---
-void sensorLatchEnable(bool enable);
+// --- LATCH API ---
 void sensorLatchReset();
 void enablePcntInputBuffer();

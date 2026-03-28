@@ -101,6 +101,10 @@ void initDriver() {
         stepper->setAutoEnable(false);
     }
 
+    // F6 Fix: Enable Input-Buffer on Step/Dir pins AFTER FastAccelStepper init.
+    // Uses low-level FUN_IE bit to avoid breaking RMT peripheral routing.
+    enablePcntInputBuffer();
+
     if (xSemaphoreTake(uartMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         driverX.begin(); xSemaphoreGive(uartMutex);
     }

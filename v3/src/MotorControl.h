@@ -20,6 +20,7 @@ void addLog(String msg);
 // --- CALIB / HOMING (→ Calib plugin, Phase 3) ---
 void homeMotor(int i);
 void characterizeSensor(int i);
+void saveCalibration(int i);
 void learnSGProfile(int i);
 void gotoCardinal();
 

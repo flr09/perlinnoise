@@ -55,8 +55,9 @@ struct SystemState {
     volatile int  pendingPower    = -1;
     volatile int  pendingKatapult  = -1;
     volatile int  pendingShow      = -1;
-    volatile int  pendingFreqSweep = -1;
-    volatile bool pendingStop      = false;
+    volatile int  pendingFreqSweep  = -1;
+    volatile int  pendingCalibTest  = -1;
+    volatile bool pendingStop       = false;
 };
 
 // --- Plugin sequence types (Freq / Perlin / Oszy) ---
