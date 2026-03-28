@@ -12,7 +12,7 @@
     .nav {
       display: flex; justify-content: space-between; align-items: center;
       background: #003366; border-bottom: 2px solid #ff9800;
-      padding: 10px 16px; border-radius: 6px; margin-bottom: 16px;
+      padding: 10px 166px; border-radius: 6px; margin-bottom: 16px;
     }
     .nav a { color: #fff; text-decoration: none; font-weight: bold; font-size: 0.9em; }
     .nav .title { color: #ff9800; font-weight: bold; }
@@ -128,15 +128,11 @@
 
 <script>
 let rawCSV = "";
+let lastTs = 0;
 let charts = {};
 let liveSyncActive = false;
 let liveTimer = null;
 let lastOpState = "";
-
-const COLS = {
-  ts:0, phase:1, val:2, pos:3, spd:4, rpm:5, pulses:6, sg:7, cs:8, cur_a:9, cur_b:10,
-  stall:11, otpw:12, ot:13, ola:14, olb:15
-};
 
 const PHASE_COLORS = {
   SPEED: '#ff9800', DRIFT: '#29b6f6', FINE: '#ab47bc', ACCEL: '#ef5350',
@@ -196,17 +192,42 @@ async function fetchFromESP() {
   try {
     const r = await fetch(url);
     if (!r.ok) { status('HTTP ' + r.status + ' — Kein Parcour-Ergebnis.', 'err'); return; }
-    rawCSV = await r.text();
+    const text = await r.text();
+    const lines = text.trim().split('\n');
+    if (lines.length < 2) return;
+
+    const header = lines[0];
+    const dataLines = lines.slice(1).filter(l => l.length > 5);
+    if (dataLines.length === 0) { status('Warte auf Messdaten vom ESP...', 'ok'); return; }
+
+    // ESP-Reset erkennen: ts_ms springt zurück → alte Session sichern
+    const firstTs = parseInt(dataLines[0]);
+    if (!isNaN(firstTs) && firstTs < lastTs && rawCSV) {
+      downloadCSV();
+      clearAll();
+      status('ESP-Reset erkannt — Session gespeichert.', 'ok');
+    }
+
+    // Nur neue Zeilen anhängen
+    const newLines = dataLines.filter(l => { const ts = parseInt(l); return !isNaN(ts) && ts > lastTs; });
+    if (newLines.length === 0) return;
+
+    if (!rawCSV) rawCSV = header + '\n';
+    rawCSV += newLines.join('\n') + '\n';
+    lastTs = parseInt(newLines[newLines.length - 1]);
+
     document.getElementById('csvPaste').value = rawCSV;
     processCSV(rawCSV);
-  } catch(e) { 
+  } catch(e) {
     status('Fehler: ' + e.message + ' (CORS?)', 'err');
   }
 }
 
 function parsePaste() {
   rawCSV = document.getElementById('csvPaste').value.trim();
-  if(!rawCSV) { status('Kein Inhalt zum Plotten.', 'err'); return; }
+  if (!rawCSV) { status('Kein Inhalt zum Plotten.', 'err'); return; }
+  const lines = rawCSV.split('\n').filter(l => l.length > 5);
+  if (lines.length > 1) { const ts = parseInt(lines[lines.length - 1]); if (!isNaN(ts)) lastTs = ts; }
   processCSV(rawCSV);
 }
 
@@ -222,6 +243,7 @@ function downloadCSV() {
 
 function clearAll() {
   rawCSV = '';
+  lastTs = 0;
   document.getElementById('csvPaste').value = '';
   document.getElementById('summaryGrid').innerHTML = '';
   document.getElementById('flagLog').innerHTML = 'Keine Ereignisse.';

@@ -22,12 +22,12 @@
     3. `homeMotor` nutzt wieder die dedizierte `touchEdge`-Phase nach der Schnellsuche.
     4. EMI-Filter (5-hit, 100µs) aus 3.7.15 wurden für zusätzliche Stabilität beibehalten.
 
-## Verifizierte Parameter (v3.7.31)
+## Verifizierte Parameter (v3.7.32)
 - **FW-Build:** SUCCESS
-- **Methode:** Support for 'show' (Vorführmodus) in Telemetry Viewer autoSyncLoop.
-- **Status:** Stabilisiert. Sowohl 'test' als auch 'show' (Vorführmodus) triggern nun den Live-Sync und finalen Abruf.
+- **Methode:** Standardized rawCSV variable and implemented incremental CSV updates.
+- **Status:** Stabilisiert. Fehler `rawCSV is not defined` behoben. Automatischer Session-Save bei ESP-Reset.
 
-### [T31] Vorführmodus ('show') unsichtbar für Live Sync
-- **Symptom:** Im Vorführmodus wurden keine Telemetriedaten automatisch geladen.
-- **Ursache:** Die `autoSyncLoop` prüfte exklusiv auf den Status `test`. Der Status `show` (Vorführmodus) wurde ignoriert.
-- **Fix (v3.7.31):** Erweiterung der Status-Prüfung um `show`. Einführung von `isActive` und `wasActive` Helfern zur sauberen Transitionserkennung.
+### [T32] JS ReferenceError 'rawCSV'
+- **Symptom:** Der Telemetry Viewer stürzte ab oder zeigte Fehler in der Konsole bei Downloads oder beim Löschen.
+- **Ursache:** Inkonsistente Verwendung von `localCSV` und `rawCSV`.
+- **Fix (v3.7.32):** Vereinheitlichung auf `rawCSV`. Implementierung einer inkrementellen Logik: Nur neue Zeilen (basierend auf `ts_ms`) werden an den Buffer angehängt. Bei einem ESP-Neustart (ts_ms < lastTs) wird die aktuelle Session automatisch als Datei gespeichert und der Buffer geleert.
