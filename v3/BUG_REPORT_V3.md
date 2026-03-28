@@ -22,12 +22,12 @@
     3. `homeMotor` nutzt wieder die dedizierte `touchEdge`-Phase nach der Schnellsuche.
     4. EMI-Filter (5-hit, 100µs) aus 3.7.15 wurden für zusätzliche Stabilität beibehalten.
 
-## Verifizierte Parameter (v3.7.30)
+## Verifizierte Parameter (v3.7.31)
 - **FW-Build:** SUCCESS
-- **Methode:** Fix lastOpState Timing in Telemetry Viewer.
-- **Status:** Stabilisiert. Finaler CSV-Abruf nach Testende (test -> idle Transition) verifiziert.
+- **Methode:** Support for 'show' (Vorführmodus) in Telemetry Viewer autoSyncLoop.
+- **Status:** Stabilisiert. Sowohl 'test' als auch 'show' (Vorführmodus) triggern nun den Live-Sync und finalen Abruf.
 
-### [T30] Telemetrie Live-Sync Timing Bug
-- **Symptom:** Der finale CSV-Download nach Testende wurde nicht ausgelöst.
-- **Ursache:** In `autoSyncLoop` wurde `lastOpState` aktualisiert, bevor die Bedingung für den finalen Abruf (`s.op === 'idle' && lastOpState === 'test'`) geprüft wurde.
-- **Fix (v3.7.30):** Speicherung des alten Status in `prevOp` vor dem Update von `lastOpState`, um die Transition korrekt zu erkennen.
+### [T31] Vorführmodus ('show') unsichtbar für Live Sync
+- **Symptom:** Im Vorführmodus wurden keine Telemetriedaten automatisch geladen.
+- **Ursache:** Die `autoSyncLoop` prüfte exklusiv auf den Status `test`. Der Status `show` (Vorführmodus) wurde ignoriert.
+- **Fix (v3.7.31):** Erweiterung der Status-Prüfung um `show`. Einführung von `isActive` und `wasActive` Helfern zur sauberen Transitionserkennung.

@@ -173,13 +173,16 @@ async function autoSyncLoop() {
     const prevOp = lastOpState;
     lastOpState = s.op;
 
+    const isActive = s.op === 'test' || s.op === 'show';
+    const wasActive = prevOp === 'test' || prevOp === 'show';
+
     if (s.op !== prevOp) {
-      if (s.op === 'test') {
-        status('Test erkannt! Lade Daten...', 'ok');
+      if (isActive) {
+        status('Betrieb erkannt (' + s.op.toUpperCase() + ')! Lade Daten...', 'ok');
       }
     }
 
-    if (s.op === 'test' || (s.op === 'idle' && prevOp === 'test')) {
+    if (isActive || (s.op === 'idle' && wasActive)) {
       fetchFromESP();
     }
   } catch(e) { 

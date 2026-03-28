@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 // --- FIRMWARE VERSION ---
-#define FW_VERSION "3.7.30"
+#define FW_VERSION "3.7.31"
 
 // --- HARDWARE PINS (FYSETC E4) ---
 #define R_SENSE    0.11f
