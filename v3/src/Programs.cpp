@@ -22,55 +22,28 @@ bool waitWhileRunning(unsigned long timeoutMs = 0) {
 
 void learnSGProfile(int i) {
     if (i != 0) return;
-    if (!sys.cal[0].valid) { addLog("Err: SG-Learn ohne Kalibrierung"); return; }
-
     setMotorPower(0, true);
     setMicrosteps(16);
-    stepper->setAcceleration(5000);
     addLog("SG-Learn...");
-
-    // 600-1200 RPM: SpreadCycle aktiv und SG-Werte stabil eingeschwungen
-    // Untergrenze: 600 RPM (laut Doku erst ab hier zuverlaessig)
-    // Obergrenze: 80% von maxRpm wenn bekannt, sonst 1200
-    float topRpm = (sys.cal[0].maxRpm > 800) ? sys.cal[0].maxRpm * 0.8f : 1200.0f;
-    float testRpms[] = { 600.0f, topRpm * 0.6f, topRpm * 0.8f, topRpm };
-
-    uint16_t sgMin = 0xFFFF;
-    uint32_t sgSum = 0;
-    int samples = 0;
-
-    for (int s = 0; s < 4; s++) {
+    float testRpms[] = {150, 250, 350, 450};
+    float sgSum = 0; int samples = 0;
+    for(int s=0; s<4; s++) {
         if (sys.pendingStop) break;
         stepper->setSpeedInHz((uint32_t)rpmToSps(testRpms[s]));
         stepper->runForward();
-        delay(600);  // Einlaufzeit: SG braucht ~500ms zum Einpendeln nach Drehzahlwechsel
-
         unsigned long t0 = millis();
-        while (millis() - t0 < 1500) {
+        while(millis() - t0 < 1500) {
             if (sys.pendingStop) break;
-            uint16_t sg = telemCacheSG();
-            if (sg > 0 && sg < sgMin) sgMin = sg;  // Minimum im Freilauf (konservativste Basis)
-            sgSum += sg;
-            samples++;
+            sgSum += (float)getLatestSgResult(); samples++;
             delay(50);
         }
-        addLog("SG@" + String((int)testRpms[s]) + "rpm min=" + String(sgMin));
     }
-
     stepper->stopMove(); waitWhileRunning();
-
-    if (samples > 0 && sgMin < 0xFFFF) {
-        // Threshold = 75% des gemessenen Minimums im Freilauf
-        // Freilauf-Min ist die konservativste Basis; 75% laesst Spielraum ohne Fehlausloesung
-        sys.cal[0].sgThrs = (uint8_t)min(255U, (uint32_t)(sgMin * 0.75f));
-        addLog("SG-Thrs: " + String(sys.cal[0].sgThrs) + " (min=" + String(sgMin) + " avg=" + String(sgSum / samples) + ")");
-    } else {
-        addLog("Err: Keine SG-Daten — Thrs unveraendert");
-    }
-
+    if(samples > 0) sys.cal[0].sgThrs = (uint8_t)(sgSum / (float)samples * 0.6f);
     saveCalibration(0);
     setMicrosteps(64);
     applyDriverSettings(MOTOR_CURRENT_DEFAULT);
+    addLog("SG-Thrs: " + String(sys.cal[0].sgThrs));
 }
 
 void runSpeedTest(int i) {
@@ -80,14 +53,13 @@ void runSpeedTest(int i) {
     stepper->setAcceleration(30000);
     float rpm = 300.0f;
     addLog("Speed Test...");
-    // clearTelemetry() is NOT called here anymore (Issue #4)
     while(rpm <= PARCOUR_RPM_MAX && !sys.pendingStop) {
         stepper->setSpeedInHz((uint32_t)rpmToSps(rpm));
         stepper->runForward();
         unsigned long tStart = millis();
         while(millis() - tStart < 1000) {
             if (sys.pendingStop) break;
-            recordTelemetry("SPEED", rpm);
+            recordDataPoint("SPEED", rpm);
             yield();
         }
         if (getTachoRpm() < rpm * 0.8f && rpm > 400) {
@@ -109,14 +81,13 @@ void runInertiaTest(int i) {
     setMotorPower(0, true);
     setMicrosteps(16);
     addLog("Inertia Test...");
-    float acc = 1000; bool failed = false;
+    float acc = 1000;
     float testSpd = sys.cal[0].maxRpm > 0 ? sys.cal[0].maxRpm * 0.7f : 400.0f;
     stepper->setSpeedInHz((uint32_t)rpmToSps(testSpd));
-    while(acc <= 40000 && !failed && !sys.pendingStop) {
+    while(acc <= 40000 && !sys.pendingStop) {
         stepper->setAcceleration(acc);
         stepper->move(stepsPerRev * 2); if(!waitWhileRunning()) break;
         stepper->move(-stepsPerRev * 2); if(!waitWhileRunning()) break;
-        // Simple check: if we didn't crash/timeout, we increase
         acc += 2000;
     }
     sys.cal[0].maxAccel = acc - 2000;
@@ -136,12 +107,11 @@ void runCoastTest(int i) {
     delay(1000);
     if (sys.pendingStop) { stepper->stopMove(); return; }
     
-    // Cut power
     setMotorPower(0, false);
     stepper->stopMove();
     unsigned long t0 = millis();
     uint32_t p0 = getPulseCount();
-    while(millis() - t0 < 2000) { recordTelemetry("COAST", 0); yield(); }
+    while(millis() - t0 < 2000) { recordDataPoint("COAST", 0); yield(); }
     uint32_t p1 = getPulseCount();
     addLog("Coast Pulses: " + String(p1 - p0));
     
@@ -162,7 +132,7 @@ void runKatapult(int i) {
         if(sys.pendingStop) break;
         stepper->runForward();
         unsigned long t0 = millis();
-        while(millis() - t0 < 1500) { recordTelemetry("KAT_CW", launchRpm); yield(); }
+        while(millis() - t0 < 1500) { recordDataPoint("KAT_CW", launchRpm); yield(); }
         stepper->stopMove(); waitWhileRunning();
         delay(200);
     }
@@ -192,7 +162,7 @@ void runFreqSweep(int i) {
         stepper->setSpeedInHz((uint32_t)sqrtf((float)FREQ_ACCEL_MAX * (float)amp));
         stepper->setAcceleration(FREQ_ACCEL_MAX);
         stepper->moveTo(dir * amp);
-        while (stepper->isRunning()) { recordTelemetry("FS", f); yield(); }
+        while (stepper->isRunning()) { recordDataPoint("FS", f); yield(); }
         dir = -dir;
     }
     moveToDeg(0); waitWhileRunning();

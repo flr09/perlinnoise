@@ -7,6 +7,7 @@
 #include <ElegantOTA.h>
 #include "MotorControl.h"
 #include "CalibTest.h"
+#include "Telemetry.h"
 #include "wifi_settings.h"
 
 AsyncWebServer server(80);
@@ -187,7 +188,7 @@ void TaskCore1(void * pvParameters) {
             else if (sys.pendingTest != -1) {
                 int m = sys.pendingTest; sys.pendingTest = -1;
                 sys.opState = MOTOR_TESTING;
-                clearTelemetry();
+                resetTelemetryBuffer();
                 if (sys.parcour.doSpeed && !sys.pendingStop)    runSpeedTest(m);
                 if (sys.parcour.doAccel && !sys.pendingStop) { delay(100); runInertiaTest(m); }
                 if (sys.parcour.doCoast && !sys.pendingStop) { delay(100); runCoastTest(m); }
@@ -278,9 +279,7 @@ void setup() {
         r->send(200, "text/plain", "OK");
     });
     server.on("/telemetry", HTTP_GET, [](AsyncWebServerRequest *r){
-        portENTER_CRITICAL(&motorMux);
-        String csvCopy = telemCSV;  // Erst kopieren, dann Critical Section verlassen — beginResponse macht 52KB-Malloc
-        portEXIT_CRITICAL(&motorMux);
+        String csvCopy = getTelemetryCSV();
         AsyncWebServerResponse *res = r->beginResponse(200, "text/csv", csvCopy);
         res->addHeader("Content-Disposition", "attachment; filename=\"parcour.csv\"");
         res->addHeader("Access-Control-Allow-Origin", "*");
@@ -295,9 +294,7 @@ void setup() {
     ElegantOTA.begin(&server, "admin", "12345678"); ElegantOTA.setAutoReboot(true);
     server.begin();
     
-    xTaskCreatePinnedToCore([](void*){
-        for(;;) { updateTelemCache(); vTaskDelay(pdMS_TO_TICKS(300)); }
-    }, "TelemCache", 2048, NULL, 1, NULL, 0);
+    initTelemetry();
 
     xTaskCreatePinnedToCore(TaskCore1, "MotorTask", 10000, NULL, 1, NULL, 1);
 }

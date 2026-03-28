@@ -229,6 +229,7 @@ Bei 400 RPM mit TPWMTHRS=0 (erzwungen StealthChop), Strom-Sweep:
 | v3.6.19 | 2026-03-26 | Grad-absolutes Koordinatensystem: `CalibrationData` auf `triggerStartDeg`/`triggerEndDeg` (float°) umgestellt. NVS-Versionierung `nvsVersion=3619`. |
 | v3.7.1 | 2026-03-27 | Phase 1 Modularisierung (Config/Types/IModule/Sensor/Driver/Telemetry). Driver-Layer Winkel-API (`degToSteps`, `moveToDeg`, …). FreqSweep: kontinuierlicher Chirp 10–200 Hz. `lroundf` für Microstep-Skalierung und Kalibrierungsmitte. |
 | v3.7.10 | 2026-03-27 | **MEILENSTEIN** — Successive Approximation Kalibrierung. 5-Hit Filter gegen EMI-Rauschen am FYSETC E4. 3-faches Antasten beider Sensor-Flanken bei 100 sps zur präzisen Mittenbestimmung. |
+| v3.7.25 | 2026-03-28 | **GOLDEN LOGIC** — Isolation der Kalibrierung/Homing in `SensorCalib.cpp`. Homing optimiert: 1-faches Antasten zur Bestätigung + Direktanfahrt 0°. Kalibrierung bleibt 3-fach robust. |
 
 ---
 
