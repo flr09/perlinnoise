@@ -59,10 +59,11 @@ const char index_html[] PROGMEM = R"rawliteral(
           <h2 style="margin:0; color:#ff9800;">MOTOR X</h2>
           <div class="led" id="led0"></div>
         </div>
-        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
+        <div style="display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 15px;">
             <div>Winkel: <span class="val" id="pos0">0.0</span>°</div>
             <div>Speed: <span class="val" id="spd0">0</span> sps</div>
             <div>RPM: <span class="val" id="rpm0">0</span></div>
+            <div>Pulse: <span class="val" id="pulse0">0</span></div>
         </div>
         <div class="angle-ring">
           <div class="angle-mark"><div class="dot" id="a90"></div><span>90°</span></div>
@@ -154,6 +155,7 @@ const char index_html[] PROGMEM = R"rawliteral(
           document.getElementById('a'+t).classList.toggle('active', diff < 8);
         });
         if(s.rpm !== undefined) document.getElementById('rpm0').innerText = s.rpm;
+        if(s.pulses !== undefined) document.getElementById('pulse0').innerText = s.pulses;
         document.getElementById('led0').className = s.hit ? 'led hit' : 'led';
         const pBtn = document.getElementById('pwr0');
         pBtn.innerText = s.m[0].e ? 'POWER ON' : 'POWER OFF';
@@ -246,7 +248,7 @@ void setup() {
         const char* opNames[] = {"idle","homing","calib","learn","test","show"};
         String j = "{\"hit\":" + String(digitalRead(TACHO_PIN)==LOW?"true":"false");
         j += ",\"op\":\"" + String(opNames[sys.opState]) + "\"";
-        j += ",\"fw\":\"" + String(FW_VERSION) + "\",\"rpm\":" + String(getTachoRpm());
+        j += ",\"fw\":\"" + String(FW_VERSION) + "\",\"rpm\":" + String(getTachoRpm()) + ",\"pulses\":" + String(getPulseCount());
         j += ",\"log\":\"" + logData + "\"";
         j += ",\"m\":[{\"p\":" + String(angleDeg, 1) + ",\"s\":" + String(spd) + ",\"e\":" + String(sys.m[0].enabled?"true":"false") + "}]}";
         r->send(200, "application/json", j);

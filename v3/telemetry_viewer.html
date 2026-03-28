@@ -101,12 +101,12 @@
 
 <div class="charts-grid">
   <div class="chart-box">
-    <h3>Position (Steps)</h3>
+    <h3>Position & Sensor Pulses</h3>
     <canvas id="chartPos"></canvas>
   </div>
   <div class="chart-box">
-    <h3>Speed (sps)</h3>
-    <canvas id="chartSpd"></canvas>
+    <h3>Rotation (Soll sps vs Real RPM)</h3>
+    <canvas id="chartRpm"></canvas>
   </div>
   <div class="chart-box">
     <h3>StallGuard Result (Last = Mehr Last)</h3>
@@ -214,6 +214,8 @@ function processCSV(text) {
   const ts    = rows.map(r => (parseInt(r.ts_ms)/1000).toFixed(2));
   const pos   = rows.map(r => parseInt(r.pos_steps));
   const spd   = rows.map(r => parseInt(r.spd_sps));
+  const real  = rows.map(r => parseInt(r.real_rpm));
+  const pulse = rows.map(r => parseInt(r.pulse_cnt));
   const sg    = rows.map(r => parseInt(r.sg_result));
   const cs    = rows.map(r => parseInt(r.cs_actual));
   const cur_a = rows.map(r => parseInt(r.cur_a));
@@ -230,7 +232,7 @@ function processCSV(text) {
   // Summary
   const maxSpd = Math.max(...spd); const minSG = Math.min(...sg); const maxSG = Math.max(...sg);
   const stallCount = stall.filter(v=>v>0).length;
-  const otpwCount  = otpw.filter(v=>v>0).length;
+  const totalPulses = pulse.length ? (pulse[pulse.length-1] - pulse[0]) : 0;
   const durationS  = (parseInt(rows[rows.length-1].ts_ms)/1000).toFixed(1);
   const maxRpm = rows.filter(r=>r.phase==='SPEED').map(r=>parseFloat(r.val));
   const topRpm = maxRpm.length ? Math.max(...maxRpm) : 0;
@@ -240,12 +242,11 @@ function processCSV(text) {
   renderSummary([
     ['Dauer', durationS + ' s'],
     ['Samples', rows.length],
-    ['Max Speed', maxSpd + ' sps'],
-    ['Top RPM', topRpm + ' RPM'],
-    ['Top Accel', topAccel > 0 ? topAccel + ' sps²' : '—'],
+    ['Max sps', maxSpd + ' sps'],
+    ['Top RPM (Set)', topRpm + ' RPM'],
+    ['Reale Umdr.', totalPulses],
     ['SG Range', minSG + '–' + maxSG],
     ['Stall Events', stallCount],
-    ['OTPW Events', otpwCount],
   ]);
 
   // Flag log
@@ -281,15 +282,16 @@ function processCSV(text) {
     });
   }
 
-  mk('chartPos', [{
-    label:'Position (steps)', data:pos, borderColor:'#ff9800',
-    backgroundColor:'transparent', pointRadius:0, borderWidth:1.5, tension:0.2
-  }]);
+  mk('chartPos', [
+    { label:'Position (steps)', data:pos, borderColor:'#ff9800', backgroundColor:'transparent', pointRadius:0, borderWidth:1.5, yAxisID:'y' },
+    { label:'Sensor Pulses', data:pulse, borderColor:'#4caf50', backgroundColor:'rgba(76,175,80,0.1)', pointRadius:0, borderWidth:1, fill:true, stepped:true, yAxisID:'y1' }
+  ]);
+  charts['chartPos'].options.scales.y1 = { position:'right', grid:{drawOnChartArea:false}, ticks:{color:'#4caf50'} };
 
-  mk('chartSpd', [{
-    label:'Speed (sps)', data:spd, borderColor:'#29b6f6',
-    backgroundColor:'transparent', pointRadius:0, borderWidth:1.5, tension:0.2
-  }]);
+  mk('chartRpm', [
+    { label:'Soll (sps)', data:spd, borderColor:'#29b6f6', backgroundColor:'transparent', pointRadius:0, borderWidth:1.5 },
+    { label:'Real (RPM)', data:real, borderColor:'#ff5252', backgroundColor:'transparent', pointRadius:0, borderWidth:1.5, borderDash:[5,5] }
+  ]);
 
   mk('chartSG', [{
     label:'SG_RESULT', data:sg, borderColor:'#66bb6a',
