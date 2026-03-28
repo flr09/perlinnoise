@@ -251,7 +251,10 @@ void setup() {
         j += ",\"fw\":\"" + String(FW_VERSION) + "\",\"rpm\":" + String(getTachoRpm()) + ",\"pulses\":" + String(getPulseCount());
         j += ",\"log\":\"" + logData + "\"";
         j += ",\"m\":[{\"p\":" + String(angleDeg, 1) + ",\"s\":" + String(spd) + ",\"e\":" + String(sys.m[0].enabled?"true":"false") + "}]}";
-        r->send(200, "application/json", j);
+        
+        AsyncWebServerResponse *res = r->beginResponse(200, "application/json", j);
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        r->send(res);
     });
     server.on("/cmd", [](AsyncWebServerRequest *r){
         if(!r->hasParam("a")) { r->send(400); return; }
@@ -278,11 +281,14 @@ void setup() {
         else if(a=="calibtest")  sys.pendingCalibTest = m;
         else if(a=="show")      sys.pendingShow      = m;
         else if(a=="stop") { sys.pendingStop = true; sys.pendingPower = 0; }
-        r->send(200, "text/plain", "OK");
+        
+        AsyncWebServerResponse *res = r->beginResponse(200, "text/plain", "OK");
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        r->send(res);
     });
-    server.on("/telemetry", HTTP_GET, [](AsyncWebServerRequest *r){
-        r->send(200, "text/csv", getTelemetryCSV());
-    });
+    
+    registerTelemetryHandlers(server);
+
     server.on("/pcnt", HTTP_GET, [](AsyncWebServerRequest *r){
         int16_t v = 0;
         pcnt_get_counter_value(PCNT_UNIT_0, &v);

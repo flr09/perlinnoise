@@ -86,6 +86,15 @@ String getTelemetryCSV() {
     return copy;
 }
 
+void registerTelemetryHandlers(AsyncWebServer& server) {
+    server.on("/telemetry", HTTP_GET, [](AsyncWebServerRequest *r){
+        AsyncWebServerResponse *res = r->beginResponse(200, "text/csv", getTelemetryCSV());
+        res->addHeader("Content-Disposition", "attachment; filename=\"parcour.csv\"");
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        r->send(res);
+    });
+}
+
 uint16_t getLatestSgResult() { return liveData.sg; }
 uint8_t  getLatestCsActual() { return liveData.cs; }
 bool     isMotorStalled()    { return liveData.stall; }

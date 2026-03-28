@@ -22,7 +22,18 @@
     3. `homeMotor` nutzt wieder die dedizierte `touchEdge`-Phase nach der Schnellsuche.
     4. EMI-Filter (5-hit, 100µs) aus 3.7.15 wurden für zusätzliche Stabilität beibehalten.
 
-## Verifizierte Parameter (v3.7.20)
+## Verifizierte Parameter (v3.7.29)
 - **FW-Build:** SUCCESS
-- **Methode:** Revert to 3.7.11 Robust (3-Touch) + 3.7.15 EMI Filter.
-- **Status:** Stabilisiert.
+- **Methode:** Modularisierte Telemetrie-Handler, CORS-Fix für Live-Sync und Content-Disposition für CSV-Downloads.
+- **Status:** Stabilisiert. Telemetry Viewer (v3.7.29) voll funktionsfähig (Live & Paste).
+
+### [T28] Telemetrie-Ausfall & Live-Sync Bug
+- **Symptom:** Weder Live-Daten noch CSV-Abruf im Telemetry Viewer möglich (v3.7.28).
+- **Ursache:** 
+    1. Fehlende `Access-Control-Allow-Origin: *` Header führten zu CORS-Fehlern beim lokalen Ausführen des Viewers.
+    2. Fehlende `Content-Disposition` Header verhinderten korrekte Datei-Downloads.
+    3. Syntax-Fehler und fehlendes Error-Handling im JavaScript des Viewers (v3.7.28).
+- **Fix (v3.7.29):** 
+    1. Vollständige Modularisierung der Telemetrie: Web-Handler nach `Telemetry.cpp` verschoben.
+    2. CORS-Header zu `/status`, `/telemetry` und `/cmd` hinzugefügt.
+    3. `telemetry_viewer.html` repariert: Paste-Area wiederhergestellt, robustere URL-Extraktion für `/status` und detailliertes Error-Reporting.

@@ -121,6 +121,11 @@
   <div id="flagLog">Keine Ereignisse.</div>
 </div>
 
+<div class="paste-area">
+  <h3>CSV einfügen (von /telemetry oder Datei)</h3>
+  <textarea id="csvPaste" placeholder="ts_ms,phase,val,pos_steps,..."></textarea>
+</div>
+
 <script>
 let rawCSV = "";
 let charts = {};
@@ -160,7 +165,8 @@ function toggleLiveSync() {
 
 async function autoSyncLoop() {
   try {
-    const baseUrl = document.getElementById('espUrl').value.replace('/telemetry', '');
+    const espVal = document.getElementById('espUrl').value;
+    const baseUrl = espVal.substring(0, espVal.lastIndexOf('/'));
     const res = await fetch(baseUrl + '/status');
     const s = await res.json();
     
@@ -174,17 +180,29 @@ async function autoSyncLoop() {
     if (s.op === 'test' || (s.op === 'idle' && lastOpState === 'test')) {
       fetchFromESP();
     }
-  } catch(e) { console.log('Sync-Error:', e); }
+  } catch(e) { 
+    console.log('Sync-Error:', e); 
+    if (liveSyncActive) status('Sync-Fehler (CORS/Offline?)', 'err');
+  }
 }
 
 async function fetchFromESP() {
   const url = document.getElementById('espUrl').value;
   try {
     const r = await fetch(url);
-    if (!r.ok) return;
+    if (!r.ok) { status('HTTP ' + r.status + ' — Kein Parcour-Ergebnis.', 'err'); return; }
     rawCSV = await r.text();
+    document.getElementById('csvPaste').value = rawCSV;
     processCSV(rawCSV);
-  } catch(e) { console.log('Fetch error:', e); }
+  } catch(e) { 
+    status('Fehler: ' + e.message + ' (CORS?)', 'err');
+  }
+}
+
+function parsePaste() {
+  rawCSV = document.getElementById('csvPaste').value.trim();
+  if(!rawCSV) { status('Kein Inhalt zum Plotten.', 'err'); return; }
+  processCSV(rawCSV);
 }
 
 function downloadCSV() {
@@ -199,6 +217,7 @@ function downloadCSV() {
 
 function clearAll() {
   rawCSV = '';
+  document.getElementById('csvPaste').value = '';
   document.getElementById('summaryGrid').innerHTML = '';
   document.getElementById('flagLog').innerHTML = 'Keine Ereignisse.';
   Object.values(charts).forEach(c => c.destroy());
