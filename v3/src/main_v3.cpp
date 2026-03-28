@@ -281,11 +281,7 @@ void setup() {
         r->send(200, "text/plain", "OK");
     });
     server.on("/telemetry", HTTP_GET, [](AsyncWebServerRequest *r){
-        String csvCopy = getTelemetryCSV();
-        AsyncWebServerResponse *res = r->beginResponse(200, "text/csv", csvCopy);
-        res->addHeader("Content-Disposition", "attachment; filename=\"parcour.csv\"");
-        res->addHeader("Access-Control-Allow-Origin", "*");
-        r->send(res);
+        r->send(200, "text/csv", getTelemetryCSV());
     });
     server.on("/pcnt", HTTP_GET, [](AsyncWebServerRequest *r){
         int16_t v = 0;
