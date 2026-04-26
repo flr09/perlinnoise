@@ -24,6 +24,7 @@
 #include "L4_mechanics/Homing.h"
 #include "L4_mechanics/SetZero.h"
 #include "L5_programs/characterization/Characterization.h"
+#include "L5_programs/synthesis/Synthesis.h"
 #include "L6_telemetry_safety/OpState.h"
 #include "L6_telemetry_safety/Telemetry.h"
 #include "L7_web/Wifi.h"
@@ -89,12 +90,16 @@ static void MovementTask(void*) {
 
         // Stop-Trigger an aktive Stepper weiterreichen
         if (Op::pendingStop) {
+            Synthesis::stop();
             for (uint8_t i = 0; i < 4; i++) {
                 auto* s = Stepper::get(i);
                 if (s && s->isRunning()) s->stopMove();
             }
             Op::pendingStop = false;
         }
+
+        // Bewegungs-Synthese läuft kontinuierlich solange running=true
+        Synthesis::tick();
 
         vTaskDelay(pdMS_TO_TICKS(5));
     }
@@ -114,6 +119,7 @@ void setup() {
     ArduinoOTA.begin();
     WebServer::begin();         // L7
     Telemetry::init();          // L6 — TMC-Poll-Task auf Core 0
+    Synthesis::init();          // L5b — Bewegungs-Synthese-Pipeline
 
     Platform::startMovementTask(MovementTask);
 }

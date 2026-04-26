@@ -6,6 +6,8 @@
 #include "../L1_hal/Hal_Tacho.h"
 #include "../L3_driver/Tmc2209.h"
 #include "../L3_driver/Motion.h"
+#include "../L5_programs/synthesis/RuntimeConfig.h"
+#include "../L5_programs/synthesis/Synthesis.h"
 #include "../L6_telemetry_safety/OpState.h"
 #include "../L6_telemetry_safety/Telemetry.h"
 
@@ -115,7 +117,11 @@ setInterval(()=>{
       if(m.e===true){dot.className='dot on';state.textContent='powered'}
       else if(m.e===false){dot.className='dot off';state.textContent='off'}
       else{dot.className='dot dim';state.textContent=i===3?'open-loop':'—'}
-      pos.textContent=(m.p!=null)?(m.p.toFixed(1)+'°'):'';
+      let posTxt='';
+      if(m.p!=null) posTxt=m.p.toFixed(1)+'°';
+      if(m.pulses!=null) posTxt+=' · '+m.pulses+'p';
+      if(m.hit===true) posTxt+=' · HIT';
+      pos.textContent=posTxt;
     }
     if(s.log) s.log.split('\n').forEach(l=>{if(l.length>1)appendLog(l)});
   }).catch(()=>{})
@@ -235,8 +241,60 @@ void begin() {
             Op::pending.show = m;
             r->send(200, "text/plain", "OK"); return;
         }
+        if (a == "synth") {
+            // Synthese starten (alle 4 Motoren); Stop via /cmd?a=stop
+            Synthesis::start();
+            r->send(200, "text/plain", "OK"); return;
+        }
 
         r->send(501, "text/plain", "unknown action");
+    });
+
+    // /set?param=wert  — Live-Parameter (V1-API kompatibel)
+    server.on("/set", HTTP_GET, [](AsyncWebServerRequest* r) {
+        auto& c = v4::rt;
+        auto getF = [&](const char* k, float& out) {
+            if (r->hasParam(k)) out = r->getParam(k)->value().toFloat();
+        };
+        auto getI = [&](const char* k, int& out) {
+            if (r->hasParam(k)) out = r->getParam(k)->value().toInt();
+        };
+        if (r->hasParam("run")) {
+            int v = r->getParam("run")->value().toInt();
+            if (v) Synthesis::start(); else Synthesis::stop();
+        }
+        getI("type",   c.moveType);
+        getF("speed",  c.speed);
+        getF("angle",  c.angle);
+        getF("rad",    c.radius);
+        getF("range",  c.rangeDeg);
+        getF("frame",  c.framesize);
+        getF("cont",   c.contrast);
+        getF("shape",  c.zShape);
+        getF("edgec",  c.edgeC);
+        getF("mspace", c.mspace);
+        getI("dyn",    c.dynamics);
+        getI("fan",    c.fan);
+        getI("lamp",   c.lamp);
+        r->send(200, "text/plain", "OK");
+    });
+
+    // /config — alle Live-Parameter als JSON
+    server.on("/config", HTTP_GET, [](AsyncWebServerRequest* r) {
+        const auto& c = v4::rt;
+        char buf[400];
+        snprintf(buf, sizeof(buf),
+            "{\"run\":%s,\"type\":%d,\"speed\":%.3f,\"angle\":%.1f,"
+            "\"rad\":%.1f,\"range\":%.1f,\"frame\":%.4f,\"cont\":%.2f,"
+            "\"shape\":%.2f,\"edgec\":%.2f,\"mspace\":%.1f,\"dyn\":%d,"
+            "\"fan\":%d,\"lamp\":%d}",
+            c.running ? "true":"false", c.moveType, c.speed, c.angle,
+            c.radius, c.rangeDeg, c.framesize, c.contrast,
+            c.zShape, c.edgeC, c.mspace, c.dynamics,
+            c.fan, c.lamp);
+        AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        r->send(res);
     });
 
     Telemetry::registerHandlers(server);
