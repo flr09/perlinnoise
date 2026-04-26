@@ -22,10 +22,17 @@ void init() {
     if (xSemaphoreTake(Sync::uartMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
         for (uint8_t i = 0; i < HalPins::MOTOR_COUNT; i++) {
             drivers[i]->begin();
+            // StallGuard-Auswertung explizit deaktivieren — sonst zieht der
+            // TMC-DIAG-Pin den Endstop-Pin auf der FYSETC E4 runter (DIAG ist
+            // hardware-shared mit *-MIN). Z-MIN/GPIO15 sieht das stark.
+            // (Sensorless-Homing-Jumper auf dem Board ist offen, aber die
+            // Schaltung leakt offenbar trotzdem.)
+            drivers[i]->TCOOLTHRS(0);
+            drivers[i]->SGTHRS(0);
         }
         xSemaphoreGive(Sync::uartMutex);
         initOk = true;
-        Logger::addLog("TMC: 4x init OK");
+        Logger::addLog("TMC: 4x init OK + DIAG silenced");
     } else {
         Logger::addLog("TMC: uartMutex timeout in init");
     }

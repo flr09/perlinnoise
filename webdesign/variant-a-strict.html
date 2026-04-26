@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>perlin v4</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --pa:#0e0e0e;--ink:#ededea;--red:#ff5a4a;--blue:#003049;
+  --yel:#fcbf49;--mute:#7a7a78;--line:#ededea;
+}
+html,body{background:var(--pa);color:var(--ink);
+  font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,"Helvetica Neue",Arial,sans-serif;
+  font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding:18px;border-left:1px solid var(--line);border-right:1px solid var(--line);min-height:100vh}
+@media(max-width:780px){.wrap{border:0;padding:14px}}
+
+/* HEADER */
+.hd{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding-bottom:14px;border-bottom:2px solid var(--ink)}
+.hd h1{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:.9}
+.hd h1 b{background:var(--ink);color:var(--pa);padding:0 6px}
+.hd .meta{text-align:right;font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.12em}
+.hd .meta b{display:block;color:var(--ink);font-weight:600;font-size:12px;letter-spacing:.08em}
+
+/* SECTION HEADERS */
+.sec{margin-top:22px}
+.sec>.lbl{display:flex;align-items:center;gap:10px;margin-bottom:10px;
+  font-size:11px;text-transform:uppercase;letter-spacing:.18em;font-weight:700}
+.sec>.lbl .n{display:inline-block;width:22px;height:22px;background:var(--ink);color:var(--pa);
+  text-align:center;line-height:22px;font-size:12px;font-weight:700;letter-spacing:0}
+.sec>.lbl .ln{flex:1;height:1px;background:var(--ink)}
+
+/* NOISE PREVIEW */
+.noise{border:1px solid var(--ink);background:#111;position:relative;aspect-ratio:1/1;overflow:hidden}
+.noise canvas{display:block;width:100%;height:100%}
+.noise .tag{position:absolute;left:0;top:0;background:var(--ink);color:var(--pa);
+  font-size:10px;text-transform:uppercase;letter-spacing:.16em;padding:4px 8px;font-weight:700}
+
+/* STATUS STRIP */
+.strip{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--ink)}
+.strip>div{padding:14px;border-right:1px solid var(--ink)}
+.strip>div:last-child{border-right:0}
+.strip .k{font-size:10px;text-transform:uppercase;letter-spacing:.18em;color:var(--mute);margin-bottom:6px}
+.strip .v{font-size:24px;font-weight:700;line-height:1}
+.strip .v.busy{color:var(--red)}
+
+/* MOTOR CARDS */
+.mg{display:grid;grid-template-columns:1fr;gap:0;border:1px solid var(--ink)}
+@media(min-width:640px){.mg{grid-template-columns:1fr 1fr}}
+.mc{padding:14px;border-bottom:1px solid var(--ink);border-right:1px solid var(--ink)}
+.mc:nth-child(2n){border-right:0}
+.mc:nth-last-child(-n+2){border-bottom:0}
+@media(max-width:639px){
+  .mc{border-right:0}
+  .mc:not(:last-child){border-bottom:1px solid var(--ink)}
+  .mc:last-child{border-bottom:0}
+}
+.mc .top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.dot{width:14px;height:14px;border-radius:50%;background:transparent;border:1.5px solid var(--ink);flex-shrink:0}
+.dot.on{background:var(--red);border-color:var(--red)}
+.dot.off{background:transparent;border-color:var(--ink)}
+.dot.na{background:transparent;border:1.5px dashed var(--mute)}
+.mc .name{font-size:18px;font-weight:800;letter-spacing:.04em}
+.mc .st{margin-left:auto;font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:var(--mute)}
+.mc .st.on{color:var(--red)}
+.mc .nums{display:flex;gap:18px;margin-bottom:14px;padding:8px 0;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink)}
+.mc .nums .nm{flex:1}
+.mc .nums .k{font-size:9px;text-transform:uppercase;letter-spacing:.16em;color:var(--mute)}
+.mc .nums .vv{font-size:16px;font-weight:600;margin-top:2px}
+.mc .btns{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--ink)}
+.mc .btns.three{grid-template-columns:1fr 1fr 1fr}
+.mc .btns.four{grid-template-columns:1fr 1fr;grid-auto-rows:1fr}
+.btn{appearance:none;background:var(--pa);color:var(--ink);border:0;border-right:1px solid var(--ink);border-bottom:1px solid var(--ink);
+  padding:0 8px;height:44px;font:inherit;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;cursor:pointer;
+  font-variant-numeric:tabular-nums}
+.btn:last-child{border-right:0}
+.btn:active{background:var(--ink);color:var(--pa)}
+.btn[disabled]{color:var(--mute);cursor:not-allowed}
+.btn.pri{background:var(--ink);color:var(--pa)}
+.btns .btn:nth-last-child(-n+2){border-bottom:0}
+.btns.three .btn:nth-last-child(-n+3){border-bottom:0}
+
+/* PERF placeholder */
+.perf{border:1px solid var(--ink);padding:14px}
+.perf .soon{display:inline-block;background:var(--ink);color:var(--pa);padding:3px 8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;margin-bottom:8px}
+.perf h3{font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px}
+.perf p{font-size:12px;color:var(--mute);max-width:46ch}
+
+/* LOG */
+.log{border:1px solid var(--ink);max-height:220px;overflow:auto;background:#1a1a1a}
+.log .row{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:6px 10px;border-bottom:1px solid #2a2a2a;font-size:12px;align-items:baseline}
+.log .row:last-child{border-bottom:0}
+.log .ts{background:var(--ink);color:var(--pa);padding:1px 6px;font-size:10px;font-weight:700;letter-spacing:.06em;font-variant-numeric:tabular-nums}
+.log .msg{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--ink);word-break:break-word}
+
+/* FOOTER */
+.ft{margin-top:24px;padding-top:14px;border-top:2px solid var(--ink);display:flex;justify-content:space-between;font-size:10px;text-transform:uppercase;letter-spacing:.18em;color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hd">
+    <h1>perlin <b>v4</b></h1>
+    <div class="meta">
+      <b id="fw">4.0.0-phase1</b>
+      <span id="ip">192.168.193.22</span>
+    </div>
+  </header>
+
+  <section class="sec">
+    <div class="lbl"><span class="n">1</span><span>Noise Field</span><span class="ln"></span></div>
+    <div class="noise"><span class="tag">Live · Simplex 2D</span><canvas id="noiseCanvas" width="640" height="640"></canvas></div>
+  </section>
+
+  <section class="sec">
+    <div class="lbl"><span class="n">2</span><span>Status</span><span class="ln"></span></div>
+    <div class="strip">
+      <div><div class="k">Op</div><div class="v" id="op">idle</div></div>
+      <div><div class="k">Uptime</div><div class="v" id="up">0s</div></div>
+      <div><div class="k">RPM</div><div class="v" id="rpm">—</div></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="lbl"><span class="n">3</span><span>Motors</span><span class="ln"></span></div>
+    <div class="mg" id="mg"></div>
+  </section>
+
+  <section class="sec">
+    <div class="lbl"><span class="n">4</span><span>Performance</span><span class="ln"></span></div>
+    <div class="perf">
+      <span class="soon">Phase 4</span>
+      <h3>Movement Synthesis</h3>
+      <p>Pattern, speed, range, contrast and drive dynamics will appear here once Phase 4 lands.</p>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="lbl"><span class="n">5</span><span>Log</span><span class="ln"></span></div>
+    <div class="log" id="log"></div>
+  </section>
+
+  <footer class="ft">
+    <span>perlin v4 · phase 1</span>
+    <span>esp32 · web ui</span>
+  </footer>
+</div>
+
+<script>
+var PHASE=1;
+var MNAMES=['M·X','M·Y','M·Z','M·E'];
+var HAS_SENSOR=[1,1,1,0];
+
+function cmd(a,m){
+  var u='/cmd?a='+a+(m!=null?'&m='+m:'');
+  fetch(u).catch(function(){});
+}
+
+function dotCls(e){return e===true?'on':e===false?'off':'na'}
+function stTxt(e){return e===true?'powered':e===false?'off':'—'}
+
+function renderMotors(M){
+  var g=document.getElementById('mg'),h='';
+  for(var i=0;i<4;i++){
+    var m=M[i]||{},e=m.e,p=m.p,s=m.s;
+    var pos=(p==null?'—':(p.toFixed(1)+'°'));
+    var spd=(s==null?'—':s);
+    var btns=[];
+    btns.push({a:'pwr',l:'Power',cls:e===true?'pri':''});
+    btns.push({a:'setzero',l:'Zero'});
+    if(PHASE>=2 && HAS_SENSOR[i]){btns.push({a:'cal',l:'Calib'});btns.push({a:'home',l:'Home'})}
+    if(PHASE>=3){btns.push({a:'test',l:'Test'})}
+    if(PHASE>=4){btns.push({a:'synth',l:'Synth'})}
+    var bcls=btns.length===2?'':btns.length===3?'three':'four';
+    var bh='';for(var j=0;j<btns.length;j++){var b=btns[j];bh+='<button class="btn '+(b.cls||'')+'" data-a="'+b.a+'" data-m="'+i+'">'+b.l+'</button>'}
+    h+='<div class="mc"><div class="top"><span class="dot '+dotCls(e)+'"></span><span class="name">'+MNAMES[i]+'</span><span class="st '+(e===true?'on':'')+'">'+stTxt(e)+'</span></div>'
+      +'<div class="nums"><div class="nm"><div class="k">Pos</div><div class="vv">'+pos+'</div></div><div class="nm"><div class="k">Speed</div><div class="vv">'+spd+'</div></div></div>'
+      +'<div class="btns '+bcls+'">'+bh+'</div></div>';
+  }
+  g.innerHTML=h;
+  g.querySelectorAll('.btn').forEach(function(b){b.addEventListener('click',function(){cmd(b.dataset.a,b.dataset.m)})});
+}
+
+function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)return m+'m '+r+'s';var h=Math.floor(m/60);return h+'h '+(m%60)+'m'}
+
+function appendLog(chunk){
+  if(!chunk)return;
+  var box=document.getElementById('log');
+  var lines=chunk.split('\n');
+  for(var i=0;i<lines.length;i++){
+    var t=lines[i];if(!t)continue;
+    var d=new Date(),ts=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
+    var row=document.createElement('div');row.className='row';
+    row.innerHTML='<span class="ts">'+ts+'</span><span class="msg"></span>';
+    row.lastChild.textContent=t;
+    box.appendChild(row);
+  }
+  while(box.children.length>80)box.removeChild(box.firstChild);
+  box.scrollTop=box.scrollHeight;
+}
+
+function apply(d){
+  document.getElementById('fw').textContent=d.fw||'';
+  document.getElementById('ip').textContent=d.ip||'';
+  document.getElementById('op').textContent=d.op||'—';
+  document.getElementById('op').className='v'+(d.op&&d.op!=='idle'?' busy':'');
+  document.getElementById('up').textContent=fmtUp(d.uptime_s||0);
+  document.getElementById('rpm').textContent=d.rpm==null?'—':d.rpm;
+  renderMotors(d.m||[]);
+  if(d.log)appendLog(d.log);
+}
+
+/* SIMPLEX NOISE FIELD --------------------------------------------------- */
+(function(){
+  var c=document.getElementById('noiseCanvas');if(!c)return;
+  var ctx=c.getContext('2d');
+  var W=160,H=160;c.width=W;c.height=H;
+  var p=new Uint8Array(256);for(var i=0;i<256;i++)p[i]=Math.floor(Math.random()*256);
+  var perm=new Uint8Array(512),pm12=new Uint8Array(512);
+  for(i=0;i<512;i++){perm[i]=p[i&255];pm12[i]=perm[i]%12}
+  var F2=.5*(Math.sqrt(3)-1),G2=(3-Math.sqrt(3))/6;
+  function grad(h,x,y){var hh=h%6,u=hh<4?x:y,v=hh<4?y:x;return((hh&1)===0?u:-u)+((hh&2)===0?v:-v)}
+  function noise(x,y){
+    var s=(x+y)*F2,i=Math.floor(x+s),j=Math.floor(y+s);
+    var t=(i+j)*G2,X0=i-t,Y0=j-t,x0=x-X0,y0=y-Y0;
+    var i1,j1;if(x0>y0){i1=1;j1=0}else{i1=0;j1=1}
+    var x1=x0-i1+G2,y1=y0-j1+G2,x2=x0-1+2*G2,y2=y0-1+2*G2;
+    var ii=i&255,jj=j&255,n0=0,n1=0,n2=0;
+    var t0=.5-x0*x0-y0*y0;if(t0>=0){t0*=t0;n0=t0*t0*grad(pm12[ii+perm[jj]],x0,y0)}
+    var t1a=.5-x1*x1-y1*y1;if(t1a>=0){t1a*=t1a;n1=t1a*t1a*grad(pm12[ii+i1+perm[jj+j1]],x1,y1)}
+    var t2a=.5-x2*x2-y2*y2;if(t2a>=0){t2a*=t2a;n2=t2a*t2a*grad(pm12[ii+1+perm[jj+1]],x2,y2)}
+    return 70*(n0+n1+n2);
+  }
+  var off=0,scale=.04;
+  function draw(){
+    var img=ctx.createImageData(W,H),d=img.data;
+    for(var y=0;y<H;y++)for(var x=0;x<W;x++){
+      var n=noise((x+off)*scale,y*scale);
+      var g=Math.max(0,Math.min(255,Math.floor((n+1)/2*255)));
+      var k=(y*W+x)*4;d[k]=d[k+1]=d[k+2]=g;d[k+3]=255;
+    }
+    ctx.putImageData(img,0,0);
+    off+=.6;requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+/* POLLING --------------------------------------------------------------- */
+function poll(){
+  fetch('/status').then(function(r){return r.json()}).then(apply).catch(function(){});
+}
+if(window.parent!==window){
+  var BOOT=Date.now();
+  var MOCK={fw:'4.0.0-phase1',ip:'192.168.193.22',op:'idle',rpm:null,
+    m:[{e:false,p:0,s:0},{e:null,p:null,s:null},{e:false,p:0,s:0},{e:null,p:null,s:null}],
+    log:'Boot ok\nWiFi STA connected\nWeb UI ready\nIdle\n'};
+  apply(Object.assign({},MOCK,{uptime_s:0}));
+  setInterval(function(){apply(Object.assign({},MOCK,{uptime_s:Math.floor((Date.now()-BOOT)/1000),log:''}))},1000);
+}else{setInterval(poll,500);poll();}
+</script>
+</body>
+</html>

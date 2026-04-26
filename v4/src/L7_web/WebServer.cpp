@@ -763,6 +763,30 @@ void begin() {
 
     Telemetry::registerHandlers(server);
 
+    // /sensor — Diagnose: liest alle Tacho-Pins direkt, optional Pull-Mode-Wechsel.
+    // Aufruf: /sensor                  → reine Lesung
+    //         /sensor?pin=15&mode=up   → pinMode(15, INPUT_PULLUP)
+    //         /sensor?pin=15&mode=down → pinMode(15, INPUT_PULLDOWN)
+    //         /sensor?pin=15&mode=none → pinMode(15, INPUT)
+    server.on("/sensor", HTTP_GET, [](AsyncWebServerRequest* r) {
+        if (r->hasParam("pin") && r->hasParam("mode")) {
+            int pin = r->getParam("pin")->value().toInt();
+            String m = r->getParam("mode")->value();
+            if (m == "up")        pinMode(pin, INPUT_PULLUP);
+            else if (m == "down") pinMode(pin, INPUT_PULLDOWN);
+            else if (m == "none") pinMode(pin, INPUT);
+        }
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "{\"x_min_34\":%d,\"y_min_35\":%d,\"z_min_15\":%d,\"e_step_16\":%d,\"e_dir_17\":%d,\"now_ms\":%lu}",
+            digitalRead(34), digitalRead(35), digitalRead(15),
+            digitalRead(16), digitalRead(17),
+            (unsigned long)millis());
+        AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        r->send(res);
+    });
+
     server.on("/watchdog", HTTP_GET, [](AsyncWebServerRequest* r) {
         char buf[512];
         int n = 0;
