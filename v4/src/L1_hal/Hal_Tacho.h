@@ -25,7 +25,8 @@ struct TachoState {
 
 extern TachoState tacho[4];
 
-void init();   // attachInterrupt für jeden vorhandenen Tacho-Pin (X/Y/Z)
+void init();        // pinMode + attachInterrupt für jeden vorhandenen Tacho-Pin
+void reattach();    // detach + reattach (z.B. nach FAS-Init falls der Handler überschrieben wurde)
 uint16_t getRpm(uint8_t motorIdx);
 uint32_t getPulseCount(uint8_t motorIdx);
 

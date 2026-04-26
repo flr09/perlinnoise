@@ -27,6 +27,8 @@
 #include "L5_programs/synthesis/Synthesis.h"
 #include "L6_telemetry_safety/OpState.h"
 #include "L6_telemetry_safety/Telemetry.h"
+#include "L6_telemetry_safety/Watchdog.h"
+#include "L6_telemetry_safety/MotorProfile.h"
 #include "L7_web/Wifi.h"
 #include "L7_web/WebServer.h"
 
@@ -68,6 +70,7 @@ static void MovementTask(void*) {
                 int m = Op::pending.test; Op::pending.test = -1;
                 Op::state = v4::OpState::TESTING;
                 Telemetry::resetBuffer();
+                Watchdog::enable(m, true);
                 switch (Op::pending.testProg) {
                     case 0: Characterization::runSpeedTest(m);   break;
                     case 1: Characterization::runInertiaTest(m); break;
@@ -77,6 +80,7 @@ static void MovementTask(void*) {
                     case 5: Characterization::runCurrentSweepHiRPM(m); break;
                     default: Characterization::runSpeedTest(m);  break;
                 }
+                Watchdog::enable(m, false);
                 Op::state = v4::OpState::IDLE;
             }
             else if (Op::pending.show >= 0) {
@@ -113,12 +117,16 @@ void setup() {
     Tmc::init();                // L3 — UART + ENABLE
     Stepper::init();            // L3 — FAS-Engine (4 Stepper)
     HalPcnt::initInputBuffers();// L1 — F15-Fix NACH FAS-Init
+    HalTacho::reattach();       // L1 — Tacho-ISR nochmal NACH FAS, falls FAS Interrupts überschrieb
 
     Wifi::connectOrAP();        // L7
     ArduinoOTA.setHostname("perlin-v4");
     ArduinoOTA.begin();
     WebServer::begin();         // L7
     Telemetry::init();          // L6 — TMC-Poll-Task auf Core 0
+    MotorProfileNs::loadAll();  // L6 — Profile aus NVS laden
+    Watchdog::init();           // L6 — State zurücksetzen
+    Watchdog::startTask();      // L6 — 50 Hz Watchdog-Task auf Core 0
     Synthesis::init();          // L5b — Bewegungs-Synthese-Pipeline
 
     Platform::startMovementTask(MovementTask);

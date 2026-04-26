@@ -1,52 +1,56 @@
 #include "Hal_Tacho.h"
 #include "Hal_Pins.h"
 #include "../L0_platform/Sync.h"
+#include "../L0_platform/Logger.h"
 
 namespace HalTacho {
 
 TachoState tacho[4];
 
-// Pro-Motor-ISR: muss IRAM-resident sein. ESP32 attachInterrupt erlaubt nur
-// freie Funktionen ohne Argumente — wir machen daher 4 dünne Wrapper.
-//
-// Stepper-Position wird hier NICHT direkt gelesen (würde in Phase 3 ergänzt,
-// wenn Stepper-Modul verfügbar ist). Latch-Pos kommt vom Caller via setLatchPos.
+// FALLING-Trigger: ISR feuert nur bei HIGH→LOW. Spart das digitalRead in der ISR
+// und vermeidet das Risiko dass die ISR auf der falschen Flanke kommt und
+// digitalRead bereits umgeschaltet hat.
 
 template<uint8_t I>
 static void IRAM_ATTR tachoIsr() {
-    if (digitalRead(HalPins::MOTORS[I].tachoPin) == LOW) {
-        tacho[I].pulseCount++;
-        unsigned long now = millis();
-        if (tacho[I].lastLowMs > 0) {
-            unsigned long p = now - tacho[I].lastLowMs;
-            if (p >= NOISE_FILTER_MS) tacho[I].periodMs = p;
-        }
-        tacho[I].lastLowMs = now;
-        if (!tacho[I].latch) {
-            tacho[I].latch = true;
-            // latchPos wird vom Caller (L4) nach dem Latch-Erkennen gesetzt,
-            // nicht in der ISR — Stepper-Position kann im ISR-Kontext nicht
-            // sicher gelesen werden.
-        }
+    tacho[I].pulseCount++;
+    unsigned long now = millis();
+    if (tacho[I].lastLowMs > 0) {
+        unsigned long p = now - tacho[I].lastLowMs;
+        if (p >= NOISE_FILTER_MS) tacho[I].periodMs = p;
     }
+    tacho[I].lastLowMs = now;
+    tacho[I].latch = true;
 }
 
-void init() {
+// Wird aus main_v4.cpp NACH allen anderen Inits aufgerufen (extra Pull-up-Setup,
+// falls FAS oder PCNT den Pin durch Spätinitialisierung umkonfiguriert hat).
+void reattach() {
     for (uint8_t i = 0; i < HalPins::MOTOR_COUNT; i++) {
         if (!HalPins::hasSensor(i)) continue;
         uint8_t pin = HalPins::MOTORS[i].tachoPin;
+        detachInterrupt(digitalPinToInterrupt(pin));
         if (HalPins::MOTORS[i].tachoNeedsExtPullup) {
             pinMode(pin, INPUT);
         } else {
             pinMode(pin, INPUT_PULLUP);
         }
-        switch (i) {
-            case 0: attachInterrupt(digitalPinToInterrupt(pin), tachoIsr<0>, CHANGE); break;
-            case 1: attachInterrupt(digitalPinToInterrupt(pin), tachoIsr<1>, CHANGE); break;
-            case 2: attachInterrupt(digitalPinToInterrupt(pin), tachoIsr<2>, CHANGE); break;
-            // i==3 (E) hat keinen Tacho — wird durch hasSensor()-Check übersprungen
+        int n = digitalPinToInterrupt(pin);
+        if (n < 0) {
+            Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " kein Interrupt!");
+            continue;
         }
+        switch (i) {
+            case 0: attachInterrupt(n, tachoIsr<0>, FALLING); break;
+            case 1: attachInterrupt(n, tachoIsr<1>, FALLING); break;
+            case 2: attachInterrupt(n, tachoIsr<2>, FALLING); break;
+        }
+        Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " ISR=FALLING ok");
     }
+}
+
+void init() {
+    reattach();
 }
 
 uint16_t getRpm(uint8_t motorIdx) {
