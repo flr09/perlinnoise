@@ -36,8 +36,11 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 html,body{background:var(--pa);color:var(--ink);
   font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,"Helvetica Neue",Arial,sans-serif;
   font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
-.wrap{max-width:760px;margin:0 auto;padding:18px;border-left:1px solid var(--line);border-right:1px solid var(--line);min-height:100vh}
-@media(max-width:780px){.wrap{border:0;padding:14px}}
+.wrap{max-width:1200px;margin:0 auto;padding:18px;border-left:1px solid var(--line);border-right:1px solid var(--line);min-height:100vh}
+@media(max-width:1220px){.wrap{border:0}}
+@media(max-width:780px){.wrap{padding:14px}}
+.cols{display:grid;grid-template-columns:1fr;gap:22px}
+@media(min-width:920px){.cols{grid-template-columns:1fr 1fr;gap:28px}}
 .hd{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding-bottom:14px;border-bottom:2px solid var(--ink)}
 .hd h1{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:.9}
 .hd h1 b{background:var(--ink);color:var(--pa);padding:0 6px}
@@ -111,6 +114,21 @@ html,body{background:var(--pa);color:var(--ink);
 .log .ts{background:var(--ink);color:var(--pa);padding:1px 6px;font-size:10px;font-weight:700;letter-spacing:.06em;font-variant-numeric:tabular-nums}
 .log .msg{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--ink);word-break:break-word}
 .ft{margin-top:24px;padding-top:14px;border-top:2px solid var(--ink);display:flex;justify-content:space-between;font-size:10px;text-transform:uppercase;letter-spacing:.18em;color:var(--mute)}
+/* Live noise canvas */
+.noise{border:1px solid var(--ink);background:#111;position:relative;aspect-ratio:1/1;overflow:hidden}
+.noise canvas{display:block;width:100%;height:100%;image-rendering:pixelated}
+.noise .tag{position:absolute;left:0;top:0;background:var(--ink);color:var(--pa);
+  font-size:10px;text-transform:uppercase;letter-spacing:.16em;padding:4px 8px;font-weight:700}
+/* Angle dials — 4 mini dials for X/Y/Z/E */
+.dials{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--ink);margin-top:12px}
+.dial{padding:10px;border-right:1px solid var(--ink);text-align:center}
+.dial:last-child{border-right:0}
+.dial svg{width:100%;height:auto;max-width:80px;display:block;margin:0 auto}
+.dial .dlabel{font-size:9px;text-transform:uppercase;letter-spacing:.16em;color:var(--mute);margin-top:4px}
+.dial .dval{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+.dial circle{fill:none;stroke:var(--ink);stroke-width:2}
+.dial line{stroke:var(--red);stroke-width:3;stroke-linecap:round;transition:transform .15s linear;transform-origin:50% 50%}
+.dial.off line{stroke:var(--mute)}
 </style>
 </head>
 <body>
@@ -132,14 +150,24 @@ html,body{background:var(--pa);color:var(--ink);
     </div>
   </section>
 
-  <section class="sec">
-    <div class="lbl"><span class="n">2</span><span>Motors</span><span class="ln"></span></div>
-    <div class="mg" id="mg"></div>
-  </section>
+  <div class="cols">
+   <div>
+    <section class="sec">
+      <div class="lbl"><span class="n">2</span><span>Noise field · Motor angles</span><span class="ln"></span></div>
+      <div class="noise"><span class="tag">Live · Simplex 2D</span><canvas id="noiseCanvas"></canvas></div>
+      <div class="dials" id="dials"></div>
+    </section>
 
-  <section class="sec">
-    <div class="lbl"><span class="n">3</span><span>Performance</span><span class="ln"></span></div>
-    <div class="perf">
+    <section class="sec">
+      <div class="lbl"><span class="n">3</span><span>Motors</span><span class="ln"></span></div>
+      <div class="mg" id="mg"></div>
+    </section>
+   </div>
+
+   <div>
+    <section class="sec">
+      <div class="lbl"><span class="n">4</span><span>Performance</span><span class="ln"></span></div>
+      <div class="perf">
       <h3>Movement Synthesis</h3>
       <div class="row"><label>Pattern</label>
         <select id="psType" onchange="setP('type',this.value|0)">
@@ -163,16 +191,18 @@ html,body{background:var(--pa);color:var(--ink);
           <option value="2">Rasant</option>
         </select></div>
       <div class="stopstart"><button onclick="setP('run',0)">Stop</button><button class="run" onclick="setP('run',1)">Start</button></div>
-    </div>
-  </section>
+      </div>
+    </section>
 
-  <section class="sec">
-    <div class="lbl"><span class="n">4</span><span>Log</span><span class="ln"></span></div>
-    <div class="log" id="log"></div>
-  </section>
+    <section class="sec">
+      <div class="lbl"><span class="n">5</span><span>Log</span><span class="ln"></span></div>
+      <div class="log" id="log"></div>
+    </section>
+   </div>
+  </div>
 
   <footer class="ft">
-    <span>perlin v4 · phase 4</span>
+    <span>perlin v4 · phase 6</span>
     <span>esp32 · web ui</span>
   </footer>
 </div>
@@ -186,6 +216,28 @@ function cmd(a,m){fetch('/cmd?a='+a+(m!=null?'&m='+m:'')).catch(function(){})}
 function setP(k,v){fetch('/set?'+k+'='+v).catch(function(){})}
 function dotCls(e){return e===true?'on':e===false?'off':'na'}
 function stTxt(e){return e===true?'powered':e===false?'off':'—'}
+
+/* DIALS --------------------------------------------------------------- */
+function buildDials(){
+  var d=document.getElementById('dials'),h='';
+  for(var i=0;i<4;i++){
+    h+='<div class="dial off" id="di'+i+'"><svg viewBox="0 0 60 60" aria-hidden="true">'
+      +'<circle cx="30" cy="30" r="26"/>'
+      +'<line x1="30" y1="30" x2="30" y2="6" id="dl'+i+'"/>'
+      +'</svg><div class="dlabel">'+MNAMES[i]+'</div><div class="dval" id="dv'+i+'">—</div></div>';
+  }
+  d.innerHTML=h;
+}
+function updateDials(M){
+  for(var i=0;i<4;i++){
+    var m=M[i]||{},p=m.p,e=m.e;
+    var di=document.getElementById('di'+i),dl=document.getElementById('dl'+i),dv=document.getElementById('dv'+i);
+    if(p==null){dv.textContent='—';di.className='dial off';continue}
+    dv.textContent=p.toFixed(0)+'°';
+    di.className='dial'+(e===true?'':' off');
+    dl.style.transform='rotate('+p+'deg)';
+  }
+}
 
 function renderMotors(M){
   var g=document.getElementById('mg'),h='';
@@ -233,9 +285,48 @@ function apply(d){
   document.getElementById('op').className='v'+(d.op&&d.op!=='idle'?' busy':'');
   document.getElementById('up').textContent=fmtUp(d.uptime_s||0);
   document.getElementById('rpm').textContent=d.rpm==null?'—':d.rpm;
-  renderMotors(d.m||[]);
+  var ms=d.m||[];
+  renderMotors(ms);
+  updateDials(ms);
   if(d.log)appendLog(d.log);
 }
+
+/* SIMPLEX NOISE FIELD ANIMATION --------------------------------------- */
+(function(){
+  var c=document.getElementById('noiseCanvas');if(!c)return;
+  var ctx=c.getContext('2d');
+  var W=128,H=128;c.width=W;c.height=H;
+  var p=new Uint8Array(256);for(var i=0;i<256;i++)p[i]=Math.floor(Math.random()*256);
+  var perm=new Uint8Array(512),pm12=new Uint8Array(512);
+  for(i=0;i<512;i++){perm[i]=p[i&255];pm12[i]=perm[i]%12}
+  var F2=.5*(Math.sqrt(3)-1),G2=(3-Math.sqrt(3))/6;
+  function grad(h,x,y){var hh=h%6,u=hh<4?x:y,v=hh<4?y:x;return((hh&1)===0?u:-u)+((hh&2)===0?v:-v)}
+  function noise(x,y){
+    var s=(x+y)*F2,i=Math.floor(x+s),j=Math.floor(y+s);
+    var t=(i+j)*G2,X0=i-t,Y0=j-t,x0=x-X0,y0=y-Y0;
+    var i1,j1;if(x0>y0){i1=1;j1=0}else{i1=0;j1=1}
+    var x1=x0-i1+G2,y1=y0-j1+G2,x2=x0-1+2*G2,y2=y0-1+2*G2;
+    var ii=i&255,jj=j&255,n0=0,n1=0,n2=0;
+    var t0=.5-x0*x0-y0*y0;if(t0>=0){t0*=t0;n0=t0*t0*grad(pm12[ii+perm[jj]],x0,y0)}
+    var t1a=.5-x1*x1-y1*y1;if(t1a>=0){t1a*=t1a;n1=t1a*t1a*grad(pm12[ii+i1+perm[jj+j1]],x1,y1)}
+    var t2a=.5-x2*x2-y2*y2;if(t2a>=0){t2a*=t2a;n2=t2a*t2a*grad(pm12[ii+1+perm[jj+1]],x2,y2)}
+    return 70*(n0+n1+n2);
+  }
+  var off=0;
+  function draw(){
+    var img=ctx.createImageData(W,H),d=img.data;
+    var scale=0.04;
+    for(var y=0;y<H;y++)for(var x=0;x<W;x++){
+      var n=noise((x+off)*scale,y*scale);
+      var g=Math.max(0,Math.min(255,Math.floor((n+1)/2*255)));
+      var k=(y*W+x)*4;d[k]=d[k+1]=d[k+2]=g;d[k+3]=255;
+    }
+    ctx.putImageData(img,0,0);
+    off+=.4;requestAnimationFrame(draw);
+  }
+  draw();
+})();
+buildDials();
 
 function loadConfig(){
   fetch('/config').then(function(r){return r.json()}).then(function(c){
