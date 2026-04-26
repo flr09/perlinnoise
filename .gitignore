@@ -7,4 +7,6 @@ wifi_settings.h
 # Firmware-Bins — werden bei jedem Build neu erzeugt
 v4/bins/*.bin
 v4_iteration1/bins/*.bin
+# Windows NTFS Alternate Data Streams beim Download
+*:Zone.Identifier
 
