@@ -368,8 +368,9 @@ v4/
 
 | # | Frage / Annahme | Status |
 |---|---|---|
-| Q1 | Welche GPIOs für Y/Z/E STEP+DIR auf FYSETC E4? | zu prüfen — Schaltplan-Lookup nötig vor Phase 2 |
-| Q2 | Welcher Endstop-Pin für Y-MIN, Z-MIN? | zu prüfen — wahrscheinlich GPIO 35/34 |
+| Q1 | Welche GPIOs für Y/Z/E STEP+DIR auf FYSETC E4? | **geschlossen 2026-04-26:** Y=33/32, Z=14/12, E=16/17 (offizielles FYSETC-E4-README, Hal_Pins.h aktualisiert) |
+| Q2 | Welcher Endstop-Pin für X-MIN/Y-MIN/Z-MIN? | **geschlossen 2026-04-26:** X-MIN=34, Y-MIN=35, Z-MIN=15. v3-„TACHO_PIN=15" war faktisch der Z-MIN-Pin. E hat keinen MIN-Pin. |
+| Q9 | An welchem Motor-Stecker sitzt aktuell physisch der NEMA14? X (v3-Konvention) oder Z (FYSETC-Konvention, mit Sensor an Z-MIN)? | offen — User klären, entscheidet welche `m`-ID die aktive Test-Achse in Phase 2 ist |
 | Q3 | `Storage_Presets` — Speicher-Format (JSON-String in NVS-Blob, oder strukturiert)? | für Phase 6 entscheiden |
 | Q4 | `Ui_Performance` — komplette V1-edit.html portieren oder neu? | offen |
 | Q5 | LittleFS für HTML auslagern? | nice-to-have, nicht v4.0-Ziel |
