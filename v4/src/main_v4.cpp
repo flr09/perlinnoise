@@ -23,7 +23,9 @@
 #include "L4_mechanics/Calibration.h"
 #include "L4_mechanics/Homing.h"
 #include "L4_mechanics/SetZero.h"
+#include "L5_programs/characterization/Characterization.h"
 #include "L6_telemetry_safety/OpState.h"
+#include "L6_telemetry_safety/Telemetry.h"
 #include "L7_web/Wifi.h"
 #include "L7_web/WebServer.h"
 
@@ -55,6 +57,34 @@ static void MovementTask(void*) {
                 Calibration::run(m);
                 Op::state = v4::OpState::IDLE;
             }
+            else if (Op::pending.learn >= 0) {
+                int m = Op::pending.learn; Op::pending.learn = -1;
+                Op::state = v4::OpState::LEARNING;
+                Characterization::runSgLearn(m);
+                Op::state = v4::OpState::IDLE;
+            }
+            else if (Op::pending.test >= 0) {
+                int m = Op::pending.test; Op::pending.test = -1;
+                Op::state = v4::OpState::TESTING;
+                Telemetry::resetBuffer();
+                switch (Op::pending.testProg) {
+                    case 0: Characterization::runSpeedTest(m);   break;
+                    case 1: Characterization::runInertiaTest(m); break;
+                    case 2: Characterization::runCoastTest(m);   break;
+                    case 3: Characterization::runKatapult(m);    break;
+                    case 4: Characterization::runFreqSweep(m);   break;
+                    case 5: Characterization::runCurrentSweepHiRPM(m); break;
+                    default: Characterization::runSpeedTest(m);  break;
+                }
+                Op::state = v4::OpState::IDLE;
+            }
+            else if (Op::pending.show >= 0) {
+                int m = Op::pending.show; Op::pending.show = -1;
+                Op::state = v4::OpState::SHOWING;
+                Telemetry::resetBuffer();
+                Characterization::runPerformanceShow(m);
+                Op::state = v4::OpState::IDLE;
+            }
         }
 
         // Stop-Trigger an aktive Stepper weiterreichen
@@ -73,16 +103,17 @@ static void MovementTask(void*) {
 void setup() {
     Platform::init();           // L0
     Storage::init();            // L2
+    HalTacho::init();           // L1 — Tacho-ISR ZUERST (v3-Erkenntnis: FAS überschreibt sonst Interrupt-Handler)
     HalPcnt::init();            // L1 — PCNT VOR FAS!
     Tmc::init();                // L3 — UART + ENABLE
     Stepper::init();            // L3 — FAS-Engine (4 Stepper)
     HalPcnt::initInputBuffers();// L1 — F15-Fix NACH FAS-Init
-    HalTacho::init();           // L1 — ISR für X/Y/Z
 
     Wifi::connectOrAP();        // L7
     ArduinoOTA.setHostname("perlin-v4");
     ArduinoOTA.begin();
     WebServer::begin();         // L7
+    Telemetry::init();          // L6 — TMC-Poll-Task auf Core 0
 
     Platform::startMovementTask(MovementTask);
 }

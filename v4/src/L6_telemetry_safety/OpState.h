@@ -27,6 +27,8 @@ struct PendingFlags {
     volatile int setzero = -1;
     volatile int power   = -1;     // 0..3 Motor; eigentlicher Zielzustand: powerOn[idx]
     volatile bool powerOn[4] = { false, false, false, false };
+    // Für test: welches Programm. 0=speed, 1=inertia, 2=coast, 3=katapult, 4=freq, 5=currentsweep, 6=perfshow
+    volatile int testProg = 0;
 };
 
 extern PendingFlags pending;

@@ -7,6 +7,7 @@
 #include "../L3_driver/Tmc2209.h"
 #include "../L3_driver/Motion.h"
 #include "../L6_telemetry_safety/OpState.h"
+#include "../L6_telemetry_safety/Telemetry.h"
 
 namespace WebServer {
 
@@ -123,7 +124,7 @@ setInterval(()=>{
 
 static String motorJson(uint8_t i) {
     String j;
-    j.reserve(48);
+    j.reserve(72);
     if (Tmc::ready()) {
         bool e = Tmc::isPowered(i);
         float p = Motion::getPositionDeg(i);
@@ -131,9 +132,19 @@ static String motorJson(uint8_t i) {
         j += e ? "true" : "false";
         j += ",\"p\":";
         j += String(p, 2);
+        if (HalPins::hasSensor(i)) {
+            // NPN NO: LOW = Metall erkannt = LED an
+            bool hit = digitalRead(HalPins::MOTORS[i].tachoPin) == LOW;
+            j += ",\"hit\":";
+            j += hit ? "true" : "false";
+            j += ",\"pulses\":";
+            j += String(HalTacho::getPulseCount(i));
+        } else {
+            j += ",\"hit\":null";
+        }
         j += "}";
     } else {
-        j += "{\"e\":null,\"p\":null}";
+        j += "{\"e\":null,\"p\":null,\"hit\":null}";
     }
     return j;
 }
@@ -210,9 +221,25 @@ void begin() {
             if (!HalPins::hasSensor(m)) { r->send(400, "text/plain", "no sensor"); return; }
             Op::requestCalib(m); r->send(200, "text/plain", "OK"); return;
         }
+        if (a == "learn") {
+            Op::pending.learn = m;
+            r->send(200, "text/plain", "OK"); return;
+        }
+        if (a == "test") {
+            int prog = r->hasParam("prog") ? r->getParam("prog")->value().toInt() : 0;
+            Op::pending.testProg = prog;
+            Op::pending.test = m;
+            r->send(200, "text/plain", "OK"); return;
+        }
+        if (a == "show") {
+            Op::pending.show = m;
+            r->send(200, "text/plain", "OK"); return;
+        }
 
         r->send(501, "text/plain", "unknown action");
     });
+
+    Telemetry::registerHandlers(server);
 
     server.begin();
     Logger::addLog("HTTP: server up on port 80");

@@ -13,7 +13,7 @@ namespace Platform {
 
 using MovementTaskFn = void (*)(void*);
 
-constexpr const char* FW_VERSION = "4.0.0-phase2";
+constexpr const char* FW_VERSION = "4.0.0-phase3";
 
 void init();
 void startMovementTask(MovementTaskFn fn, const char* name = "MovementTask",

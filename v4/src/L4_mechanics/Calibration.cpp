@@ -24,13 +24,13 @@ void run(uint8_t motorIdx) {
     uint8_t pin = HalPins::MOTORS[motorIdx].tachoPin;
     Tmc::setPower(motorIdx, true);
     Stepper::setMicrosteps(motorIdx, 16);
-    Logger::addLog(String("CAL M") + (char)('X' + motorIdx) + ": v4 calib final");
-    s->setAcceleration(2000);
+    Logger::addLog(String("CAL M") + (char)('X' + motorIdx) + ": v4 calib (fast)");
+    s->setAcceleration(5000);
 
     // Vorbereitung: Sensor verlassen (falls aktiv)
     while (digitalRead(pin) == LOW) {
         if (Op::pendingStop) return;
-        s->setSpeedInHz(400);
+        s->setSpeedInHz(1000);
         s->runBackward();
         unsigned long t0 = millis();
         bool exited = false;
@@ -47,7 +47,7 @@ void run(uint8_t motorIdx) {
 
     // Phase 1: Grob CW Suche Eintritt
     Logger::addLog("CAL: P1 Grob CW...");
-    s->setSpeedInHz(1000);
+    s->setSpeedInHz(2000);
     s->runForward();
     long startPos = s->getCurrentPosition();
     long maxDelta = (long)Stepper::stepsPerRev(motorIdx) * 2;
@@ -64,34 +64,39 @@ void run(uint8_t motorIdx) {
     if (!found) { Logger::addLog("ERR: P1 Eintritt"); return; }
     if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) return;
 
-    // Phase 2: Austritt finden
+    // Phase 2: Austritt finden — bis zu 2 volle Umdrehungen, damit auch breite Zungen passen
     Logger::addLog("CAL: P2 Austritt...");
-    s->setSpeedInHz(500);
+    s->setSpeedInHz(1000);
     s->runForward();
     startPos = s->getCurrentPosition();
-    long maxDelta2 = (long)((float)Stepper::stepsPerRev(motorIdx) * 0.5f);
+    long maxDelta2 = (long)Stepper::stepsPerRev(motorIdx) * 2;
     t0 = millis();
     bool exited = false;
     while (true) {
         if (HalSensor::checkStable(pin, HIGH, 5)) { exited = true; break; }
         if (Op::pendingStop) break;
-        if (millis() - t0 > 10000) break;
+        if (millis() - t0 > 15000) break;
         if (labs(s->getCurrentPosition() - startPos) > maxDelta2) break;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     s->stopMove();
-    if (!exited) { Logger::addLog("ERR: P2 Austritt"); return; }
+    long delta = labs(s->getCurrentPosition() - startPos);
+    if (!exited) {
+        Logger::addLog(String("ERR: P2 Austritt nach ") + delta + " steps (= " +
+                       String((float)delta * 360.0f / Stepper::stepsPerRev(motorIdx), 0) + "°)");
+        return;
+    }
     if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) return;
     delay(200);
 
     // Phase 3: rechte Kante A2 (3-Touch CCW)
     Logger::addLog("CAL: P3 rechte Kante (3-Touch)...");
-    long a2 = EdgeTouch::touch(motorIdx, LOW, -1, 100, 3);
+    long a2 = EdgeTouch::touch(motorIdx, LOW, -1, 400, 3);
     if (a2 < 0) { Logger::addLog("ERR: P3 Touch"); return; }
 
     // Phase 4: linke Kante A1 (3-Touch CW)
     Logger::addLog("CAL: P4 linke Kante (3-Touch)...");
-    s->setSpeedInHz(500);
+    s->setSpeedInHz(1000);
     s->runBackward();
     long startPos4 = s->getCurrentPosition();
     long maxDelta4 = (long)Stepper::stepsPerRev(motorIdx);
@@ -109,7 +114,7 @@ void run(uint8_t motorIdx) {
     if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) return;
     delay(200);
 
-    long a1 = EdgeTouch::touch(motorIdx, LOW, 1, 100, 3);
+    long a1 = EdgeTouch::touch(motorIdx, LOW, 1, 400, 3);
     if (a1 < 0) { Logger::addLog("ERR: P4 Touch"); return; }
 
     // Berechnung & Speicherung
@@ -123,7 +128,7 @@ void run(uint8_t motorIdx) {
 
     // Auf Mitte fahren und Nullpunkt setzen
     Logger::addLog("CAL: Mitte → 0°");
-    s->setSpeedInHz(400);
+    s->setSpeedInHz(1500);
     s->moveTo(center);
     if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 10000)) return;
     Motion::setPositionDeg(motorIdx, 0.0f);

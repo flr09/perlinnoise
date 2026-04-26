@@ -16,13 +16,13 @@ long touch(uint8_t motorIdx, int targetSensorState, int dir,
 
     long sum = 0;
     for (int n = 0; n < samples; n++) {
-        // Stück wegfahren — vom Sensor weg, in Gegenrichtung
-        s->setSpeedInHz(400);
-        long backOff = (long)((float)Stepper::stepsPerRev(motorIdx) * 0.1f);
+        // Stück wegfahren — vom Sensor weg, in Gegenrichtung. Schnell und kurz.
+        s->setSpeedInHz(1500);
+        long backOff = (long)((float)Stepper::stepsPerRev(motorIdx) * 0.05f);
         if (dir > 0) s->move(-backOff);
         else         s->move(backOff);
-        if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 5000)) return -1;
-        delay(100);
+        if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 3000)) return -1;
+        delay(50);
 
         // Kante anfahren
         s->setSpeedInHz(speedSps);
@@ -36,7 +36,7 @@ long touch(uint8_t motorIdx, int targetSensorState, int dir,
         while (true) {
             if (HalSensor::checkStable(sensorPin, targetSensorState, 5)) { hit = true; break; }
             if (Op::pendingStop) break;
-            if (millis() - start > 5000) break;
+            if (millis() - start > 3000) break;
             if (labs(s->getCurrentPosition() - startPos) > maxDelta) break;
             vTaskDelay(pdMS_TO_TICKS(1));
         }
@@ -49,7 +49,7 @@ long touch(uint8_t motorIdx, int targetSensorState, int dir,
         sum += pos;
         s->stopMove();
         if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) return -1;
-        delay(100);
+        delay(50);
     }
     return sum / samples;
 }
