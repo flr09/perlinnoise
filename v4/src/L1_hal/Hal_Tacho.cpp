@@ -23,30 +23,27 @@ static void IRAM_ATTR tachoIsr() {
     tacho[I].latch = true;
 }
 
-// Wird aus main_v4.cpp NACH allen anderen Inits aufgerufen (extra Pull-up-Setup,
-// falls FAS oder PCNT den Pin durch Spätinitialisierung umkonfiguriert hat).
+// ISR-Versuch verworfen: GPIO 15 (Z-MIN) wirft auf dem FYSETC E4
+// `E (64) gpio: gpio_isr_handler...` Fehler beim attachInterrupt — Strapping-Pin-
+// Eigenheit. Stattdessen pollt Watchdog::tick() den Pin alle 50ms (Software-
+// Edge-Detection). Reicht bis ~600 RPM, ausreichend für Cal/Home (<50 RPM).
+//
+// Falls später Multi-Motor-Sensoren auf GPIO 34/35 dazukommen, dort eventuell
+// die ISR-Variante reaktivieren — diese Pins sind unkritisch.
 void reattach() {
     for (uint8_t i = 0; i < HalPins::MOTOR_COUNT; i++) {
         if (!HalPins::hasSensor(i)) continue;
         uint8_t pin = HalPins::MOTORS[i].tachoPin;
-        detachInterrupt(digitalPinToInterrupt(pin));
         if (HalPins::MOTORS[i].tachoNeedsExtPullup) {
             pinMode(pin, INPUT);
         } else {
             pinMode(pin, INPUT_PULLUP);
         }
-        int n = digitalPinToInterrupt(pin);
-        if (n < 0) {
-            Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " kein Interrupt!");
-            continue;
-        }
-        switch (i) {
-            case 0: attachInterrupt(n, tachoIsr<0>, FALLING); break;
-            case 1: attachInterrupt(n, tachoIsr<1>, FALLING); break;
-            case 2: attachInterrupt(n, tachoIsr<2>, FALLING); break;
-        }
-        Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " ISR=FALLING ok");
+        Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " (poll-mode)");
     }
+    (void)tachoIsr<0>;  // unterdrückt unused-Warning
+    (void)tachoIsr<1>;
+    (void)tachoIsr<2>;
 }
 
 void init() {

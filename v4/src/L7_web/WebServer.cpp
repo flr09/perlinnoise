@@ -35,15 +35,23 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 }
 html,body{background:var(--pa);color:var(--ink);
   font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,"Helvetica Neue",Arial,sans-serif;
-  font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
-.wrap{max-width:1200px;margin:0 auto;padding:18px;border-left:1px solid var(--line);border-right:1px solid var(--line);min-height:100vh}
+  font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;
+  height:100vh;overflow:hidden}
+@supports(height:100dvh){html,body{height:100dvh}}
+.wrap{max-width:1200px;margin:0 auto;padding:14px;border-left:1px solid var(--line);border-right:1px solid var(--line);
+  height:100vh;display:flex;flex-direction:column;overflow:hidden}
+@supports(height:100dvh){.wrap{height:100dvh}}
 @media(max-width:1220px){.wrap{border:0}}
-@media(max-width:780px){.wrap{padding:14px}}
-.cols{display:grid;grid-template-columns:1fr;gap:22px}
-@media(min-width:920px){.cols{grid-template-columns:1fr 1fr;gap:28px}}
-.hd{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding-bottom:14px;border-bottom:2px solid var(--ink)}
-.hd h1{font-size:30px;font-weight:800;letter-spacing:-.02em;line-height:.9}
+.cols{display:grid;grid-template-columns:1fr;gap:14px;flex:1;min-height:0;overflow:hidden}
+@media(min-width:920px){.cols{grid-template-columns:1fr 1fr;gap:18px}}
+.cols>div{display:flex;flex-direction:column;gap:14px;min-height:0;overflow:auto}
+.sec{margin-top:0}
+.hd{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding-bottom:10px;margin-bottom:12px;border-bottom:2px solid var(--ink);flex:0 0 auto}
+.hd h1{font-size:24px;font-weight:800;letter-spacing:-.02em;line-height:.9}
 .hd h1 b{background:var(--ink);color:var(--pa);padding:0 6px}
+.hd .nav{display:flex;align-items:center;gap:14px}
+.hd .nav a{color:var(--ink);text-decoration:none;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;border:1px solid var(--ink);padding:6px 10px}
+.hd .nav a:hover{background:var(--ink);color:var(--pa)}
 .hd .meta{text-align:right;font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.12em}
 .hd .meta b{display:block;color:var(--ink);font-weight:600;font-size:12px;letter-spacing:.08em}
 .sec{margin-top:22px}
@@ -135,9 +143,9 @@ html,body{background:var(--pa);color:var(--ink);
 <div class="wrap">
   <header class="hd">
     <h1>perlin <b>v4</b></h1>
-    <div class="meta">
-      <b id="fw">…</b>
-      <span id="ip">…</span>
+    <div class="nav">
+      <a href="/test">Tests →</a>
+      <div class="meta"><b id="fw">…</b><span id="ip">…</span></div>
     </div>
   </header>
 
@@ -349,6 +357,250 @@ setInterval(poll,500);poll();
 </html>
 )HTML";
 
+// Engineering-Testbench (Subpage /test) — analog v3 "Motor Lab"
+static const char TEST_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>perlin v4 · tests</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--pa:#0e0e0e;--ink:#ededea;--red:#ff5a4a;--yel:#fcbf49;--mute:#7a7a78;--line:#ededea;--blue:#003049;--green:#4caf50}
+html,body{background:var(--pa);color:var(--ink);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,"Helvetica Neue",Arial,sans-serif;font-variant-numeric:tabular-nums;height:100vh;overflow:hidden}
+@supports(height:100dvh){html,body{height:100dvh}}
+.wrap{max-width:1200px;margin:0 auto;padding:14px;border-left:1px solid var(--line);border-right:1px solid var(--line);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+@supports(height:100dvh){.wrap{height:100dvh}}
+@media(max-width:1220px){.wrap{border:0}}
+.hd{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding-bottom:10px;margin-bottom:12px;border-bottom:2px solid var(--ink);flex:0 0 auto}
+.hd h1{font-size:24px;font-weight:800;letter-spacing:-.02em;line-height:.9}
+.hd h1 b{background:var(--yel);color:var(--pa);padding:0 6px}
+.hd .nav{display:flex;align-items:center;gap:14px}
+.hd .nav a{color:var(--ink);text-decoration:none;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;border:1px solid var(--ink);padding:6px 10px}
+.hd .meta{text-align:right;font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.12em}
+.hd .meta b{display:block;color:var(--ink);font-weight:600;font-size:12px;letter-spacing:.08em}
+.strip{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--ink);margin-bottom:12px;flex:0 0 auto}
+.strip>div{padding:10px 12px;border-right:1px solid var(--ink)}
+.strip>div:last-child{border-right:0}
+.strip .k{font-size:9px;text-transform:uppercase;letter-spacing:.16em;color:var(--mute);margin-bottom:4px}
+.strip .v{font-size:18px;font-weight:700;line-height:1}
+.strip .v.busy{color:var(--red)}
+.strip .v.ok{color:var(--green)}
+.cols{display:grid;grid-template-columns:1fr;gap:14px;flex:1;min-height:0;overflow:hidden}
+@media(min-width:920px){.cols{grid-template-columns:1fr 1fr;gap:18px}}
+.cols>div{display:flex;flex-direction:column;gap:12px;min-height:0;overflow:auto}
+.sec{display:flex;flex-direction:column;gap:6px}
+.sec>.lbl{display:flex;align-items:center;gap:10px;font-size:10px;text-transform:uppercase;letter-spacing:.18em;font-weight:700}
+.sec>.lbl .n{display:inline-block;width:20px;height:20px;background:var(--ink);color:var(--pa);text-align:center;line-height:20px;font-size:11px;font-weight:700}
+.sec>.lbl .ln{flex:1;height:1px;background:var(--ink)}
+.mc{border:1px solid var(--ink);padding:10px}
+.mc .top{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.dot{width:12px;height:12px;border-radius:50%;border:1.5px solid var(--ink);flex-shrink:0}
+.dot.on{background:var(--red);border-color:var(--red)}
+.dot.off{background:transparent}
+.dot.na{border-style:dashed;border-color:var(--mute)}
+.dot.hit{background:var(--green);border-color:var(--green);box-shadow:0 0 6px var(--green)}
+.mc .nm{font-size:14px;font-weight:800;letter-spacing:.04em;flex:1}
+.mc .nums{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px;padding:6px 0;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink)}
+.mc .nums .k{font-size:8px;text-transform:uppercase;letter-spacing:.14em;color:var(--mute)}
+.mc .nums .vv{font-size:13px;font-weight:600;margin-top:1px}
+.mc .nums .vv.hit{color:var(--green);font-weight:800}
+.btns{display:grid;gap:0;border:1px solid var(--ink)}
+.btns.g3{grid-template-columns:repeat(3,1fr)}
+.btns.g4{grid-template-columns:repeat(4,1fr)}
+.btn{appearance:none;background:var(--pa);color:var(--ink);border:0;border-right:1px solid var(--ink);border-bottom:1px solid var(--ink);padding:0 6px;height:36px;font:inherit;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;cursor:pointer}
+.btn:last-child{border-right:0}
+.btn:active{background:var(--ink);color:var(--pa)}
+.btn[disabled]{color:var(--mute);cursor:not-allowed}
+.btn.pri{background:var(--ink);color:var(--pa)}
+.btn.go{background:var(--yel);color:var(--pa)}
+.btn.stop{background:var(--red);color:#fff}
+.btns .btn:nth-last-child(-n+3){border-bottom:0}
+.tests{border:1px solid var(--ink);padding:10px;display:flex;flex-direction:column;gap:8px}
+.tests select,.tests input{appearance:none;background:var(--pa);color:var(--ink);border:1px solid var(--ink);padding:6px 8px;font:inherit;font-size:12px;width:100%}
+.tests .row{display:grid;grid-template-columns:1fr 2fr;gap:10px;align-items:center}
+.tests label{font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:var(--mute)}
+.tests .runs{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--ink);margin-top:4px}
+.tests .runs button{height:38px;background:var(--pa);color:var(--ink);border:0;border-right:1px solid var(--ink);font:inherit;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;cursor:pointer}
+.tests .runs button.go{background:var(--yel);color:var(--pa)}
+.tests .runs button:last-child{border-right:0}
+.wd{border:1px solid var(--ink);padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px}
+.wd .k{color:var(--mute);font-size:9px;text-transform:uppercase;letter-spacing:.14em}
+.wd .v{font-weight:700;font-variant-numeric:tabular-nums}
+.wd .v.act{color:var(--green)}
+.wd .v.fault{color:var(--red)}
+.tele{display:flex;gap:8px}
+.tele a{flex:1;text-align:center;text-decoration:none;color:var(--ink);border:1px solid var(--ink);padding:8px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em}
+.tele a:hover{background:var(--ink);color:var(--pa)}
+.estop{flex:0 0 auto}
+.estop button{width:100%;height:46px;background:var(--red);color:#fff;border:0;font:inherit;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.18em;cursor:pointer}
+.log{flex:1;border:1px solid var(--ink);overflow:auto;background:#1a1a1a;min-height:160px}
+.log .row{display:grid;grid-template-columns:auto 1fr;gap:8px;padding:4px 8px;border-bottom:1px solid #2a2a2a;font-size:11px}
+.log .ts{background:var(--ink);color:var(--pa);padding:1px 5px;font-size:9px;font-weight:700}
+.log .msg{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--ink);word-break:break-word}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hd">
+    <h1>perlin <b>tests</b></h1>
+    <div class="nav">
+      <a href="/">← Steuerung</a>
+      <div class="meta"><b id="fw">…</b><span id="ip">…</span></div>
+    </div>
+  </header>
+
+  <div class="strip">
+    <div><div class="k">Op</div><div class="v" id="op">idle</div></div>
+    <div><div class="k">Uptime</div><div class="v" id="up">0s</div></div>
+    <div><div class="k">RPM</div><div class="v" id="rpm">—</div></div>
+    <div><div class="k">Active</div><div class="v" id="act">—</div></div>
+  </div>
+
+  <div class="cols">
+   <div>
+    <section class="sec">
+      <div class="lbl"><span class="n">1</span><span>Motors</span><span class="ln"></span></div>
+      <div id="mlist"></div>
+    </section>
+   </div>
+
+   <div>
+    <section class="sec">
+      <div class="lbl"><span class="n">2</span><span>Engineering Tests</span><span class="ln"></span></div>
+      <div class="tests">
+        <div class="row"><label>Motor</label>
+          <select id="tMotor"><option value="0">M·X</option><option value="1">M·Y</option><option value="2" selected>M·Z</option><option value="3">M·E</option></select></div>
+        <div class="row"><label>Programm</label>
+          <select id="tProg">
+            <option value="0">Speed Test</option>
+            <option value="1">Inertia Test</option>
+            <option value="2">Coast Test</option>
+            <option value="3">Katapult</option>
+            <option value="4">Freq Sweep</option>
+            <option value="5">Current Sweep HiRPM</option>
+          </select></div>
+        <div class="runs"><button onclick="runTest()" class="go">Run</button><button onclick="cmd('show',getMotor())">Performance Show</button></div>
+      </div>
+    </section>
+
+    <section class="sec">
+      <div class="lbl"><span class="n">3</span><span>Watchdog · Profile</span><span class="ln"></span></div>
+      <div class="wd" id="wd"></div>
+    </section>
+
+    <section class="sec">
+      <div class="lbl"><span class="n">4</span><span>Telemetrie</span><span class="ln"></span></div>
+      <div class="tele">
+        <a href="/telemetry" download>CSV download</a>
+        <a href="/config" target="_blank">/config</a>
+        <a href="/watchdog" target="_blank">/watchdog raw</a>
+      </div>
+    </section>
+
+    <div class="estop"><button onclick="cmd('stop',0)">Emergency Stop</button></div>
+
+    <section class="sec" style="flex:1;min-height:0;display:flex;flex-direction:column">
+      <div class="lbl"><span class="n">5</span><span>Log</span><span class="ln"></span></div>
+      <div class="log" id="log"></div>
+    </section>
+   </div>
+  </div>
+</div>
+
+<script>
+var MNAMES=['M·X','M·Y','M·Z','M·E'];
+var HAS_SENSOR=[1,1,1,0];
+
+function cmd(a,m){fetch('/cmd?a='+a+(m!=null?'&m='+m:'')).catch(function(){})}
+function getMotor(){return document.getElementById('tMotor').value|0}
+function runTest(){var m=getMotor(),p=document.getElementById('tProg').value|0;fetch('/cmd?a=test&m='+m+'&prog='+p).catch(function(){})}
+
+function dotCls(e,hit){if(hit===true)return 'hit';return e===true?'on':e===false?'off':'na'}
+function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)return m+'m '+r+'s';var h=Math.floor(m/60);return h+'h '+(m%60)+'m'}
+
+function renderMotors(M){
+  var box=document.getElementById('mlist'),h='';
+  for(var i=0;i<4;i++){
+    var m=M[i]||{},e=m.e,p=m.p,s=m.s,puls=m.pulses,hit=m.hit;
+    var pos=(p==null?'—':p.toFixed(1)+'°');
+    var spd=(s==null?'—':s);
+    var pulsTxt=(puls==null?'—':puls);
+    var hitTxt=(hit===true?'HIT':hit===false?'—':'n/a');
+    var btns=[];
+    btns.push({a:'pwr',l:'Power',cls:e===true?'pri':''});
+    btns.push({a:'setzero',l:'Zero'});
+    if(HAS_SENSOR[i]){btns.push({a:'cal',l:'Calib'});btns.push({a:'home',l:'Home'});btns.push({a:'learn',l:'SG'})}
+    var bcls=btns.length===2?'g2':btns.length===5?'g3':'g3';
+    var bh='';for(var j=0;j<btns.length;j++){var b=btns[j];bh+='<button class="btn '+(b.cls||'')+'" onclick="cmd(\''+b.a+'\','+i+')">'+b.l+'</button>'}
+    h+='<div class="mc"><div class="top"><span class="dot '+dotCls(e,hit)+'"></span><span class="nm">'+MNAMES[i]+'</span></div>'
+      +'<div class="nums">'
+      +'<div><div class="k">Pos</div><div class="vv">'+pos+'</div></div>'
+      +'<div><div class="k">Speed</div><div class="vv">'+spd+'</div></div>'
+      +'<div><div class="k">Pulses</div><div class="vv">'+pulsTxt+'</div></div>'
+      +'<div><div class="k">Sensor</div><div class="vv'+(hit===true?' hit':'')+'">'+hitTxt+'</div></div>'
+      +'</div>'
+      +'<div class="btns '+bcls+'">'+bh+'</div></div>';
+  }
+  box.innerHTML=h;
+}
+
+function renderWd(W){
+  if(!W)return;
+  var box=document.getElementById('wd'),h='';
+  W.motors.forEach(function(w,i){
+    if(!HAS_SENSOR[i])return;
+    h+='<div><span class="k">M·'+'XYZE'[i]+' state</span><div class="v '+(w.trig?'fault':w.act?'act':'')+'">'
+       +(w.trig?'FAULT 0b'+w.fault.toString(2).padStart(3,'0'):w.act?'armed':'idle')+'</div></div>';
+    h+='<div><span class="k">M·'+'XYZE'[i]+' profile</span><div class="v">'+(w.profileValid?(w.profilePts+' pts'):'unlearned')+'</div></div>';
+  });
+  box.innerHTML=h;
+}
+
+function appendLog(chunk){
+  if(!chunk)return;
+  var box=document.getElementById('log');
+  var lines=chunk.split('\n');
+  for(var i=0;i<lines.length;i++){
+    var t=lines[i];if(!t)continue;
+    var d=new Date(),ts=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
+    var row=document.createElement('div');row.className='row';
+    row.innerHTML='<span class="ts">'+ts+'</span><span class="msg"></span>';
+    row.lastChild.textContent=t;
+    box.appendChild(row);
+  }
+  while(box.children.length>200)box.removeChild(box.firstChild);
+  box.scrollTop=box.scrollHeight;
+}
+
+function pollStatus(){
+  fetch('/status').then(function(r){return r.json()}).then(function(d){
+    document.getElementById('fw').textContent=d.fw||'';
+    document.getElementById('ip').textContent=d.ip||'';
+    document.getElementById('op').textContent=d.op||'—';
+    document.getElementById('op').className='v'+(d.op&&d.op!=='idle'?' busy':'');
+    document.getElementById('up').textContent=fmtUp(d.uptime_s||0);
+    document.getElementById('rpm').textContent=d.rpm==null?'—':d.rpm;
+    var ms=d.m||[],actCount=0;
+    ms.forEach(function(m){if(m&&m.e===true)actCount++});
+    document.getElementById('act').textContent=actCount+'/4 powered';
+    document.getElementById('act').className='v'+(actCount?' ok':'');
+    renderMotors(ms);
+    if(d.log)appendLog(d.log);
+  }).catch(function(){})
+}
+
+function pollWd(){
+  fetch('/watchdog').then(function(r){return r.json()}).then(renderWd).catch(function(){})
+}
+
+setInterval(pollStatus,500);pollStatus();
+setInterval(pollWd,1000);pollWd();
+</script>
+</body>
+</html>
+)HTML";
+
 static String motorJson(uint8_t i) {
     String j;
     j.reserve(96);
@@ -381,7 +633,10 @@ static String motorJson(uint8_t i) {
 
 void begin() {
     server.on("/", HTTP_GET, [](AsyncWebServerRequest* r) {
-        r->send_P(200, "text/html", INDEX_HTML);
+        r->send(200, "text/html", FPSTR(INDEX_HTML));
+    });
+    server.on("/test", HTTP_GET, [](AsyncWebServerRequest* r) {
+        r->send(200, "text/html", FPSTR(TEST_HTML));
     });
 
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest* r) {
