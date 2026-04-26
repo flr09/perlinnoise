@@ -4,3 +4,7 @@
 __pycache__/
 # WiFi credentials — lokal befüllen, nie einchecken
 wifi_settings.h
+# Firmware-Bins — werden bei jedem Build neu erzeugt
+v4/bins/*.bin
+v4_iteration1/bins/*.bin
+
