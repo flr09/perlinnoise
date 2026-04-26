@@ -234,7 +234,7 @@ Status-Legende:
 
 Jede Phase hat klare **Deliverables** und **Testkriterien**. Nicht zur nächsten Phase, bevor die aktuelle abgeschlossen und getestet ist.
 
-### Phase 1 — Skelett (L0 + L1 + L2 + L3 + Minimal-L7)
+### Phase 1 — Skelett (L0 + L1 + L2 + L3 + Minimal-L7) — ✅ abgeschlossen 2026-04-26
 
 **Ziel:** Tragfähiges Architektur-Skelett auf Hardware lauffähig.
 
@@ -245,11 +245,17 @@ Jede Phase hat klare **Deliverables** und **Testkriterien**. Nicht zur nächsten
 - Build auf Flashbox, Flash auf perlin-v4-Board (nach OTA-Hostname-Wechsel)
 
 **Tests:**
-- T1.1 Build auf Flashbox erfolgreich
-- T1.2 Boot ohne Crash (Serial Monitor zeigt FW-Version)
-- T1.3 WLAN-Verbindung in `gaengeviertel`-Netz, mDNS `perlin-v4` aufgelöst
-- T1.4 `/status` antwortet, `/cmd?a=pwr&m=0` toggelt Motor X ENABLE-Pin
-- T1.5 Code-Review: keine Cross-Layer-Verletzungen (z. B. L1 ruft kein L4 auf)
+- T1.1 ✅ Build auf Flashbox erfolgreich (1:39 Min inkrementell, RAM 15 %, Flash 66 %)
+- T1.2 ✅ Boot ohne Crash — Serial: `Boot v4.0.0-phase1` → `NVS: ready` → `TMC: X init OK` → `WiFi: STA …`
+- T1.3 ✅ WLAN-Verbindung — `perlin-v4.intern.gaengeviertel.de` → `192.168.193.22` (interner DNS, nicht mDNS — siehe Lesson L1.1)
+- T1.4 ✅ `/status` JSON antwortet; `/cmd?a=pwr&m=0` toggelt: `m[0].e: false → true ("X: POWER ON") → false`
+- T1.5 ✅ Cross-Layer-Check — Includes strikt nach unten, keine Verletzungen
+
+**Lessons Learned:**
+- **L1.1 — mDNS vs. interner DNS:** `MDNS.begin(HOSTNAME)` reicht nicht für Auflösung in diesem Netz; der interne DNS-Server registriert per DHCP-Hostname und liefert `*.intern.gaengeviertel.de`. Code lässt MDNS-Begin trotzdem stehen (kostet nichts, hilft in anderen Netzen).
+- **L1.2 — `build_src_filter`:** PlatformIO findet Layer-Unterordner unter `v4/src/L*/` rekursiv ohne Anpassung — kein `**`-Glob nötig.
+- **L1.3 — Build-Strategie A bestätigt:** PIO komplett auf Flashbox läuft. Erstbuild ~5 Min (Toolchain-Download), inkrementell ~1:30. Pi 400 reicht problemlos.
+- **L1.4 — Hard-Reset nach Flash:** ESP32 ist nach ~12 Sekunden voll online (WLAN-Stack braucht ~5 s, dann setup() durch).
 
 ### Phase 2 — Mechanik + Multi-Motor (L4 + Multi-Instanzen in L1/L3)
 
