@@ -1,0 +1,146 @@
+<html lang="de"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>perlin v4</title>
+<style>
+:root{
+  --paper:#f4f1ea; --ink:#1a1a1a; --rule:#1a1a1a;
+  --red:#d62828; --blue:#003049; --yellow:#fcbf49; --mute:#6b6b6b;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--paper);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,"Helvetica Neue",Arial,sans-serif;font-size:16px;line-height:1.4;-webkit-font-smoothing:antialiased}
+body{padding:24px 16px;max-width:840px;margin:0 auto}
+
+/* Kopfzeile: dünne schwarze Linie als Trenner, links Titel, rechts FW */
+header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid var(--rule);padding-bottom:12px;margin-bottom:24px}
+header h1{font-size:1.6em;font-weight:700;letter-spacing:-0.02em}
+header .meta{font-size:0.85em;color:var(--mute);font-variant-numeric:tabular-nums}
+
+/* Status-Strip: drei Werte nebeneinander, getrennt durch dünne Linien */
+.strip{display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:2px solid var(--rule);margin-bottom:32px}
+.strip .cell{padding:14px 16px;border-right:2px solid var(--rule)}
+.strip .cell:last-child{border-right:none}
+.strip .label{font-size:0.7em;text-transform:uppercase;letter-spacing:0.1em;color:var(--mute);margin-bottom:4px}
+.strip .value{font-size:1.1em;font-weight:600;font-variant-numeric:tabular-nums}
+
+/* Sektion-Überschrift im Bauhaus-Stil: groß, dünne Linie darunter */
+h2{font-size:0.85em;text-transform:uppercase;letter-spacing:0.15em;font-weight:700;border-bottom:1px solid var(--rule);padding-bottom:6px;margin-bottom:16px}
+
+/* Motor-Grid: 1 Spalte mobile, 2 Spalten ab 600px */
+.motors{display:grid;grid-template-columns:1fr;gap:0;border:2px solid var(--rule);margin-bottom:32px}
+@media(min-width:600px){.motors{grid-template-columns:1fr 1fr}}
+.motor{padding:18px;border-bottom:2px solid var(--rule);border-right:0;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;min-height:72px}
+@media(min-width:600px){
+  .motor{border-right:2px solid var(--rule);border-bottom:2px solid var(--rule)}
+  .motor:nth-child(2n){border-right:none}
+  .motor:nth-last-child(-n+2){border-bottom:none}
+}
+.motor:last-child{border-bottom:none}
+
+/* Status-Kreis: Bauhaus-Geometrie. Roter Kreis = aktiv, gefüllt schwarz = bereit, weiß+Rand = inaktiv. */
+.dot{width:24px;height:24px;border-radius:50%;background:transparent;border:2px solid var(--rule);flex-shrink:0}
+.dot.on{background:var(--red);border-color:var(--red)}
+.dot.off{background:var(--paper);border-color:var(--mute)}
+.dot.dim{background:var(--paper);border-color:var(--mute);border-style:dashed}
+
+.motor .name{font-weight:700;font-size:1em;letter-spacing:0.05em}
+.motor .state{font-size:0.85em;color:var(--mute);font-variant-numeric:tabular-nums}
+.motor button{font-family:inherit;font-size:0.75em;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;padding:10px 14px;background:var(--paper);color:var(--ink);border:2px solid var(--rule);cursor:pointer;min-width:88px;min-height:44px}
+.motor button:active{background:var(--ink);color:var(--paper)}
+.motor button:disabled{color:var(--mute);border-color:var(--mute);cursor:not-allowed;background:var(--paper)}
+
+/* Log: schmaler Streifen unten, Bauhaus-Gelb als Akzent für Zeitstempel */
+.log-wrap{border-top:2px solid var(--rule);padding-top:16px}
+.log-wrap h2{margin-bottom:10px}
+#log{font-size:0.78em;line-height:1.5;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--ink);max-height:220px;overflow-y:auto;padding:0;font-variant-numeric:tabular-nums}
+#log .row{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:3px 0;border-bottom:1px dotted var(--mute)}
+#log .row:last-child{border-bottom:none}
+#log .ts{color:var(--mute);background:var(--yellow);padding:0 4px;font-weight:700;text-align:center}
+
+/* Footer */
+footer{margin-top:24px;font-size:0.7em;color:var(--mute);text-align:right;border-top:1px solid var(--rule);padding-top:8px}
+</style></head><body>
+
+<header>
+  <h1>perlin v4</h1>
+  <div class="meta"><span id="fw">…</span> · <span id="ip">…</span></div>
+</header>
+
+<div class="strip">
+  <div class="cell"><div class="label">Status</div><div class="value" id="op">—</div></div>
+  <div class="cell"><div class="label">Uptime</div><div class="value"><span id="up">…</span> s</div></div>
+  <div class="cell"><div class="label">RPM</div><div class="value" id="rpm">—</div></div>
+</div>
+
+<h2>Motoren</h2>
+<div class="motors">
+  <div class="motor" data-id="0">
+    <span class="dot dim" id="d0"></span>
+    <div><div class="name">M·X</div><div class="state" id="s0">—</div></div>
+    <button id="b0" onclick="cmd('pwr',0)">Power</button>
+  </div>
+  <div class="motor" data-id="1">
+    <span class="dot dim" id="d1"></span>
+    <div><div class="name">M·Y</div><div class="state" id="s1">—</div></div>
+    <button id="b1" onclick="cmd('pwr',1)" disabled>Power</button>
+  </div>
+  <div class="motor" data-id="2">
+    <span class="dot dim" id="d2"></span>
+    <div><div class="name">M·Z</div><div class="state" id="s2">—</div></div>
+    <button id="b2" onclick="cmd('pwr',2)">Power</button>
+  </div>
+  <div class="motor" data-id="3">
+    <span class="dot dim" id="d3"></span>
+    <div><div class="name">M·E</div><div class="state" id="s3">— · open-loop</div></div>
+    <button id="b3" onclick="cmd('pwr',3)" disabled>Power</button>
+  </div>
+</div>
+
+<div class="log-wrap">
+  <h2>Log</h2>
+  <div id="log"></div>
+</div>
+
+<footer>perlin v4 · phase 1 skelett</footer>
+
+<script>
+function cmd(a,m){fetch('/cmd?a='+a+'&m='+m)}
+function pad(n){return String(n).padStart(2,'0')}
+function ts(){const d=new Date();return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds())}
+
+const NAMES = ['X','Y','Z','E'];
+const log = document.getElementById('log');
+
+function appendLog(msg){
+  const row=document.createElement('div');
+  row.className='row';
+  const t=document.createElement('span');t.className='ts';t.textContent=ts();
+  const m=document.createElement('span');m.textContent=msg;
+  row.appendChild(t);row.appendChild(m);
+  log.prepend(row);
+  while(log.children.length>80) log.removeChild(log.lastChild);
+}
+
+setInterval(()=>{
+  fetch('/status').then(r=>r.json()).then(s=>{
+    document.getElementById('fw').textContent='v'+s.fw;
+    document.getElementById('up').textContent=s.uptime_s;
+    document.getElementById('ip').textContent=s.ip;
+    document.getElementById('op').textContent=(s.op||'idle').toUpperCase();
+    document.getElementById('rpm').textContent=(s.rpm!=null)?s.rpm:'—';
+
+    const motors = s.m || [];
+    for(let i=0;i<4;i++){
+      const m=motors[i]||{};
+      const dot=document.getElementById('d'+i);
+      const state=document.getElementById('s'+i);
+      const btn=document.getElementById('b'+i);
+      if(m.e===true){dot.className='dot on';state.textContent='powered';if(btn)btn.disabled=false}
+      else if(m.e===false){dot.className='dot off';state.textContent='off';if(btn)btn.disabled=false}
+      else{dot.className='dot dim';if(i===3)state.textContent='— · open-loop';else state.textContent='—'}
+    }
+
+    if(s.log){
+      s.log.split('\n').forEach(l=>{if(l.length>1)appendLog(l)});
+    }
+  }).catch(()=>{})
+},500);
