@@ -26,6 +26,8 @@ v4 ist die **stabile, modular-wartbare Endversion** der PerlinNoise-Motorsteueru
 - TMC5160 / FOC / echtes Field Weakening (Folgeprojekt — siehe Abschnitt 8)
 - LittleFS-Auslagerung der HTML (möglich, aber nicht Pflicht für v4.0)
 
+**Hardware fix:** FYSETC E4 (ESP32 + 4× TMC2209) bleibt definitiv. Kein Hardware-Wechsel im v4-Scope.
+
 ---
 
 ## 2. Hardware-Vorbehalte (verbindlich)
@@ -88,6 +90,23 @@ Schichten enthalten **Blöcke**. Ein Block = eine Datei (oder ein eng zusammenh�
 ### Abhängigkeitsregel
 
 **Eine Schicht darf nur auf darunterliegende Schichten zugreifen.** L4 darf L0–L3 nutzen, aber niemals L5–L7. Querverbindungen innerhalb einer Schicht sind erlaubt (z. B. L5a-Block kann anderen L5-Block aufrufen).
+
+### Core-Verteilung (Designentscheidung in L0)
+
+ESP32 hat zwei Cores. Der WiFi-Stack (lwip, esp-wifi) ist **hardcoded auf Core 0** (Espressif-SDK, nicht abschaltbar). Daraus folgt: damit Movement keine Delays durch WiFi-Hickups bekommt, muss Movement auf **Core 1** (App-CPU) gepinnt werden.
+
+| Core | Tasks | Begründung |
+|---|---|---|
+| **Core 0** (Pro-CPU) | • WiFi-Stack (hardcoded)<br>• AsyncTCP / WebServer-Handler (`CONFIG_ASYNC_TCP_RUNNING_CORE=0`)<br>• `TelemetryPollTask` (10 Hz, ~10 ms Last)<br>• `WatchdogTask` (50 Hz, ~1 ms Last)<br>• `Logger`-Flush (asynchron) | WiFi-Stack ist hier eh fix. Die zusätzlichen Tasks sind kurz und periodisch — sie blockieren WiFi nicht. |
+| **Core 1** (App-CPU) | • `setup()` / `loop()` (Arduino-Default — nur `ArduinoOTA.handle()`)<br>• **`MovementTask`** (FreeRTOS, Priorität 1) — ruft L4-Mechanik + L5-Programme<br>• ISRs für PCNT/Tacho (`attachInterrupt` wird hier aufgerufen → ISR auf Core 1) | Core 1 ist sonst weitgehend leer → Movement bekommt fast 100 % der CPU. |
+
+**Warum nicht andersrum (Movement auf Core 0, WiFi auf Core 1)?** Weil der WiFi-Stack hardcoded auf Core 0 läuft — man kann ihn nicht verschieben. Movement auf Core 0 würde die CPU mit dem WiFi-Stack teilen müssen. Genau das wollen wir vermeiden.
+
+**Zusatzregeln gegen Delays:**
+- Sensor-busy-waits in L4: `vTaskDelay(1)` statt `yield()` — gibt aktiv den FreeRTOS-Scheduler frei.
+- Critical Sections für globale State-Reads: `portMUX_TYPE` (Spinlock) — sehr kurz, kein Context-Switch.
+- TMC2209-UART (1–10 ms pro Kommando): FreeRTOS-Semaphore (`uartMutex`).
+- Movement-Task-Priorität auf 1, alle Core-0-Tasks auf 0 — FreeRTOS bevorzugt Movement.
 
 ---
 
@@ -161,9 +180,11 @@ Status-Legende:
 | `Prog_FreqSweep` | Linearer Chirp 10–200 Hz | v3 Programs.cpp | ✅ |
 | `Prog_PerformanceShow` | Speed + FreqSweep nacheinander | v3 Programs.cpp | ✅ |
 | `Prog_ProfileLearn` | MotorProfile (RPM↔Periode-Bins) lernen | erweiterbar mit v4_iter1 | 🆕 |
-| `Prog_FullstepSwitch` | TMC2209 `vhighfs=1` ab THIGH-Schwelle: verschiebt RPM-Limit nach oben? | komplett neu | ❌ |
-| `Prog_PhaseLead` | Microstep-Voreilung bei hohen RPM (B-EMF-Kompensation) | komplett neu | ❌ |
-| `Prog_CurrentSweepHiRPM` | Strom-Sweep bei festem hohen RPM — sucht „Sweet Spot" wo weniger Strom = mehr Drehzahl | komplett neu | ❌ |
+| `Prog_CurrentSweepHiRPM` | Strom-Sweep bei festem hohen RPM — sucht „Sweet Spot" wo weniger Strom = mehr Drehzahl (Pseudo-Field-Weakening über B-EMF-Sättigung, **ohne** Microstep-Reduktion) | komplett neu | ❌ |
+
+**Designentscheidung L5a — Microstepping:** v4 läuft durchgehend hochauflösend. Idle/Präzision = 64 MS, kontrolliertes Runterschalten bis 4 MS bei sehr hohen RPM (siehe v3 PROJEKT_DOKU Abschnitt 4). **Kein Fullstep-Modus** (`vhighfs=1`) und **keine Microstep-Tabellen-Manipulation** für Phase Lead — beides würde die Glätte zerstören, die L5b (Bewegungs-Synthese) braucht.
+
+**Field Weakening am TMC2209:** nicht möglich. Der TMC2209 hat kein FOC, keine d/q-Achsen-Steuerung. `Prog_CurrentSweepHiRPM` bildet nur den verwandten **B-EMF-Sättigungs-Effekt** ab: bei sehr hohen RPMs kann *weniger* Strom *mehr* nutzbare Drehzahl bringen, weil das Treiber-Spannungs-Limit weniger stark gegen die Gegen-EMK kämpft. Echtes Field Weakening würde TMC5160 + FOC-Library voraussetzen — Folgeprojekt (Abschnitt 8).
 
 #### L5b — Bewegungs-Synthese (V1-Funktionalität)
 
@@ -259,8 +280,7 @@ Jede Phase hat klare **Deliverables** und **Testkriterien**. Nicht zur nächsten
 **Tests:**
 - T3.1 SpeedTest auf X erreicht ≥ 2300 RPM ohne Stall (v3-Baseline halten)
 - T3.2 FreqSweep läuft 10–~130 Hz wie in v3
-- T3.3 Prog_FullstepSwitch zeigt RPM-Verschiebung > 0
-- T3.4 Prog_CurrentSweepHiRPM findet Sweet-Spot (oder belegt: gibt es nicht)
+- T3.3 Prog_CurrentSweepHiRPM findet Sweet-Spot (oder belegt: gibt es nicht)
 
 ### Phase 4 — Bewegungs-Synthese (L5b)
 
@@ -349,6 +369,7 @@ v4/
 | Q5 | LittleFS für HTML auslagern? | nice-to-have, nicht v4.0-Ziel |
 | Q6 | OTA-Auth `12345678` beibehalten oder rotieren? | beibehalten für jetzt |
 | Q7 | `*_3711.cpp` im perlinnoise-Root — was ist das, integrieren? | offen — User klären |
+| Q8 | Field Weakening auf TMC2209? | **geschlossen 2026-04-26:** nicht möglich (kein FOC). Pseudo-Effekt nur via `Prog_CurrentSweepHiRPM`. |
 
 **Annahme A1:** v3 bleibt während v4-Entwicklung unangetastet und online. Bei Bedarf kann jederzeit auf v3 zurückgewechselt werden (Git + Bin-Files).
 
