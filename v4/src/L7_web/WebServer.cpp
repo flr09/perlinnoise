@@ -741,21 +741,28 @@ void begin() {
         getI("dyn",    c.dynamics);
         getI("fan",    c.fan);
         getI("lamp",   c.lamp);
+        // STEP-Modus
+        getF("sa",     c.stepAngle);   // step angle
+        getF("so",     c.stepOffset);  // step offset
+        getF("ht",     c.holdMs);      // hold time [ms]
+        if (r->hasParam("am")) c.accelMax = (uint32_t)r->getParam("am")->value().toInt();
         r->send(200, "text/plain", "OK");
     });
 
     server.on("/config", HTTP_GET, [](AsyncWebServerRequest* r) {
         const auto& c = v4::rt;
-        char buf[400];
+        char buf[512];
         snprintf(buf, sizeof(buf),
             "{\"run\":%s,\"type\":%d,\"speed\":%.3f,\"angle\":%.1f,"
             "\"rad\":%.1f,\"range\":%.1f,\"frame\":%.4f,\"cont\":%.2f,"
             "\"shape\":%.2f,\"edgec\":%.2f,\"mspace\":%.1f,\"dyn\":%d,"
-            "\"fan\":%d,\"lamp\":%d}",
+            "\"fan\":%d,\"lamp\":%d,"
+            "\"sa\":%.1f,\"so\":%.2f,\"ht\":%.1f,\"am\":%lu}",
             c.running ? "true":"false", c.moveType, c.speed, c.angle,
             c.radius, c.rangeDeg, c.framesize, c.contrast,
             c.zShape, c.edgeC, c.mspace, c.dynamics,
-            c.fan, c.lamp);
+            c.fan, c.lamp,
+            c.stepAngle, c.stepOffset, c.holdMs, (unsigned long)c.accelMax);
         AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
         res->addHeader("Access-Control-Allow-Origin", "*");
         r->send(res);

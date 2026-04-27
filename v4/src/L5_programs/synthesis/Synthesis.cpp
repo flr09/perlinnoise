@@ -19,6 +19,14 @@ static float timeAcc = 0.0f;
 static unsigned long lastTickMs = 0;
 static const unsigned int TICK_MS = 10;  // 100 Hz Update
 
+// STEP-Mode-State pro Motor: aktueller Schritt (0..3), Hold-Start-Zeit, isMoving-Flag
+struct StepState {
+    uint8_t  currentStep = 0;
+    bool     isMoving    = false;
+    unsigned long holdStartMs = 0;
+};
+static StepState stepState[4];
+
 // Drive-Dynamics-Skalierungen aus V1 MANUAL.md
 static float dynSpeed() {
     switch (v4::rt.dynamics) {
@@ -50,13 +58,21 @@ void start() {
         Stepper::setMicrosteps(i, 16);
         auto* s = Stepper::get(i);
         if (s) {
-            s->setSpeedInHz(8000);
-            s->setAcceleration(4000);
+            // Im STEP-Mode höhere Acceleration nutzen — sonst smoother Default
+            if (v4::rt.moveType == 6) {
+                s->setSpeedInHz(20000);
+                s->setAcceleration(v4::rt.accelMax);
+            } else {
+                s->setSpeedInHz(8000);
+                s->setAcceleration(4000);
+            }
         }
+        // STEP-State zurücksetzen
+        stepState[i] = StepState();
     }
     flightX = flightY = timeAcc = 0.0f;
     v4::rt.running = true;
-    Logger::addLog("Synth: START");
+    Logger::addLog(String("Synth: START type=") + v4::rt.moveType);
 }
 
 void stop() {
@@ -97,6 +113,41 @@ void tick() {
         }
     } else {                                // WAVEFORM 3..5
         timeAcc += effSpeed * dt;
+    }
+
+    // STEP-Modus (moveType=6): 4-Position-Quader-Drehung mit Hold-Time.
+    // Andere Logik als Noise/Wellenform — wird hier separat gehandhabt und
+    // dann return.
+    if (v4::rt.moveType == 6) {
+        unsigned long nowMs = millis();
+        float effHoldMs = v4::rt.holdMs / dynSpeed();  // Dynamics skaliert Hold (Rasant=schneller)
+        for (uint8_t i = 0; i < 4; i++) {
+            auto* s = Stepper::get(i);
+            if (!s) continue;
+            auto& st = stepState[i];
+            if (st.isMoving) {
+                // FAS noch unterwegs — warten bis Ziel erreicht
+                if (!s->isRunning()) {
+                    st.isMoving = false;
+                    st.holdStartMs = nowMs;
+                }
+            } else {
+                // Hold-Phase — wenn abgelaufen, nächster Schritt
+                if ((unsigned long)(nowMs - st.holdStartMs) >= (unsigned long)effHoldMs) {
+                    st.currentStep = (st.currentStep + 1) % 4;
+                    // Pro-Motor-Phasen-Offset via mspace: bei mspace=25 → 90° versetzt
+                    float phaseOff = (float)i * (v4::rt.mspace / 100.0f) * 360.0f;
+                    float target = (float)st.currentStep * v4::rt.stepAngle
+                                 + (float)st.currentStep * v4::rt.stepOffset
+                                 + phaseOff;
+                    s->setAcceleration(v4::rt.accelMax);
+                    s->setSpeedInHz(20000);  // hoch — limitiert ohnehin durch Acceleration über kurze Strecke
+                    s->moveTo((long)(target * (float)Stepper::stepsPerRev(i) / 360.0f));
+                    st.isMoving = true;
+                }
+            }
+        }
+        return;
     }
 
     // 2) Pro Motor Ziel-Position berechnen
