@@ -25,16 +25,16 @@ void run(uint8_t motorIdx) {
     Tmc::setPower(motorIdx, true);
     Stepper::setMicrosteps(motorIdx, 16);
     Logger::addLog(String("CAL M") + (char)('X' + motorIdx) + ": v4 calib (fast)");
-    s->setAcceleration(5000);
+    s->setAcceleration(15000);
 
     // Vorbereitung: Sensor verlassen (falls aktiv)
     while (digitalRead(pin) == LOW) {
         if (Op::pendingStop) return;
-        s->setSpeedInHz(1000);
+        s->setSpeedInHz(2500);
         s->runBackward();
         unsigned long t0 = millis();
         bool exited = false;
-        while (millis() - t0 < 5000) {
+        while (millis() - t0 < 3000) {
             if (HalSensor::checkStable(pin, HIGH, 5)) { exited = true; break; }
             if (Op::pendingStop) break;
             vTaskDelay(pdMS_TO_TICKS(1));
@@ -42,12 +42,12 @@ void run(uint8_t motorIdx) {
         if (!exited) break;
     }
     s->stopMove();
-    if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) return;
-    delay(200);
+    if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 1500)) return;
+    delay(80);
 
     // Phase 1: Grob CW Suche Eintritt
     Logger::addLog("CAL: P1 Grob CW...");
-    s->setSpeedInHz(2000);
+    s->setSpeedInHz(3500);
     s->runForward();
     long startPos = s->getCurrentPosition();
     long maxDelta = (long)Stepper::stepsPerRev(motorIdx) * 2;
@@ -66,7 +66,7 @@ void run(uint8_t motorIdx) {
 
     // Phase 2: Austritt finden — bis zu 2 volle Umdrehungen, damit auch breite Zungen passen
     Logger::addLog("CAL: P2 Austritt...");
-    s->setSpeedInHz(1000);
+    s->setSpeedInHz(2000);
     s->runForward();
     startPos = s->getCurrentPosition();
     long maxDelta2 = (long)Stepper::stepsPerRev(motorIdx) * 2;
@@ -91,12 +91,13 @@ void run(uint8_t motorIdx) {
 
     // Phase 3: rechte Kante A2 (3-Touch CCW)
     Logger::addLog("CAL: P3 rechte Kante (3-Touch)...");
-    long a2 = EdgeTouch::touch(motorIdx, LOW, -1, 400, 3);
+    long a2 = EdgeTouch::touch(motorIdx, LOW, -1, 800, 3);
     if (a2 < 0) { Logger::addLog("ERR: P3 Touch"); return; }
 
-    // Phase 4: linke Kante A1 (3-Touch CW)
+    // Phase 4: linke Kante A1 (3-Touch CW). EdgeTouch macht intern eigenen
+    // Backoff — daher kein expliziter Anlauf mehr nötig (war redundant).
     Logger::addLog("CAL: P4 linke Kante (3-Touch)...");
-    s->setSpeedInHz(1000);
+    s->setSpeedInHz(2000);
     s->runBackward();
     long startPos4 = s->getCurrentPosition();
     long maxDelta4 = (long)Stepper::stepsPerRev(motorIdx);
@@ -114,7 +115,7 @@ void run(uint8_t motorIdx) {
     if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) return;
     delay(200);
 
-    long a1 = EdgeTouch::touch(motorIdx, LOW, 1, 400, 3);
+    long a1 = EdgeTouch::touch(motorIdx, LOW, 1, 800, 3);
     if (a1 < 0) { Logger::addLog("ERR: P4 Touch"); return; }
 
     // Berechnung & Speicherung

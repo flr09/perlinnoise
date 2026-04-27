@@ -19,12 +19,12 @@ long touch(uint8_t motorIdx, int targetSensorState, int dir,
         // Stück wegfahren — vom Sensor weg, in Gegenrichtung. Muss größer als
         // Zungenbreite sein (typisch ~30°), sonst false-positive Sensor-LOW
         // beim Re-Anfahrt. 0.15 rev = 54° bei 16MS — sicher außerhalb.
-        s->setSpeedInHz(1500);
+        s->setSpeedInHz(3000);
         long backOff = (long)((float)Stepper::stepsPerRev(motorIdx) * 0.15f);
         if (dir > 0) s->move(-backOff);
         else         s->move(backOff);
-        if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 3000)) return -1;
-        delay(50);
+        if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) return -1;
+        delay(30);
 
         // Kante anfahren
         s->setSpeedInHz(speedSps);
@@ -50,8 +50,8 @@ long touch(uint8_t motorIdx, int targetSensorState, int dir,
         long pos = s->getCurrentPosition();
         sum += pos;
         s->stopMove();
-        if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) return -1;
-        delay(50);
+        if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 1500)) return -1;
+        delay(30);
     }
     return sum / samples;
 }

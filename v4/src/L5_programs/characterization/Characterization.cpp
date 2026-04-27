@@ -419,12 +419,42 @@ void runCurrentSweepHiRPM(uint8_t i) {
     resetMotorState(i, true);
 }
 
+// Performance Show: alle Tests in sinnvoller Reihenfolge.
+// 1. SgLearn (Threshold lernen) → 2. SpeedTest (Top-RPM) → 3. InertiaTest
+// (Top-Acc) → 4. Katapult (3 Bursts bei Top-RPM) → 5. CurrentSweep (Sweet-
+// Spot) → 6. CoastTest (Auslauf) → 7. FreqSweep (Frequenzgang).
+// Reihenfolge wichtig: SpeedTest+InertiaTest setzen Cal-Werte für die
+// nachfolgenden Tests, die diese als Defaults brauchen.
 void runPerformanceShow(uint8_t i) {
-    Logger::addLog("Show: Speed");
+    Logger::addLog("Vorführung Start");
+
+    Logger::addLog("Show 1/7: SG-Learn");
+    runSgLearn(i);
+    if (Op::pendingStop) return;
+
+    Logger::addLog("Show 2/7: SpeedTest");
     runSpeedTest(i);
     if (Op::pendingStop) return;
-    Logger::addLog("Show: FreqSweep");
+
+    Logger::addLog("Show 3/7: Inertia");
+    runInertiaTest(i);
+    if (Op::pendingStop) return;
+
+    Logger::addLog("Show 4/7: Katapult");
+    runKatapult(i);
+    if (Op::pendingStop) return;
+
+    Logger::addLog("Show 5/7: CurrentSweep");
+    runCurrentSweepHiRPM(i);
+    if (Op::pendingStop) return;
+
+    Logger::addLog("Show 6/7: Coast");
+    runCoastTest(i);
+    if (Op::pendingStop) return;
+
+    Logger::addLog("Show 7/7: FreqSweep");
     runFreqSweep(i);
+
     Logger::addLog("Vorführung Ende");
 }
 

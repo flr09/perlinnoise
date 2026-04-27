@@ -52,6 +52,7 @@ void init() {
 
 void start() {
     if (v4::rt.running) return;
+    unsigned long now = millis();
     // Power für alle 4 Motoren
     for (uint8_t i = 0; i < 4; i++) {
         Tmc::setPower(i, true);
@@ -67,8 +68,11 @@ void start() {
                 s->setAcceleration(4000);
             }
         }
-        // STEP-State zurücksetzen
+        // STEP-State zurücksetzen. holdStartMs auf jetzt setzen, damit der
+        // erste Hold-Zyklus an Position 0° (currentStep=0) beginnt — sonst
+        // springt der Motor ohne Wartezeit direkt auf 90° (currentStep=1).
         stepState[i] = StepState();
+        stepState[i].holdStartMs = now;
     }
     flightX = flightY = timeAcc = 0.0f;
     v4::rt.running = true;
