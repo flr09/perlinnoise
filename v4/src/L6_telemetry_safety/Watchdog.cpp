@@ -124,39 +124,11 @@ static void tickMotor(uint8_t i) {
     }
 }
 
-// Software-Tacho-Polling als ISR-Fallback. GPIO 15 (Z-MIN) verhält sich auf
-// dem FYSETC E4 als Strapping-Pin manchmal störrisch — die ISR feuert nicht.
-// Bei 50 ms Tick reicht das bis ~600 RPM Nyquist-sicher (Cal/Home: <50 RPM).
-//
-// Konkurriert nicht mit der echten ISR — falls die irgendwann doch läuft,
-// inkrementiert pulseCount halt von zwei Seiten. Nur Periode könnte dann
-// gestört werden; akzeptables Risiko.
-static int lastSensorState[4] = { -1, -1, -1, -1 };  // -1 = noch nicht initialisiert
-
-static void pollTachoSoftware() {
-    for (uint8_t i = 0; i < 4; i++) {
-        if (!HalPins::hasSensor(i)) continue;
-        int now = digitalRead(HalPins::MOTORS[i].tachoPin);
-        if (lastSensorState[i] == -1) { lastSensorState[i] = now; continue; }  // erste Lesung: nur kalibrieren
-        if (lastSensorState[i] == HIGH && now == LOW) {
-            // FALLING edge — Sensor zieht GND
-            portENTER_CRITICAL(&Sync::motorMux);
-            HalTacho::tacho[i].pulseCount++;
-            unsigned long ms = millis();
-            if (HalTacho::tacho[i].lastLowMs > 0) {
-                unsigned long p = ms - HalTacho::tacho[i].lastLowMs;
-                if (p >= HalTacho::NOISE_FILTER_MS) HalTacho::tacho[i].periodMs = p;
-            }
-            HalTacho::tacho[i].lastLowMs = ms;
-            HalTacho::tacho[i].latch = true;
-            portEXIT_CRITICAL(&Sync::motorMux);
-        }
-        lastSensorState[i] = now;
-    }
-}
+// Tacho-Polling läuft jetzt in eigenem 200Hz-Task (Hal_Tacho::init()),
+// nicht mehr im Watchdog-Tick — sonst werden Sensor-Durchquerungen bei
+// hoher Acc verfehlt (~30ms Zungen-Zeit < 50ms Tick).
 
 void tick() {
-    pollTachoSoftware();
     for (uint8_t i = 0; i < 4; i++) tickMotor(i);
 }
 

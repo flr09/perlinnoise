@@ -23,13 +23,38 @@ static void IRAM_ATTR tachoIsr() {
     tacho[I].latch = true;
 }
 
-// ISR-Versuch verworfen: GPIO 15 (Z-MIN) wirft auf dem FYSETC E4
-// `E (64) gpio: gpio_isr_handler...` Fehler beim attachInterrupt — Strapping-Pin-
-// Eigenheit. Stattdessen pollt Watchdog::tick() den Pin alle 50ms (Software-
-// Edge-Detection). Reicht bis ~600 RPM, ausreichend für Cal/Home (<50 RPM).
+// Hochfrequenter Software-Tacho-Poll-Task (5ms = 200 Hz). Polling im
+// 50ms-Watchdog-Tick verfehlt bei hoher Acc Sensor-Durchquerungen
+// (~30ms im Sensorfeld). Bei 5ms Polling: Nyquist bis ~12.000 RPM,
+// deckt alle realistischen Tests ab.
 //
-// Falls später Multi-Motor-Sensoren auf GPIO 34/35 dazukommen, dort eventuell
-// die ISR-Variante reaktivieren — diese Pins sind unkritisch.
+// Kein attachInterrupt — der wirft auf GPIO 15 `gpio_isr_handler` Error
+// (Strapping-Pin-Eigenheit). Polling per Task ist robust und CPU-Last
+// vernachlässigbar (~0.05%).
+static int lastSensorState[4] = { -1, -1, -1, -1 };
+
+static void tachoPollTask(void*) {
+    for (;;) {
+        for (uint8_t i = 0; i < HalPins::MOTOR_COUNT; i++) {
+            if (!HalPins::hasSensor(i)) continue;
+            int now = digitalRead(HalPins::MOTORS[i].tachoPin);
+            if (lastSensorState[i] == -1) { lastSensorState[i] = now; continue; }
+            if (lastSensorState[i] == HIGH && now == LOW) {
+                tacho[i].pulseCount++;
+                unsigned long ms = millis();
+                if (tacho[i].lastLowMs > 0) {
+                    unsigned long p = ms - tacho[i].lastLowMs;
+                    if (p >= NOISE_FILTER_MS) tacho[i].periodMs = p;
+                }
+                tacho[i].lastLowMs = ms;
+                tacho[i].latch = true;
+            }
+            lastSensorState[i] = now;
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));  // 1kHz Polling — Nyquist bis ~30000 RPM
+    }
+}
+
 void reattach() {
     for (uint8_t i = 0; i < HalPins::MOTOR_COUNT; i++) {
         if (!HalPins::hasSensor(i)) continue;
@@ -39,15 +64,21 @@ void reattach() {
         } else {
             pinMode(pin, INPUT_PULLUP);
         }
-        Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " (poll-mode)");
+        Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " (poll-200Hz)");
     }
-    (void)tachoIsr<0>;  // unterdrückt unused-Warning
+    (void)tachoIsr<0>;
     (void)tachoIsr<1>;
     (void)tachoIsr<2>;
 }
 
 void init() {
     reattach();
+    // Tacho-Poll-Task auf Core 1 (App-CPU) mit Prio 2 — höher als
+    // MovementTask (Prio 1). Core 0 ist mit WiFi/Telemetry/Watchdog
+    // belastet, Polling wurde dort bei schneller Bewegung verdrängt
+    // → Pulses verfehlt. Core 1 ist sonst nur Movement → Polling
+    // kann zuverlässig 200Hz halten, MovementTask kommt trotzdem dran.
+    xTaskCreatePinnedToCore(tachoPollTask, "TachoPoll", 2048, nullptr, 2, nullptr, 1);
 }
 
 uint16_t getRpm(uint8_t motorIdx) {

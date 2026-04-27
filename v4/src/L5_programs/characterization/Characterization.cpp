@@ -227,20 +227,24 @@ void runInertiaTest(uint8_t i) {
         uint32_t acc = accs[k];
         s->setAcceleration(acc);
 
+        // Bewegung 2 rev hin + 2 rev rück → 2 Sensor-Durchgänge pro Hälfte.
+        // Robuster als 1 rev: bei einem verfehlten Polling-Event ist immer
+        // noch ein zweiter Eintritt da. Bei echtem Stall bleiben deltas = 0.
+        long dist = 2 * (long)Stepper::stepsPerRev(i);
         uint32_t pBefore = HalTacho::getPulseCount(i);
-        s->move(+(long)Stepper::stepsPerRev(i));    // +1 rev → passiert Sensor 1× (raus + rein)
-        if (!waitOrStop(i, 5000)) break;
-        s->move(-(long)Stepper::stepsPerRev(i));    // -1 rev → passiert Sensor 1× zurück
-        if (!waitOrStop(i, 5000)) break;
+        s->move(+dist);
+        if (!waitOrStop(i, 8000)) break;
+        uint32_t pMid = HalTacho::getPulseCount(i);
+        s->move(-dist);
+        if (!waitOrStop(i, 8000)) break;
         uint32_t pAfter = HalTacho::getPulseCount(i);
-        uint32_t deltaP = pAfter - pBefore;
+        uint32_t deltaHin  = pMid - pBefore;
+        uint32_t deltaRueck= pAfter - pMid;
 
-        // Erwartung: 2 Sensor-Durchgänge insgesamt (1× hin + 1× zurück durch Zunge).
-        // ISR feuert auf Falling (HIGH→LOW). Pro Durchquerung sehen wir 1 Falling-Edge.
-        // Bei Stall (Motor bewegt sich nicht): 0 Pulse.
-        bool ok = (deltaP >= 2);
-        Logger::addLog(String("INERT acc=") + acc + " pulses=" + deltaP + (ok?" OK":" STALL"));
-        Telemetry::recordDataPoint(i, "INERT", acc);
+        bool ok = (deltaHin >= 1 && deltaRueck >= 1);
+        Logger::addLog(String("INERT acc=") + acc + " hin=" + deltaHin + " rueck=" + deltaRueck + (ok?" OK":" STALL"));
+        Telemetry::recordDataPoint(i, "INERT_H", deltaHin);
+        Telemetry::recordDataPoint(i, "INERT_R", deltaRueck);
         if (!ok) break;
         lastGood = acc;
     }
