@@ -12,6 +12,9 @@ constexpr unsigned long INTERVAL_MS = 50;
 void init();
 void resetBuffer();
 void recordDataPoint(uint8_t motorIdx, const char* phase, float val);
+// recordEvent: wie recordDataPoint, aber OHNE 50ms-Throttle. Für seltene
+// Marker (Cal-Phasen, Test-Stages), die nicht verloren gehen dürfen.
+void recordEvent(uint8_t motorIdx, const char* phase, float val);
 String getCsv();
 void registerHandlers(AsyncWebServer& server);
 

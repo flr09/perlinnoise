@@ -84,6 +84,29 @@ void recordDataPoint(uint8_t motorIdx, const char* phase, float val) {
     portEXIT_CRITICAL(&Sync::motorMux);
 }
 
+void recordEvent(uint8_t motorIdx, const char* phase, float val) {
+    if (motorIdx >= 4) return;
+    unsigned long now = millis();
+    if (csvBuffer.length() > MAX_BYTES) return;
+    auto* s = Stepper::get(motorIdx);
+    if (!s) return;
+    char line[200];
+    snprintf(line, sizeof(line),
+        "%lu,%u,%s,%.0f,%ld,%d,%u,%lu,%u,%u,%d,%d,%d,%d,%d,%d,%d\n",
+        now - startMs, motorIdx, phase, val,
+        s->getCurrentPosition(),
+        (int)(s->getCurrentSpeedInMilliHz() / 1000),
+        HalTacho::getRpm(motorIdx),
+        HalTacho::getPulseCount(motorIdx),
+        live[motorIdx].sg, live[motorIdx].cs,
+        live[motorIdx].curA, live[motorIdx].curB,
+        live[motorIdx].stall, live[motorIdx].otpw, live[motorIdx].ot,
+        live[motorIdx].ola, live[motorIdx].olb);
+    portENTER_CRITICAL(&Sync::motorMux);
+    csvBuffer += line;
+    portEXIT_CRITICAL(&Sync::motorMux);
+}
+
 String getCsv() {
     portENTER_CRITICAL(&Sync::motorMux);
     String c = csvBuffer;

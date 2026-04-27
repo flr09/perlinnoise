@@ -1,4 +1,5 @@
 #include "Homing.h"
+#include <limits.h>
 #include "EdgeTouch.h"
 #include "../L0_platform/Logger.h"
 #include "../L0_platform/Types.h"
@@ -48,7 +49,7 @@ void run(uint8_t motorIdx) {
     // 1-Touch-Bestätigung an der linken Kante
     Logger::addLog("HOME: Kante bestätigen...");
     long a1Now = EdgeTouch::touch(motorIdx, LOW, 1, 150, 1);
-    if (a1Now < 0) { Logger::addLog("HOME: Touch fehlgeschlagen"); return; }
+    if (a1Now == LONG_MIN) { Logger::addLog("HOME: Touch fehlgeschlagen"); return; }
 
     v4::CalibrationData cal;
     StorageCalib::load(motorIdx, cal);

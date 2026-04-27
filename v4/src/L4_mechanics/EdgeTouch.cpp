@@ -1,4 +1,5 @@
 #include "EdgeTouch.h"
+#include <limits.h>
 #include "../L0_platform/Logger.h"
 #include "../L1_hal/Hal_Pins.h"
 #include "../L1_hal/Hal_Sensor.h"
@@ -11,7 +12,7 @@ namespace EdgeTouch {
 long touch(uint8_t motorIdx, int targetSensorState, int dir,
            uint32_t speedSps, int samples) {
     auto* s = Stepper::get(motorIdx);
-    if (!s || !HalPins::hasSensor(motorIdx)) return -1;
+    if (!s || !HalPins::hasSensor(motorIdx)) return LONG_MIN;
     uint8_t sensorPin = HalPins::MOTORS[motorIdx].tachoPin;
 
     long sum = 0;
@@ -23,7 +24,7 @@ long touch(uint8_t motorIdx, int targetSensorState, int dir,
         long backOff = (long)((float)Stepper::stepsPerRev(motorIdx) * 0.15f);
         if (dir > 0) s->move(-backOff);
         else         s->move(backOff);
-        if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) return -1;
+        if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) return LONG_MIN;
         delay(30);
 
         // Kante anfahren
@@ -32,7 +33,10 @@ long touch(uint8_t motorIdx, int targetSensorState, int dir,
         else         s->runBackward();
 
         long startPos = s->getCurrentPosition();
-        long maxDelta = (long)((float)Stepper::stepsPerRev(motorIdx) * 0.2f);
+        // maxDelta muss > backOff(0.15) + Zungenbreite + Margin sein, sonst
+        // bricht Anfahrt ab BEVOR Sensor erreicht. 0.4 rev = 144° → reicht
+        // für Zungen bis ~80° + 54° backOff + Sicherheit.
+        long maxDelta = (long)((float)Stepper::stepsPerRev(motorIdx) * 0.4f);
         unsigned long start = millis();
         bool hit = false;
         while (true) {
@@ -45,12 +49,12 @@ long touch(uint8_t motorIdx, int targetSensorState, int dir,
         if (!hit) {
             s->stopMove();
             Logger::addLog(String("EdgeTouch M") + (char)('X' + motorIdx) + ": miss");
-            return -1;
+            return LONG_MIN;  // Sentinel für Miss — Position kann legitim negativ sein!
         }
         long pos = s->getCurrentPosition();
         sum += pos;
         s->stopMove();
-        if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 1500)) return -1;
+        if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 1500)) return LONG_MIN;
         delay(30);
     }
     return sum / samples;
