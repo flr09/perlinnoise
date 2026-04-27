@@ -61,11 +61,18 @@ static float measureMotorRatio(uint8_t i, float expectedRpm, unsigned long sampl
 // Defensives Cleanup nach jedem Test — auch im Stop-Pfad. Setzt Microsteps
 // auf 64 zurück, applyDefaults mit gelerntem Strom, optional moveTo 0° wenn
 // cal.valid (Zunge in Sensor-Mitte).
+//
+// WICHTIG: Bei Tests mit runForward() (Katapult, SpeedTest, CurrentSweep)
+// dreht der Motor viele Umdrehungen — Position-Counter steht bei z.B. +1.6M
+// Steps. `moveTo(0)` würde die ganze Strecke physisch zurückfahren (200s).
+// Stattdessen erst Position modulo stepsPerRev → Counter im [0, 1 rev]-Bereich,
+// dann `moveTo(0)` bewegt höchstens 1 Umdrehung physisch.
+// Sensor-Mitte (Zunge) bleibt referenziert, weil 0 mod stepsPerRev = 0 = Mitte.
 static void resetMotorState(uint8_t i, bool moveToZero) {
     auto* s = Stepper::get(i);
     if (s && s->isRunning()) {
         s->stopMove();
-        Motion::waitWhileRunning(i, nullptr, 5000);  // ohne Stop-Flag, nur Timeout
+        Motion::waitWhileRunning(i, nullptr, 5000);
     }
     Stepper::setMicrosteps(i, 64);
     v4::CalibrationData cal; StorageCalib::load(i, cal);
@@ -74,6 +81,14 @@ static void resetMotorState(uint8_t i, bool moveToZero) {
         : 800;
     Tmc::applyDefaults(i, restoreCurrent);
     if (moveToZero && cal.valid && s) {
+        // Position auf [0, stepsPerRev) reduzieren — entkoppelt Counter vom
+        // physischen Motor, kürzester Weg zur Sensor-Mitte garantiert.
+        long pos = s->getCurrentPosition();
+        long spr = (long)Stepper::stepsPerRev(i);
+        long modPos = ((pos % spr) + spr) % spr;
+        // Wähle kürzeren Weg: wenn modPos > spr/2, moveTo(spr) statt moveTo(0)
+        if (modPos > spr / 2) modPos -= spr;
+        s->setCurrentPosition(modPos);
         s->setSpeedInHz(8000);
         s->setAcceleration(20000);
         Motion::moveToDeg(i, 0.0f);

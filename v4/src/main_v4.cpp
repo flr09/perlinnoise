@@ -69,7 +69,9 @@ static void MovementTask(void*) {
             else if (Op::pending.test >= 0) {
                 int m = Op::pending.test; Op::pending.test = -1;
                 Op::state = v4::OpState::TESTING;
-                Telemetry::resetBuffer();
+                // Buffer NICHT pro Test reseten — sonst geht Telemetrie aus
+                // vorherigen Tests verloren wenn man Einzeltests sequenziell
+                // laufen lässt. Reset nur bei Show oder via /cmd?a=resetTele.
                 Watchdog::enable(m, true);
                 switch (Op::pending.testProg) {
                     case 0: Characterization::runSpeedTest(m);   break;

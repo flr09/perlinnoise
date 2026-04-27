@@ -711,6 +711,7 @@ void begin() {
             r->send(200, "text/plain", "OK"); return;
         }
         if (a == "show") { Op::pending.show = m; r->send(200, "text/plain", "OK"); return; }
+        if (a == "resetTele") { Telemetry::resetBuffer(); r->send(200, "text/plain", "OK"); return; }
         if (a == "synth") { Synthesis::start(); r->send(200, "text/plain", "OK"); return; }
 
         r->send(501, "text/plain", "unknown action");
