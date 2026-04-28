@@ -59,16 +59,9 @@ static float measureMotorRatio(uint8_t i, float expectedRpm, unsigned long sampl
 }
 
 // Defensives Cleanup nach jedem Test — auch im Stop-Pfad. Setzt Microsteps
-// auf 64 zurück, applyDefaults mit gelerntem Strom, optional moveTo 0° wenn
-// cal.valid (Zunge in Sensor-Mitte).
-//
-// WICHTIG: Bei Tests mit runForward() (Katapult, SpeedTest, CurrentSweep)
-// dreht der Motor viele Umdrehungen — Position-Counter steht bei z.B. +1.6M
-// Steps. `moveTo(0)` würde die ganze Strecke physisch zurückfahren (200s).
-// Stattdessen erst Position modulo stepsPerRev → Counter im [0, 1 rev]-Bereich,
-// dann `moveTo(0)` bewegt höchstens 1 Umdrehung physisch.
-// Sensor-Mitte (Zunge) bleibt referenziert, weil 0 mod stepsPerRev = 0 = Mitte.
-static void resetMotorState(uint8_t i, bool moveToZero) {
+// auf 64 zurück, applyDefaults mit gelerntem Strom, führt bei Stall ein
+// Re-Homing durch um die absolute Position für Folgetests zu retten.
+static void resetMotorState(uint8_t i, bool wasStalled) {
     auto* s = Stepper::get(i);
     if (s && s->isRunning()) {
         s->stopMove();
@@ -80,13 +73,15 @@ static void resetMotorState(uint8_t i, bool moveToZero) {
         ? min(cal.learnedCurrentMA, MOTOR_CURRENT_HARD_MAX)
         : 800;
     Tmc::applyDefaults(i, restoreCurrent);
-    if (moveToZero && cal.valid && s) {
-        // Position auf [0, stepsPerRev) reduzieren — entkoppelt Counter vom
-        // physischen Motor, kürzester Weg zur Sensor-Mitte garantiert.
+
+    if (wasStalled && cal.valid) {
+        Logger::addLog("Stall erkannt -> Re-Homing...");
+        Homing::run(i);
+    } else if (cal.valid && s) {
+        // Normales Reset zur Mitte (0°) ohne volle Homing-Suche
         long pos = s->getCurrentPosition();
         long spr = (long)Stepper::stepsPerRev(i);
         long modPos = ((pos % spr) + spr) % spr;
-        // Wähle kürzeren Weg: wenn modPos > spr/2, moveTo(spr) statt moveTo(0)
         if (modPos > spr / 2) modPos -= spr;
         s->setCurrentPosition(modPos);
         s->setSpeedInHz(8000);
@@ -154,7 +149,7 @@ void runSgLearn(uint8_t i) {
     } else if (!ok) {
         Logger::addLog("SG-Learn: abgebrochen, kein Wert gespeichert");
     }
-    resetMotorState(i, true);
+    resetMotorState(i, !ok);
 }
 
 // --- 2) SpeedTest: RPM-Rampe bis Tacho-Stall ---
@@ -173,6 +168,7 @@ void runSpeedTest(uint8_t i) {
 
     float rpm = 300.0f;
     float lastGood = 0.0f;
+    bool stalled = false;
     while (rpm <= PARCOUR_RPM_MAX && !Op::pendingStop) {
         // Acc skaliert mit Ziel-RPM: für 2500 RPM → ~150k sps² (=Hochlauf in 0.9s)
         uint32_t targetSps = (uint32_t)Units::rpmToSps(i, rpm);
@@ -196,7 +192,8 @@ void runSpeedTest(uint8_t i) {
         Telemetry::recordDataPoint(i, "SPEED_RATIO", rpm);
 
         if (ratio < STALL_RATIO_THR) {
-            Logger::addLog(String("STALL @") + (int)rpm + " RPM (ratio=" + String(ratio,2) + ")");
+            Logger::addLog(String("STALL @") + (int)rpm + " RPM");
+            stalled = true;
             break;
         }
         if (ratio >= WARN_RATIO_THR) lastGood = rpm;
@@ -207,7 +204,7 @@ void runSpeedTest(uint8_t i) {
         StorageCalib::save(i, cal);
         Logger::addLog(String("Speed maxRpm = ") + (int)lastGood);
     }
-    resetMotorState(i, true);
+    resetMotorState(i, stalled);
 }
 
 // --- 3) InertiaTest: Beschleunigung bis Tacho-Stall ---
@@ -238,6 +235,7 @@ void runInertiaTest(uint8_t i) {
     // findet Sweet-Spot deutlich präziser.
     uint32_t accs[] = {5000, 10000, 20000, 40000, 80000, 150000, 250000, 400000, 500000};
     uint32_t lastGood = 0;
+    bool stalled = false;
     for (uint8_t k = 0; k < sizeof(accs)/sizeof(accs[0]) && !Op::pendingStop; k++) {
         uint32_t acc = accs[k];
         s->setAcceleration(acc);
@@ -260,7 +258,7 @@ void runInertiaTest(uint8_t i) {
         Logger::addLog(String("INERT acc=") + acc + " hin=" + deltaHin + " rueck=" + deltaRueck + (ok?" OK":" STALL"));
         Telemetry::recordDataPoint(i, "INERT_H", deltaHin);
         Telemetry::recordDataPoint(i, "INERT_R", deltaRueck);
-        if (!ok) break;
+        if (!ok) { stalled = true; break; }
         lastGood = acc;
     }
     if (lastGood > 0) {
@@ -268,7 +266,7 @@ void runInertiaTest(uint8_t i) {
         StorageCalib::save(i, cal);
         Logger::addLog(String("Inertia maxAccel = ") + lastGood);
     }
-    resetMotorState(i, true);
+    resetMotorState(i, stalled);
 }
 
 // --- 4) CoastTest: Auslauf nach Strom-Aus, Tacho-Pulses zählen ---
@@ -324,6 +322,7 @@ void runKatapult(uint8_t i) {
     s->setAcceleration(launchAcc);
     s->setSpeedInHz((uint32_t)Units::rpmToSps(i, launchRpm));
 
+    bool stalled = false;
     for (int r = 0; r < 3 && !Op::pendingStop; r++) {
         s->runForward();
         unsigned long settle = (unsigned long)(Units::rpmToSps(i, launchRpm) * 1000.0f / launchAcc) + 100;
@@ -331,12 +330,12 @@ void runKatapult(uint8_t i) {
         float ratio = measureMotorRatio(i, launchRpm, 800);
         Logger::addLog(String("KAT r=") + r + " ratio=" + String(ratio,2));
         Telemetry::recordDataPoint(i, "KAT", launchRpm);
-        if (ratio < STALL_RATIO_THR) { Logger::addLog("KAT: Stall"); break; }
+        if (ratio < STALL_RATIO_THR) { Logger::addLog("KAT: Stall"); stalled = true; break; }
         s->stopMove();
         if (!waitOrStop(i, 5000)) break;
         delay(200);
     }
-    resetMotorState(i, true);
+    resetMotorState(i, stalled);
 }
 
 // --- 6) FreqSweep: Linearer Chirp 10–200 Hz, Schwingung um Sensor-Mitte ---
@@ -373,7 +372,10 @@ void runFreqSweep(uint8_t i) {
         float f = FREQ_MIN_HZ + (FREQ_MAX_HZ - FREQ_MIN_HZ) * progress;
         float ampF = (float)FREQ_ACCEL_MAX / (16.0f * f * f);
         long  amp  = (long)min(ampF * 0.9f, (float)Stepper::stepsPerRev(i) / 4.0f);
-        if (amp < FREQ_AMP_MIN) break;
+        
+        // Wenn Amplitude zu klein für Tacho-Check, trotzdem weiter swingen 
+        // (Wahrnehmungstests), aber bei amp=0 aufhören.
+        if (amp < 2) break; 
 
         s->setSpeedInHz((uint32_t)sqrtf((float)FREQ_ACCEL_MAX * (float)amp));
         s->setAcceleration(FREQ_ACCEL_MAX);
@@ -383,19 +385,12 @@ void runFreqSweep(uint8_t i) {
             Telemetry::recordDataPoint(i, "FS", f);
             vTaskDelay(pdMS_TO_TICKS(5));
         }
-
-        // Tacho-Check nur sinnvoll wenn Amplitude > halbe Zunge
-        bool tachoTouches = (amp > zungenHalfSteps);
-        if (tachoTouches) {
-            // Pulses sollten >0 sein bei Bewegung durch Zunge
-            // (genaue Frequenz-Korrelation hier nicht möglich, nur Anwesenheit)
-        }
         dir = -dir;
     }
     uint32_t pSweepEnd = HalTacho::getPulseCount(i);
     Logger::addLog(String("FreqSweep total pulses: ") + (pSweepEnd - pSweepStart));
 
-    resetMotorState(i, true);
+    resetMotorState(i, false);
 }
 
 // --- 7) CurrentSweepHiRPM: B-EMF Sweet-Spot bei hoher RPM ---
@@ -420,7 +415,7 @@ void runCurrentSweepHiRPM(uint8_t i) {
     unsigned long spinupMs = (unsigned long)(targetSps * 1000.0f / spinupAcc) + 200;
     delay(spinupMs);
 
-    // Strom-Sweep abwärts vom Soft-Limit, suche Sweet-Spot wo Stall einsetzt
+    bool stalled = false;
     for (uint16_t mA = MOTOR_CURRENT_HARD_MAX; mA >= 200 && !Op::pendingStop; mA -= 100) {
         Tmc::applyDefaults(i, mA);
         unsigned long t0 = millis();
@@ -432,10 +427,11 @@ void runCurrentSweepHiRPM(uint8_t i) {
         Logger::addLog(String("CS mA=") + mA + " ratio=" + String(ratio,2));
         if (ratio < STALL_RATIO_THR) {
             Logger::addLog(String("Sweet-Spot Floor: ") + (mA + 100) + "mA");
+            stalled = true;
             break;
         }
     }
-    resetMotorState(i, true);
+    resetMotorState(i, stalled);
 }
 
 // Performance Show: alle Tests in sinnvoller Reihenfolge.
