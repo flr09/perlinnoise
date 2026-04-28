@@ -340,10 +340,11 @@ void runKatapult(uint8_t i) {
     resetMotorState(i, stalled);
 }
 
-// --- 6) FreqSweep: Linearer Chirp 10–200 Hz, Schwingung um Sensor-Mitte ---
-// Wichtig: Schwingt um 0° (= Sensor-Mitte). Bei Amplitude > Zunge/2 wird der
-// Tacho pro Halbschwingung mehrfach passiert. Bei sehr kleinen Amplituden
-// (hohe Freq) kein Tacho-Check möglich → loggen und weiter.
+// --- 6) FreqSweep: Linearer Chirp 10–200 Hz, Schwingung um SENSOR-KANTE ---
+// Durch das Schwingen um die Kante (triggerStartDeg) statt um die Mitte
+// wird bei JEDER Amplitude (auch < 1°) ein Tacho-Puls erzeugt, solange der
+// Motor die Schritte hält. Das erlaubt eine präzise Analyse des
+// Frequenzgangs bis in den hohen Bereich.
 void runFreqSweep(uint8_t i) {
     if (i >= 4) return;
     v4::CalibrationData cal; StorageCalib::load(i, cal);
@@ -352,47 +353,52 @@ void runFreqSweep(uint8_t i) {
     Stepper::setMicrosteps(i, 64);
     auto* s = Stepper::get(i);
     if (!s) { resetMotorState(i, false); return; }
-    Logger::addLog("Freq Sweep (um Sensor-Mitte schwingend)");
+    Logger::addLog("Freq Sweep (um Sensor-KANTE schwingend)");
 
-    // Auf 0° fahren — Schwingung erfolgt um diese Position
+    // Auf die Start-Kante fahren (ca. -15°)
+    float edgeDeg = cal.triggerStartDeg;
     s->setSpeedInHz(8000); s->setAcceleration(20000);
-    Motion::moveToDeg(i, 0.0f);
+    Motion::moveToDeg(i, edgeDeg);
     if (!waitOrStop(i, 5000)) { resetMotorState(i, false); return; }
-
-    // Geschätzte Zungenbreite ~30° (aus Cal): Amplituden über 15° passieren Tacho
-    float zungenHalfDeg = (cal.triggerEndDeg - cal.triggerStartDeg) * 0.5f;
-    long  zungenHalfSteps = (long)(zungenHalfDeg * Stepper::stepsPerRev(i) / 360.0f);
+    long edgePos = s->getCurrentPosition();
 
     unsigned long tStart = millis();
     float tDur = FREQ_SWEEP_S * 1000.0f;
     int dir = 1;
     uint32_t pSweepStart = HalTacho::getPulseCount(i);
+    
     while (!Op::pendingStop) {
         float elapsed  = (float)(millis() - tStart);
         float progress = elapsed / tDur;
         if (progress >= 1.0f) break;
+
         float f = FREQ_MIN_HZ + (FREQ_MAX_HZ - FREQ_MIN_HZ) * progress;
+        // Amplitude nimmt mit 1/f^2 ab.
         float ampF = (float)FREQ_ACCEL_MAX / (16.0f * f * f);
-        long  amp  = (long)min(ampF * 0.9f, (float)Stepper::stepsPerRev(i) / 4.0f);
+        long  amp  = (long)min(ampF * 0.9f, (float)Stepper::stepsPerRev(i) / 8.0f);
         
-        // Wenn Amplitude zu klein für Tacho-Check, trotzdem weiter swingen 
-        // (Wahrnehmungstests), aber bei amp=0 aufhören.
         if (amp < 2) break; 
 
         s->setSpeedInHz((uint32_t)sqrtf((float)FREQ_ACCEL_MAX * (float)amp));
         s->setAcceleration(FREQ_ACCEL_MAX);
-        s->moveTo(dir * amp);
+        
+        // Schwinge um die exakte Kante
+        s->moveTo(edgePos + (dir * amp));
+        
         while (s->isRunning()) {
             if (Op::pendingStop) { s->stopMove(); break; }
             Telemetry::recordDataPoint(i, "FS", f);
-            vTaskDelay(pdMS_TO_TICKS(5));
+            vTaskDelay(pdMS_TO_TICKS(2)); // Höhere Telemetrie-Auflösung beim Sweep
         }
         dir = -dir;
     }
-    uint32_t pSweepEnd = HalTacho::getPulseCount(i);
-    Logger::addLog(String("FreqSweep total pulses: ") + (pSweepEnd - pSweepStart));
-
-    resetMotorState(i, false);
+    
+    uint32_t pTotal = HalTacho::getPulseCount(i) - pSweepStart;
+    Logger::addLog(String("FreqSweep fertig. Impulse: ") + pTotal);
+    
+    // Wenn 0 Impulse bei FreqSweep (obwohl wir an der Kante schwingen), 
+    // dann war es ein Stall oder mechanisches Problem.
+    resetMotorState(i, (pTotal == 0));
 }
 
 // --- 7) CurrentSweepHiRPM: B-EMF Sweet-Spot bei hoher RPM ---
