@@ -44,20 +44,21 @@ static void tickMotor(uint8_t i) {
     auto* s = Stepper::get(i);
     if (!s) return;
 
-    // Tacho-Pulse-Edge erkennen
-    uint32_t puls = HalTacho::getPulseCount(i);
-    if (puls == lastSeenPulse[i]) return;     // keine neue Umdrehung
-    lastSeenPulse[i] = puls;
+    // Tacho-Pulse erkennen
+    uint32_t currentPulseCount = HalTacho::getPulseCount(i);
+    uint32_t numNewPulses = currentPulseCount - lastSeenPulse[i];
+    if (numNewPulses == 0) return;     // kein neuer Puls seit letztem Tick
+    lastSeenPulse[i] = currentPulseCount;
 
     long curPos = s->getCurrentPosition();
-    long delta = curPos - lastSeenStepperPos[i];
+    long deltaTotal = curPos - lastSeenStepperPos[i];
     lastSeenStepperPos[i] = curPos;
 
-    // Tacho-Periode ist in HalTacho gespeichert
-    uint32_t periodMs = HalTacho::tacho[i].periodMs;
+    long deltaPerPulse = deltaTotal / (long)numNewPulses;
+    uint32_t periodUs = HalTacho::tacho[i].periodUs;
 
-    state[i].lastDelta    = delta;
-    state[i].lastPeriodMs = periodMs;
+    state[i].lastDeltaPerPulse = deltaPerPulse;
+    state[i].lastPeriodUs = periodUs;
 
     if (firstRev[i]) {
         firstRev[i] = false;
@@ -70,8 +71,8 @@ static void tickMotor(uint8_t i) {
         return;
     }
 
-    // Drehzahländerung > 8% → re-arm
-    if (state[i].active && fabsf(rpm - lastArmedRpm[i]) > lastArmedRpm[i] * 0.08f) {
+    // Drehzahländerung > 10% → re-arm
+    if (state[i].active && fabsf(rpm - lastArmedRpm[i]) > lastArmedRpm[i] * 0.10f) {
         state[i].active = false;
         state[i].settleCount = 0;
         state[i].errorCount  = 0;
@@ -80,15 +81,16 @@ static void tickMotor(uint8_t i) {
 
     // Evidence A: Tacho-Periode vs. Profil
     bool evidA = false;
-    float pMean, pSigma;
-    if (MotorProfileNs::getExpected(i, rpm, &pMean, &pSigma)) {
-        float dev = fabsf((float)periodMs - pMean);
-        evidA = dev > 3.0f * pSigma;
+    float pMeanUs, pSigmaUs;
+    if (MotorProfileNs::getExpected(i, rpm, &pMeanUs, &pSigmaUs)) {
+        // MotorProfile nutzt intern nun auch Us
+        float dev = fabsf((float)periodUs - pMeanUs);
+        evidA = dev > 3.5f * pSigmaUs; // etwas toleranter
     }
 
-    // Evidence B: Schritt-Delta
+    // Evidence B: Schritt-Delta pro Puls (sollte stepsPerRev sein)
     long expected = (long)Stepper::stepsPerRev(i);
-    bool evidB = expected > 0 && labs(labs(delta) - expected) > expected / 10;
+    bool evidB = expected > 0 && labs(labs(deltaPerPulse) - expected) > expected / 8;
 
     // Evidence C: SG_RESULT unter Threshold
     v4::CalibrationData cal; StorageCalib::load(i, cal);
@@ -107,8 +109,7 @@ static void tickMotor(uint8_t i) {
                 state[i].active    = false;
                 Op::pendingStop = true;
                 Logger::addLog(String("WD M") + (char)('X'+i) + " FAULT 0b" +
-                               String(faultCode, BIN) + " d=" + delta + "/" + expected +
-                               " p=" + periodMs + "ms sg=" + Telemetry::getLatestSg(i));
+                               String(faultCode, BIN) + " d=" + deltaPerPulse + " p=" + (periodUs/1000) + "ms");
             }
         }
         state[i].settleCount = 0;

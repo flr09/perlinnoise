@@ -41,17 +41,17 @@ static void tachoPollTask(void*) {
             if (lastSensorState[i] == -1) { lastSensorState[i] = now; continue; }
             if (lastSensorState[i] == HIGH && now == LOW) {
                 tacho[i].pulseCount++;
-                unsigned long ms = millis();
-                if (tacho[i].lastLowMs > 0) {
-                    unsigned long p = ms - tacho[i].lastLowMs;
-                    if (p >= NOISE_FILTER_MS) tacho[i].periodMs = p;
+                unsigned long us = micros();
+                if (tacho[i].lastLowUs > 0) {
+                    unsigned long p = us - tacho[i].lastLowUs;
+                    if (p >= NOISE_FILTER_US) tacho[i].periodUs = p;
                 }
-                tacho[i].lastLowMs = ms;
+                tacho[i].lastLowUs = us;
                 tacho[i].latch = true;
             }
             lastSensorState[i] = now;
         }
-        vTaskDelay(pdMS_TO_TICKS(1));  // 1kHz Polling — Nyquist bis ~30000 RPM
+        vTaskDelay(pdMS_TO_TICKS(1));  // 1kHz Polling
     }
 }
 
@@ -64,7 +64,7 @@ void reattach() {
         } else {
             pinMode(pin, INPUT_PULLUP);
         }
-        Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " (poll-200Hz)");
+        Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " (poll-1kHz)");
     }
     (void)tachoIsr<0>;
     (void)tachoIsr<1>;
@@ -73,23 +73,18 @@ void reattach() {
 
 void init() {
     reattach();
-    // Tacho-Poll-Task auf Core 1 (App-CPU) mit Prio 2 — höher als
-    // MovementTask (Prio 1). Core 0 ist mit WiFi/Telemetry/Watchdog
-    // belastet, Polling wurde dort bei schneller Bewegung verdrängt
-    // → Pulses verfehlt. Core 1 ist sonst nur Movement → Polling
-    // kann zuverlässig 200Hz halten, MovementTask kommt trotzdem dran.
     xTaskCreatePinnedToCore(tachoPollTask, "TachoPoll", 2048, nullptr, 2, nullptr, 1);
 }
 
 uint16_t getRpm(uint8_t motorIdx) {
     if (motorIdx >= 4) return 0;
-    unsigned long period, lastT;
+    unsigned long periodUs, lastTUs;
     portENTER_CRITICAL(&Sync::motorMux);
-    period = tacho[motorIdx].periodMs;
-    lastT  = tacho[motorIdx].lastLowMs;
+    periodUs = tacho[motorIdx].periodUs;
+    lastTUs  = tacho[motorIdx].lastLowUs;
     portEXIT_CRITICAL(&Sync::motorMux);
-    if (period == 0 || (millis() - lastT > STALE_TIMEOUT_MS)) return 0;
-    return (uint16_t)min(9999UL, 60000UL / period);
+    if (periodUs == 0 || (micros() - lastTUs > STALE_TIMEOUT_MS * 1000UL)) return 0;
+    return (uint16_t)min(9999UL, 60000000UL / periodUs);
 }
 
 uint32_t getPulseCount(uint8_t motorIdx) {

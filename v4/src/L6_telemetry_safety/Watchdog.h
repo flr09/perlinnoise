@@ -19,8 +19,8 @@ struct State {
     uint8_t  lastFaultCode = 0;   // bit0=SG, bit1=StepDelta, bit2=Periode
     uint8_t  errorCount    = 0;
     uint8_t  settleCount   = 0;
-    long     lastDelta     = 0;
-    uint32_t lastPeriodMs  = 0;
+    long     lastDeltaPerPulse = 0;
+    uint32_t lastPeriodUs  = 0;
 };
 
 extern State state[4];

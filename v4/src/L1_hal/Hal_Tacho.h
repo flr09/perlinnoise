@@ -12,12 +12,12 @@
 
 namespace HalTacho {
 
-constexpr unsigned long NOISE_FILTER_MS = 10;
+constexpr unsigned long NOISE_FILTER_US = 5000;  // 5ms filter
 constexpr unsigned long STALE_TIMEOUT_MS = 2000;
 
 struct TachoState {
-    volatile unsigned long periodMs    = 0;
-    volatile unsigned long lastLowMs   = 0;
+    volatile unsigned long periodUs    = 0;
+    volatile unsigned long lastLowUs   = 0;
     volatile uint32_t      pulseCount  = 0;
     volatile bool          latch       = false;  // ISR-Latch für Cal/Home
     volatile long          latchPos    = 0;      // Stepper-Pos bei Latch-Flanke
