@@ -32,6 +32,14 @@
 #include "L7_web/Wifi.h"
 #include "L7_web/WebServer.h"
 
+static void SynthesisTask(void*) {
+    Logger::addLog("SynthesisTask: Core 1");
+    for (;;) {
+        Synthesis::tick();
+        vTaskDelay(pdMS_TO_TICKS(10)); // 100 Hz Update
+    }
+}
+
 static void MovementTask(void*) {
     Logger::addLog("MovementTask: Core 1");
     for (;;) {
@@ -104,9 +112,6 @@ static void MovementTask(void*) {
             Op::pendingStop = false;
         }
 
-        // Bewegungs-Synthese läuft kontinuierlich solange running=true
-        Synthesis::tick();
-
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
@@ -131,7 +136,8 @@ void setup() {
     Watchdog::startTask();      // L6 — 50 Hz Watchdog-Task auf Core 0
     Synthesis::init();          // L5b — Bewegungs-Synthese-Pipeline
 
-    Platform::startMovementTask(MovementTask);
+    Platform::startMovementTask(MovementTask, "Move", 8192, 1);
+    Platform::startMovementTask(SynthesisTask, "Synth", 4096, 2); // Höhere Prio
 }
 
 void loop() {
