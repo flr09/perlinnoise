@@ -8,6 +8,8 @@
 #include "../../L3_driver/Tmc2209.h"
 #include "../../L3_driver/Motion.h"
 #include "../../L3_driver/Units.h"
+#include "../../L4_mechanics/Calibration.h"
+#include "../../L4_mechanics/Homing.h"
 #include "../../L6_telemetry_safety/OpState.h"
 #include "../../L6_telemetry_safety/Telemetry.h"
 
