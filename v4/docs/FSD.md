@@ -398,3 +398,20 @@ v4/
 ## 9. Lebendes Dokument
 
 Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden hier dokumentiert (was, warum verworfen, was stattdessen). Pro Phase wird der entsprechende Abschnitt am Ende mit „Lessons learned" ergänzt.
+
+### Phase 6+ Lessons Learned (2026-04-29)
+
+- **Tacho-Präzision:** Die Umstellung von `millis()` auf `micros()` in `HalTacho` ist zwingend. Bei 3.000 RPM (20ms/Umdrehung) führt ein Jitter von 1ms (5%) zu Fehlalarmen im Watchdog (Schwellwert 8%). Mit `micros()` sinkt der Messfehler auf <0.01%.
+- **Task-Entkopplung:** Die `SynthesisTask` muss zwingend von der `MovementTask` getrennt sein. Blockierende Engineering-Tests (SpeedTest, Homing) in der `MovementTask` ließen zuvor alle anderen Motoren einfrieren. Jetzt läuft die Synthese stabil mit 100Hz auf Core 1 (Prio 2), während Service-Tasks mit Prio 1 laufen.
+- **FreqSweep Geometrie:** Ein Schwingen um die Sensor-Mitte führt bei kleinen Amplituden (hohe Frequenzen) zu "0 Pulsen", da der Sensor nie verlassen wird. Der Sweep muss zwingend an der **Sensorkante** (`triggerStartDeg`) oszillieren, um bei jeder Amplitude eine Rückmeldung zu garantieren.
+- **Auto-Recovery:** Nach einem Stall im Parcours ist die absolute Position verloren. Ein automatisches `Homing::run()` nach jedem erkannten Stall in den Tests stellt die mechanische Integrität für nachfolgende Tests sicher.
+- **OTA-Fallback:** `ArduinoOTA` (Port 3232) erwies sich als instabil bei Netzwerk-Timeouts. `ElegantOTA` (HTTP-basiert via Port 80) wurde als robustes Fallback integriert.
+
+---
+
+## 10. Revisionshistorie
+
+| Version | Datum | Autor | Änderungen |
+|---|---|---|---|
+| 4.0.0 | 2026-04-26 | User | Initiale FSD für modulare v4 |
+| 4.0.1 | 2026-04-29 | Gemini | Update Phase 6+: micros-Timing, Synthesis-Task, Edge-FreqSweep, Auto-Homing |
