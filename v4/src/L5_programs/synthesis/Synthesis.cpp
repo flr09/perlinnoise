@@ -2,9 +2,12 @@
 #include "RuntimeConfig.h"
 #include "NoiseEngine.h"
 #include "../../L0_platform/Logger.h"
+#include "../../L0_platform/Types.h"
 #include "../../L1_hal/Hal_Pins.h"
+#include "../../L2_storage/Storage_Calib.h"
 #include "../../L3_driver/Stepper.h"
 #include "../../L3_driver/Tmc2209.h"
+#include "../../L3_driver/Units.h"
 #include "../../L6_telemetry_safety/OpState.h"
 #include <math.h>
 
@@ -50,24 +53,45 @@ void init() {
     lastTickMs = 0;
 }
 
+// Engine-Cap aus NVS-Charakterisierung. Wenn Motor nicht kalibriert ist
+// (cal.valid = false → noch keine SpeedTest/Inertia gelaufen) gilt der
+// konservative Hardcoded-Default. 95%-Marge zur gemessenen Stall-Grenze.
+static constexpr float SAFETY_FACTOR = 0.95f;
+static constexpr uint32_t DEFAULT_SPS_NOISE  = 8000;
+static constexpr uint32_t DEFAULT_ACC_NOISE  = 4000;
+static constexpr uint32_t DEFAULT_SPS_STEP   = 20000;
+
+static void applyEngineCap(uint8_t i, bool stepMode) {
+    auto* s = Stepper::get(i);
+    if (!s) return;
+    v4::CalibrationData cal;
+    StorageCalib::load(i, cal);
+
+    uint32_t spsCap = stepMode ? DEFAULT_SPS_STEP : DEFAULT_SPS_NOISE;
+    uint32_t accCap = stepMode ? (uint32_t)v4::rt.accelMax : DEFAULT_ACC_NOISE;
+
+    if (cal.valid && cal.maxRpm > 0.0f) {
+        uint32_t boundSps = (uint32_t)(Units::rpmToSps(i, cal.maxRpm) * SAFETY_FACTOR);
+        if (boundSps > 0 && (stepMode ? boundSps < spsCap : true)) spsCap = boundSps;
+    }
+    if (cal.valid && cal.maxAccel > 0.0f) {
+        uint32_t boundAcc = (uint32_t)(cal.maxAccel * SAFETY_FACTOR);
+        if (boundAcc > 0 && boundAcc < accCap) accCap = boundAcc;
+    }
+
+    s->setSpeedInHz(spsCap);
+    s->setAcceleration(accCap);
+}
+
 void start() {
     if (v4::rt.running) return;
     unsigned long now = millis();
+    bool stepMode = (v4::rt.moveType == 6);
     // Power für alle 4 Motoren
     for (uint8_t i = 0; i < 4; i++) {
         Tmc::setPower(i, true);
         Stepper::setMicrosteps(i, 16);
-        auto* s = Stepper::get(i);
-        if (s) {
-            // Im STEP-Mode höhere Acceleration nutzen — sonst smoother Default
-            if (v4::rt.moveType == 6) {
-                s->setSpeedInHz(20000);
-                s->setAcceleration(v4::rt.accelMax);
-            } else {
-                s->setSpeedInHz(8000);
-                s->setAcceleration(4000);
-            }
-        }
+        applyEngineCap(i, stepMode);
         // STEP-State zurücksetzen. holdStartMs auf jetzt setzen, damit der
         // erste Hold-Zyklus an Position 0° (currentStep=0) beginnt — sonst
         // springt der Motor ohne Wartezeit direkt auf 90° (currentStep=1).
@@ -144,8 +168,9 @@ void tick() {
                     float target = (float)st.currentStep * v4::rt.stepAngle
                                  + (float)st.currentStep * v4::rt.stepOffset
                                  + phaseOff;
-                    s->setAcceleration(v4::rt.accelMax);
-                    s->setSpeedInHz(20000);  // hoch — limitiert ohnehin durch Acceleration über kurze Strecke
+                    // STEP-Modus liest accelMax-Slider live, aber capped via Engine-Cap
+                    // (setSpeedInHz wurde in start() gesetzt und bleibt stehen).
+                    applyEngineCap(i, true);
                     s->moveTo((long)(target * (float)Stepper::stepsPerRev(i) / 360.0f));
                     st.isMoving = true;
                 }

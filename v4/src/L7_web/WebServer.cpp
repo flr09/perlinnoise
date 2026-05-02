@@ -2,8 +2,11 @@
 #include "Wifi.h"
 #include "../L0_platform/Platform.h"
 #include "../L0_platform/Logger.h"
+#include "../L0_platform/Types.h"
 #include "../L1_hal/Hal_Pins.h"
 #include "../L1_hal/Hal_Tacho.h"
+#include "../L2_storage/Storage_Calib.h"
+#include "../L3_driver/Units.h"
 #include "../L3_driver/Tmc2209.h"
 #include "../L3_driver/Stepper.h"
 #include "../L3_driver/Motion.h"
@@ -178,6 +181,7 @@ html,body{background:var(--pa);color:var(--ink);
       <div class="lbl"><span class="n">4</span><span>Performance</span><span class="ln"></span></div>
       <div class="perf">
       <h3>Movement Synthesis</h3>
+      <div class="caps" id="caps" style="font-size:10px;letter-spacing:.10em;text-transform:uppercase;color:var(--mute);margin:0 0 8px 0;border-left:2px solid var(--ink);padding-left:8px;line-height:1.5">Engine-Cap: lädt …</div>
       <div class="row"><label>Pattern</label>
         <select id="psType" onchange="setP('type',this.value|0)">
           <option value="0">Linear noise</option>
@@ -350,8 +354,26 @@ function loadConfig(){
   }).catch(function(){})
 }
 
+function loadBounds(){
+  fetch('/bounds').then(function(r){return r.json()}).then(function(b){
+    var rows=[];
+    for(var i=0;i<4;i++){
+      var m=b.motors[i];
+      if(m.valid){
+        rows.push(MNAMES[i]+': '+m.maxRpm+' rpm · '+(m.maxAccel/1000).toFixed(0)+'k acc');
+      } else {
+        rows.push(MNAMES[i]+': uncalibrated → 8000 sps / 4000 acc default');
+      }
+    }
+    document.getElementById('caps').innerHTML='Engine-Cap (95% margin)<br>'+rows.join('<br>');
+  }).catch(function(){
+    document.getElementById('caps').textContent='Engine-Cap: /bounds nicht erreichbar';
+  })
+}
+
 function poll(){fetch('/status').then(function(r){return r.json()}).then(apply).catch(function(){})}
 loadConfig();
+loadBounds();
 setInterval(poll,500);poll();
 </script>
 </body>
@@ -749,6 +771,32 @@ void begin() {
         getF("ht",     c.holdMs);      // hold time [ms]
         if (r->hasParam("am")) c.accelMax = (uint32_t)r->getParam("am")->value().toInt();
         r->send(200, "text/plain", "OK");
+    });
+
+    // /bounds — Pro-Motor-Charakterisierungs-Werte aus NVS. Quelle für die in
+    // Synthesis::start() / applyEngineCap() angewandten Caps. Slider in der UI
+    // dürfen nicht über diese Werte hinaus angeboten werden.
+    server.on("/bounds", HTTP_GET, [](AsyncWebServerRequest* r) {
+        char buf[640];
+        int n = snprintf(buf, sizeof(buf), "{\"motors\":[");
+        for (uint8_t i = 0; i < 4; i++) {
+            v4::CalibrationData cal;
+            StorageCalib::load(i, cal);
+            uint32_t maxSps = (cal.valid && cal.maxRpm > 0.0f)
+                ? (uint32_t)Units::rpmToSps(i, cal.maxRpm) : 0;
+            n += snprintf(buf + n, sizeof(buf) - n,
+                "%s{\"valid\":%s,\"maxRpm\":%.0f,\"maxAccel\":%.0f,"
+                "\"maxSps\":%lu,\"learnedCurrentMA\":%u,\"sgThrs\":%u}",
+                i == 0 ? "" : ",",
+                cal.valid ? "true" : "false",
+                cal.maxRpm, cal.maxAccel,
+                (unsigned long)maxSps,
+                cal.learnedCurrentMA, cal.sgThrs);
+        }
+        n += snprintf(buf + n, sizeof(buf) - n, "]}");
+        AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        r->send(res);
     });
 
     server.on("/config", HTTP_GET, [](AsyncWebServerRequest* r) {
