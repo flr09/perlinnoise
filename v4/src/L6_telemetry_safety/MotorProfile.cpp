@@ -19,7 +19,7 @@ void clearProfile(uint8_t i) {
     memset(profiles[i].points, 0, sizeof(profiles[i].points));
 }
 
-bool addPoint(uint8_t i, float rpm, float pMean, float pSigma,
+bool addPoint(uint8_t i, float rpm, float pMeanUs, float pSigmaUs,
               uint16_t sgMean, uint8_t cs) {
     if (i >= 4) return false;
     auto& p = profiles[i];
@@ -27,20 +27,20 @@ bool addPoint(uint8_t i, float rpm, float pMean, float pSigma,
     uint8_t pos = p.count;
     for (uint8_t k = 0; k < p.count; k++) if (rpm < p.points[k].rpm) { pos = k; break; }
     for (uint8_t k = p.count; k > pos; k--) p.points[k] = p.points[k-1];
-    p.points[pos] = { rpm, pMean, pSigma, sgMean, cs };
+    p.points[pos] = { rpm, pMeanUs, pSigmaUs, sgMean, cs };
     p.count++;
     p.valid = (p.count >= 3);
     return true;
 }
 
-bool getExpected(uint8_t i, float rpm, float* outMean, float* outSigma) {
+bool getExpected(uint8_t i, float rpm, float* outMeanUs, float* outSigmaUs) {
     if (i >= 4) return false;
     auto& p = profiles[i];
     if (!p.valid || p.count < 2) return false;
     if (rpm < p.points[0].rpm) return false;
     if (rpm >= p.points[p.count - 1].rpm) {
-        *outMean  = p.points[p.count-1].periodMean;
-        *outSigma = p.points[p.count-1].periodSigma;
+        *outMeanUs  = p.points[p.count-1].periodMeanUs;
+        *outSigmaUs = p.points[p.count-1].periodSigmaUs;
         return true;
     }
     for (uint8_t k = 0; k < p.count - 1; k++) {
@@ -48,9 +48,9 @@ bool getExpected(uint8_t i, float rpm, float* outMean, float* outSigma) {
         const auto& hi = p.points[k + 1];
         if (rpm >= lo.rpm && rpm < hi.rpm) {
             float t = (rpm - lo.rpm) / (hi.rpm - lo.rpm);
-            *outMean  = lo.periodMean  + t * (hi.periodMean  - lo.periodMean);
-            *outSigma = lo.periodSigma + t * (hi.periodSigma - lo.periodSigma);
-            if (*outSigma < 1.0f) *outSigma = 1.0f;
+            *outMeanUs  = lo.periodMeanUs  + t * (hi.periodMeanUs  - lo.periodMeanUs);
+            *outSigmaUs = lo.periodSigmaUs + t * (hi.periodSigmaUs - lo.periodSigmaUs);
+            if (*outSigmaUs < 10.0f) *outSigmaUs = 10.0f; // min sigma 10us
             return true;
         }
     }

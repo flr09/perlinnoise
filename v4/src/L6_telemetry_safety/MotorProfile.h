@@ -10,12 +10,12 @@
 namespace MotorProfileNs {
 
 constexpr uint8_t  BINS    = 20;
-constexpr uint32_t NVS_VER = 4001U;
+constexpr uint32_t NVS_VER = 4002U;
 
 struct ProfilePoint {
     float    rpm;
-    float    periodMean;
-    float    periodSigma;
+    float    periodMeanUs;
+    float    periodSigmaUs;
     uint16_t sgMean;
     uint8_t  csActual;
 };

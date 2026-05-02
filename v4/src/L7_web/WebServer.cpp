@@ -13,6 +13,7 @@
 #include "../L6_telemetry_safety/Telemetry.h"
 #include "../L6_telemetry_safety/Watchdog.h"
 #include "../L6_telemetry_safety/MotorProfile.h"
+#include <ElegantOTA.h>
 
 namespace WebServer {
 
@@ -807,7 +808,7 @@ void begin() {
                 i == 0 ? "" : ",",
                 w.active ? "true":"false", w.triggered ? "true":"false",
                 w.lastFaultCode, w.errorCount, w.settleCount,
-                w.lastDelta, (unsigned long)w.lastPeriodMs,
+                w.lastDeltaPerPulse, (unsigned long)(w.lastPeriodUs / 1000),
                 MotorProfileNs::profiles[i].valid ? "true":"false",
                 MotorProfileNs::profiles[i].count);
         }
@@ -818,7 +819,9 @@ void begin() {
     });
 
     server.begin();
-    Logger::addLog("HTTP: server up on port 80");
+    ElegantOTA.begin(&server, "admin", "12345678");
+    ElegantOTA.setAutoReboot(true);
+    Logger::addLog("HTTP: server up on port 80 (+OTA)");
 }
 
 } // namespace WebServer

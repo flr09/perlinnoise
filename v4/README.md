@@ -1,6 +1,6 @@
 # PerlinNoise v4 — Modulare Motorsteuerung
 
-**Stand:** 2026-04-26 (Phase 0 — Skelett angelegt, kein Code)
+**Stand:** 2026-05-02 — Firmware **v4.0.2** läuft auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22). Phasen 1–6 abgeschlossen, Phase 7 (GUI-Reaktivierung) startet.
 **Branch:** `v4-modular`
 
 ## Was ist v4?
@@ -26,13 +26,16 @@ Vollständige Spezifikation: [`docs/FSD.md`](docs/FSD.md).
 
 ## Entwicklungsstand
 
-- **Phase 0** — Layer-Struktur angelegt, FSD geschrieben ✅ aktuell
-- **Phase 1** — Skelett: L0+L1+L2+L3+Minimal-L7 lauffähig
-- **Phase 2** — Mechanik (L4) + Multi-Motor
-- **Phase 3** — Charakterisierungs-Tests (L5a)
-- **Phase 4** — Bewegungs-Synthese (L5b)
-- **Phase 5** — Watchdog + Profile (L6)
-- **Phase 6** — Voll-UI (L7)
+- **Phase 0** — Layer-Struktur angelegt, FSD geschrieben ✅
+- **Phase 1** — Skelett: L0+L1+L2+L3+Minimal-L7 lauffähig ✅
+- **Phase 2** — Mechanik (L4) + Multi-Motor ✅
+- **Phase 3** — Charakterisierungs-Tests (L5a) ✅ (Vorführung 7/7 grün, Z-Motor)
+- **Phase 4** — Bewegungs-Synthese (L5b) ✅ Engine, Bindung an UI offen
+- **Phase 5** — Watchdog + Profile (L6) ✅
+- **Phase 6** — Voll-UI (L7) ✅ Layout, GUI-Bindung kaputt ⚠️
+- **Phase 7** — GUI-Reaktivierung (Bounds → Slider, /set-Echo, /preview, Wellenform-Canvas) ◀ **aktuell**
+
+Detailliert in [`../AGENT_COORDINATION.md`](../AGENT_COORDINATION.md).
 
 ## Vorgänger
 
@@ -42,4 +45,7 @@ Vollständige Spezifikation: [`docs/FSD.md`](docs/FSD.md).
 
 ## Build
 
-PlatformIO-Env wird in Phase 1 angelegt. Bis dahin: kein Build möglich.
+PlatformIO. Envs in `../platformio.ini`:
+- `fysetc_e4_v4` — USB-Build (Flash via Flashbox/`/dev/ttyUSB0`)
+- `fysetc_e4_v4_ota` — OTA → `perlin-v4.intern.gaengeviertel.de`
+- alternativ: ElegantOTA über die Web-UI (`/update`, Auth `admin/12345678`)

@@ -14,12 +14,12 @@ TachoState tacho[4];
 template<uint8_t I>
 static void IRAM_ATTR tachoIsr() {
     tacho[I].pulseCount++;
-    unsigned long now = millis();
-    if (tacho[I].lastLowMs > 0) {
-        unsigned long p = now - tacho[I].lastLowMs;
-        if (p >= NOISE_FILTER_MS) tacho[I].periodMs = p;
+    unsigned long now = micros();
+    if (tacho[I].lastLowUs > 0) {
+        unsigned long p = now - tacho[I].lastLowUs;
+        if (p >= NOISE_FILTER_US) tacho[I].periodUs = p;
     }
-    tacho[I].lastLowMs = now;
+    tacho[I].lastLowUs = now;
     tacho[I].latch = true;
 }
 

@@ -1,6 +1,6 @@
 # FSD — PerlinNoise v4 (Modular)
 
-**Stand:** 2026-04-26
+**Stand:** 2026-05-02 — Firmware **v4.0.2** auf Hardware, Phasen 1–6 abgeschlossen, Phase 7 (GUI-Reaktivierung) startet.
 **Branch:** `v4-modular`
 **Vorgänger:** `v4_iteration1/` (3 Commits, Watchdog + MotorProfile, nicht funktional integriert)
 **Referenz-Implementierung:** `v3/` (v3.7.32, online unter `perlin-v3.intern.gaengeviertel.de`)
@@ -407,6 +407,27 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 - **Auto-Recovery:** Nach einem Stall im Parcours ist die absolute Position verloren. Ein automatisches `Homing::run()` nach jedem erkannten Stall in den Tests stellt die mechanische Integrität für nachfolgende Tests sicher.
 - **OTA-Fallback:** `ArduinoOTA` (Port 3232) erwies sich als instabil bei Netzwerk-Timeouts. `ElegantOTA` (HTTP-basiert via Port 80) wurde als robustes Fallback integriert.
 
+### Phase 4.0.2 Lessons Learned (2026-05-02)
+
+- **µs-Migration vollständig durch:** `Hal_Tacho.cpp`, `MotorProfile.cpp/h` und das JSON-Echo in `/watchdog` ziehen die ms→µs-Umstellung aus 4.0.1 nach. NVS-Layout-Version `MotorProfileNs::NVS_VER` 4001 → **4002** (alte Profile werden invalidiert, automatischer Re-Calib beim ersten Boot nach Update).
+- **ElegantOTA produktiv** unter `/update` (Auth `admin/12345678`) — nicht mehr nur Code-Bibliothek, sondern in `WebServer::begin()` registriert.
+- **Charakterisierung verifiziert auf Z-Motor (Vorführung 7/7 grün, 2026-05-02 09:04–09:06):** `maxRpm=1500` (Stall bei 1600), `maxAccel=500000`, Sweet-Spot Floor `1000mA` (über Soft-Limit 900mA → Hinweis: bei dauerhaft >900mA thermische Last beobachten), `SG-Thrs=180`, Coast-Pulses 0 → mechanisch sauber. **X/Y/E** noch ohne Sensor-Halterung, Charakterisierung deshalb nur Z.
+- **GUI-Bindung kaputt** (Phase 7 startet hier): Drehregler in der Web-UI senden zwar via `/set` an die Engine (`v4::rt`), die Engine reagiert korrekt (Motor bewegt sich) — aber:
+  - Slider-`max`-Attribute sind hardcoded statt aus den NVS-Bounds (`maxRpm`/`maxAccel`/`learnedCurrentMA`) abgeleitet. Folge: User kann die Engine über die gemessenen Grenzen drehen.
+  - Noise-Canvas in `WebServer.cpp:304-337` rechnet lokal (`off+=.4`) und ignoriert `v4::rt` komplett → kein visuelles Feedback auf Slider-Änderungen.
+  - Wellenform-Wechsel (moveType 3–5 Sinus/Sawtooth/Square) ändert den Motor-Output, aber das Canvas zeigt weiter dieselbe Simplex-Animation.
+  - `/set`-Endpoint antwortet mit Plain-Text `"OK"` statt JSON-Echo → JS kann Slider-Anzeige nach POST nicht refreshen.
+  - Es fehlt ein `/preview`-Endpoint, der Engine-Samples für die Visualisierung ausliefert.
+
+### Phase 7 Plan (Reaktivierung GUI ↔ Engine)
+
+| Schritt | Inhalt | Status |
+|---|---|---|
+| **A** | NVS-Bounds (`CalibrationData`) als `/bounds`-Endpoint exposen, Slider-`max` an `/bounds` binden — User kann Engine nicht über gemessene Grenzen drehen | offen |
+| **B** | `/set`-Endpoint antwortet mit JSON-Echo des aktuellen `v4::rt`-States; JS aktualisiert Slider-Anzeige aus Echo | offen |
+| **C** | Synthesis bekommt Public-Read-API (`getPreviewSample(t,x,y)→float`); neuer `/preview`-Endpoint liefert Sample-Grid; Canvas pollt diesen | offen |
+| **D** | Canvas-JS: Mode-Switch synchron mit `moveType` — 0–2 zeigt 2D-Noise-Feld, 3–5 zeigt 1D-Wellenform-Plot. **Eine** Canvas, kein zweites Display (Größe-Vorgabe vom User). | offen |
+
 ---
 
 ## 10. Revisionshistorie
@@ -415,3 +436,4 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 |---|---|---|---|
 | 4.0.0 | 2026-04-26 | User | Initiale FSD für modulare v4 |
 | 4.0.1 | 2026-04-29 | Gemini | Update Phase 6+: micros-Timing, Synthesis-Task, Edge-FreqSweep, Auto-Homing |
+| 4.0.2 | 2026-05-02 | Claude | µs-Migration in `.cpp` nachgezogen, NVS-VER 4002, ElegantOTA produktiv, Bounds-Stand Z-Motor dokumentiert, Phase 7 (GUI-Reaktivierung) eröffnet |
