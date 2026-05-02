@@ -231,4 +231,58 @@ void tick() {
     }
 }
 
+size_t getPreviewBytes(uint8_t* out, size_t maxBytes) {
+    const auto& c = v4::rt;
+    if (c.moveType <= 2) {
+        // 32x32-Grid um die aktuelle Engine-Position. Skala = framesize, damit
+        // die Visualisierung in derselben "Optik" arbeitet wie die Engine.
+        const int W = 32, H = 32;
+        if (maxBytes < (size_t)(W * H)) return 0;
+        const float fs = c.framesize > 0.0f ? c.framesize : 0.01f;
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                float u = (flightX + (float)(x - W/2)) * fs;
+                float v = (flightY + (float)(y - H/2)) * fs;
+                float n = sn.noise(u, v);
+                int g = (int)((n + 1.0f) * 127.5f);
+                if (g < 0) g = 0; else if (g > 255) g = 255;
+                out[y * W + x] = (uint8_t)g;
+            }
+        }
+        return W * H;
+    }
+    if (c.moveType <= 5) {
+        // 1D-Plot einer Wellenform-Periode + Marker für aktuelle Phase.
+        // Marker = Bit 7 gesetzt am Phasen-Index; Sample-Wert in Bits 0..6
+        // (0..127, halbiert). Browser entpackt entsprechend.
+        const int N = 128;
+        if (maxBytes < (size_t)N) return 0;
+        float curPhase = fmodf(timeAcc / (2.0f * (float)M_PI), 1.0f);
+        if (curPhase < 0.0f) curPhase += 1.0f;
+        int markerIdx = (int)(curPhase * N);
+        for (int i = 0; i < N; i++) {
+            float t = (float)i / (float)N;
+            float val = 0.0f;
+            if (c.moveType == 3) {                  // SINUS
+                val = sinf(t * 2.0f * (float)M_PI);
+            } else if (c.moveType == 4) {           // SAWTOOTH
+                float exp = fmaxf(0.1f, expf(c.zShape * 0.25f));
+                val = powf(t, exp) * 2.0f - 1.0f;
+            } else {                                 // SQUARE
+                float duty = fmaxf(0.05f, fminf(0.95f, 0.5f + c.zShape * 0.08f));
+                val = t < duty ? 1.0f : -1.0f;
+            }
+            val *= c.contrast;
+            if (val < -1.0f) val = -1.0f; else if (val > 1.0f) val = 1.0f;
+            int b = (int)((val + 1.0f) * 63.5f);    // 0..127
+            if (b < 0) b = 0; else if (b > 127) b = 127;
+            uint8_t byte = (uint8_t)b;
+            if (i == markerIdx) byte |= 0x80;       // Marker-Bit
+            out[i] = byte;
+        }
+        return N;
+    }
+    return 0;  // STEP-Mode oder unbekannt: keine Visualisierung
+}
+
 } // namespace Synthesis

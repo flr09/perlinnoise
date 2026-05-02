@@ -311,6 +311,7 @@ function apply(d){
 }
 
 /* SIMPLEX NOISE FIELD ANIMATION --------------------------------------- */
+/* Lokale Animation — Phase D wird das durch /preview-Polling ersetzen.  */
 (function(){
   var c=document.getElementById('noiseCanvas');if(!c)return;
   var ctx=c.getContext('2d');
@@ -368,10 +369,13 @@ function loadBounds(){
   })
 }
 
-function poll(){fetch('/status').then(function(r){return r.json()}).then(apply).catch(function(){})}
+function poll(){
+  if(document.visibilityState==='hidden')return;
+  fetch('/status').then(function(r){return r.json()}).then(apply).catch(function(){})
+}
 loadConfig();
 loadBounds();
-setInterval(poll,500);poll();
+setInterval(poll,100);poll();   // 10 Hz Status-Polling
 </script>
 </body>
 </html>
@@ -787,6 +791,35 @@ void begin() {
         char buf[512]; writeConfigJson(buf, sizeof(buf));
         AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
         res->addHeader("Access-Control-Allow-Origin", "*");
+        r->send(res);
+    });
+
+    // /preview — Engine-Zustand für die Browser-Canvas-Visualisierung.
+    // Layout abhängig vom aktuellen moveType (siehe Synthesis::getPreviewBytes):
+    //   Noise (0..2): {mode, w:32, h:32, data:[1024 Bytes]}
+    //   Wave  (3..5): {mode, n:128, data:[128 Bytes]}    Bit7 = Phasen-Marker
+    //   STEP  (6):    {mode, w:0}
+    server.on("/preview", HTTP_GET, [](AsyncWebServerRequest* r) {
+        static uint8_t pbuf[1024];
+        size_t n = Synthesis::getPreviewBytes(pbuf, sizeof(pbuf));
+        String json;
+        json.reserve(n * 4 + 64);
+        json = "{\"mode\":";
+        json += v4::rt.moveType;
+        if (n == 0) {
+            json += ",\"w\":0,\"data\":[]}";
+        } else {
+            const bool noise = (v4::rt.moveType <= 2);
+            json += noise ? ",\"w\":32,\"h\":32,\"data\":[" : ",\"n\":128,\"data\":[";
+            for (size_t i = 0; i < n; i++) {
+                if (i > 0) json += ',';
+                json += pbuf[i];
+            }
+            json += "]}";
+        }
+        AsyncWebServerResponse* res = r->beginResponse(200, "application/json", json);
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        res->addHeader("Cache-Control", "no-store");
         r->send(res);
     });
 
