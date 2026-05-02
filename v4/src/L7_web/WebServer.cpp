@@ -226,7 +226,13 @@ var MNAMES=['M·X','M·Y','M·Z','M·E'];
 var HAS_SENSOR=[1,1,1,0];
 
 function cmd(a,m){fetch('/cmd?a='+a+(m!=null?'&m='+m:'')).catch(function(){})}
-function setP(k,v){fetch('/set?'+k+'='+v).catch(function(){})}
+function setP(k,v){fetch('/set?'+k+'='+v).then(function(r){return r.json()}).then(applyConfig).catch(function(){})}
+function applyConfig(c){
+  if(!c)return;
+  var f=function(id,v){var e=document.getElementById(id);if(e&&v!=null)e.value=v};
+  f('psType',c.type);f('psSpeed',c.speed);f('psRange',c.range);f('psCont',c.cont);
+  f('psFrame',c.frame);f('psShape',c.shape);f('psMspace',c.mspace);f('psDyn',c.dyn);
+}
 function dotCls(e){return e===true?'on':e===false?'off':'na'}
 function stTxt(e){return e===true?'powered':e===false?'off':'—'}
 
@@ -342,16 +348,7 @@ function apply(d){
 buildDials();
 
 function loadConfig(){
-  fetch('/config').then(function(r){return r.json()}).then(function(c){
-    document.getElementById('psType').value=c.type;
-    document.getElementById('psSpeed').value=c.speed;
-    document.getElementById('psRange').value=c.range;
-    document.getElementById('psCont').value=c.cont;
-    document.getElementById('psFrame').value=c.frame;
-    document.getElementById('psShape').value=c.shape;
-    document.getElementById('psMspace').value=c.mspace;
-    document.getElementById('psDyn').value=c.dyn;
-  }).catch(function(){})
+  fetch('/config').then(function(r){return r.json()}).then(applyConfig).catch(function(){})
 }
 
 function loadBounds(){
@@ -740,6 +737,22 @@ void begin() {
         r->send(501, "text/plain", "unknown action");
     });
 
+    // Helper: serialisiert v4::rt als JSON. Quelle für /config und /set-Echo.
+    static auto writeConfigJson = [](char* buf, size_t n) -> int {
+        const auto& c = v4::rt;
+        return snprintf(buf, n,
+            "{\"run\":%s,\"type\":%d,\"speed\":%.3f,\"angle\":%.1f,"
+            "\"rad\":%.1f,\"range\":%.1f,\"frame\":%.4f,\"cont\":%.2f,"
+            "\"shape\":%.2f,\"edgec\":%.2f,\"mspace\":%.1f,\"dyn\":%d,"
+            "\"fan\":%d,\"lamp\":%d,"
+            "\"sa\":%.1f,\"so\":%.2f,\"ht\":%.1f,\"am\":%lu}",
+            c.running ? "true":"false", c.moveType, c.speed, c.angle,
+            c.radius, c.rangeDeg, c.framesize, c.contrast,
+            c.zShape, c.edgeC, c.mspace, c.dynamics,
+            c.fan, c.lamp,
+            c.stepAngle, c.stepOffset, c.holdMs, (unsigned long)c.accelMax);
+    };
+
     server.on("/set", HTTP_GET, [](AsyncWebServerRequest* r) {
         auto& c = v4::rt;
         auto getF = [&](const char* k, float& out) {
@@ -770,7 +783,11 @@ void begin() {
         getF("so",     c.stepOffset);  // step offset
         getF("ht",     c.holdMs);      // hold time [ms]
         if (r->hasParam("am")) c.accelMax = (uint32_t)r->getParam("am")->value().toInt();
-        r->send(200, "text/plain", "OK");
+        // Echo: aktuelle State zurück, damit Slider/Anzeige sich synchronisieren.
+        char buf[512]; writeConfigJson(buf, sizeof(buf));
+        AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        r->send(res);
     });
 
     // /bounds — Pro-Motor-Charakterisierungs-Werte aus NVS. Quelle für die in
@@ -800,19 +817,7 @@ void begin() {
     });
 
     server.on("/config", HTTP_GET, [](AsyncWebServerRequest* r) {
-        const auto& c = v4::rt;
-        char buf[512];
-        snprintf(buf, sizeof(buf),
-            "{\"run\":%s,\"type\":%d,\"speed\":%.3f,\"angle\":%.1f,"
-            "\"rad\":%.1f,\"range\":%.1f,\"frame\":%.4f,\"cont\":%.2f,"
-            "\"shape\":%.2f,\"edgec\":%.2f,\"mspace\":%.1f,\"dyn\":%d,"
-            "\"fan\":%d,\"lamp\":%d,"
-            "\"sa\":%.1f,\"so\":%.2f,\"ht\":%.1f,\"am\":%lu}",
-            c.running ? "true":"false", c.moveType, c.speed, c.angle,
-            c.radius, c.rangeDeg, c.framesize, c.contrast,
-            c.zShape, c.edgeC, c.mspace, c.dynamics,
-            c.fan, c.lamp,
-            c.stepAngle, c.stepOffset, c.holdMs, (unsigned long)c.accelMax);
+        char buf[512]; writeConfigJson(buf, sizeof(buf));
         AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
         res->addHeader("Access-Control-Allow-Origin", "*");
         r->send(res);
