@@ -1,6 +1,6 @@
 # FSD — PerlinNoise v4 (Modular)
 
-**Stand:** 2026-05-02 — Firmware **v4.0.2** auf Hardware, Phasen 1–6 abgeschlossen, Phase 7 (GUI-Reaktivierung) startet.
+**Stand:** 2026-05-04 — Firmware **v4.1.3** auf Hardware, Phasen 1–7 abgeschlossen. Backlog Calib-Skip + FreqSweep v2 in 4.1.3 mitgenommen.
 **Branch:** `v4-modular`
 **Vorgänger:** `v4_iteration1/` (3 Commits, Watchdog + MotorProfile, nicht funktional integriert)
 **Referenz-Implementierung:** `v3/` (v3.7.32, online unter `perlin-v3.intern.gaengeviertel.de`)
@@ -419,14 +419,22 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
   - `/set`-Endpoint antwortet mit Plain-Text `"OK"` statt JSON-Echo → JS kann Slider-Anzeige nach POST nicht refreshen.
   - Es fehlt ein `/preview`-Endpoint, der Engine-Samples für die Visualisierung ausliefert.
 
-### Phase 7 Plan (Reaktivierung GUI ↔ Engine)
+### Phase 7 Plan (Reaktivierung GUI ↔ Engine) — abgeschlossen
 
 | Schritt | Inhalt | Status |
 |---|---|---|
-| **A** | NVS-Bounds (`CalibrationData`) als `/bounds`-Endpoint exposen, Slider-`max` an `/bounds` binden — User kann Engine nicht über gemessene Grenzen drehen | offen |
-| **B** | `/set`-Endpoint antwortet mit JSON-Echo des aktuellen `v4::rt`-States; JS aktualisiert Slider-Anzeige aus Echo | offen |
-| **C** | Synthesis bekommt Public-Read-API (`getPreviewSample(t,x,y)→float`); neuer `/preview`-Endpoint liefert Sample-Grid; Canvas pollt diesen | offen |
-| **D** | Canvas-JS: Mode-Switch synchron mit `moveType` — 0–2 zeigt 2D-Noise-Feld, 3–5 zeigt 1D-Wellenform-Plot. **Eine** Canvas, kein zweites Display (Größe-Vorgabe vom User). | offen |
+| **A** | NVS-Bounds (`CalibrationData`) als `/bounds`-Endpoint, Slider-`max` daran gebunden, Engine-Cap in `Synthesis::start` | ✅ v4.1.0 |
+| **B** | `/set`-Endpoint antwortet mit JSON-Echo des `v4::rt`-States; JS refresht Slider aus Echo | ✅ v4.1.1 |
+| **C** | `Synthesis::getPreviewBytes()` API; `/preview`-Endpoint liefert Sample-Grid (Noise 32×32 / Wave 128 / w=0); Status-Polling 500 ms → 100 ms | ✅ v4.1.2 |
+| **D** | Canvas-JS: lokale Simplex-IIFE durch `setInterval(drawPreview, 100)` ersetzt; Mode-Switch via `j.mode` (Noise / Wave mit Bit7-Phasen-Marker / Idle); `visibilityState`-Guard | ✅ v4.1.3 |
+
+### Phase 4.1.3 Lessons Learned (2026-05-04)
+
+- **Calib-Skip via Step-Counting** (`L4_mechanics/Calibration.cpp`): Bei valider NVS-Cal wird die nach P1+P2 gemessene Zungenbreite (`pos(P2_OK) − pos(P1_FOUND)`) gegen die gespeicherte verglichen. Toleranz ±5 %. Bei Übereinstimmung entfallen P3+P4 (3-Touch je 3 s), Mitte = (P1+P2)/2. Spart 6–10 s pro Calib bei unveränderter Mechanik. **Mathematischer Hintergrund:** Latenz der schnellen P1/P2-Suche (~5 ms × 2000 sps = 10 µSteps) ist auf beiden Kanten gleich → Zungenbreite invariant, Mitte mit Bias ~1 ° (für Engineering-Tests akzeptabel). Marker `CAL_SKIP_OK` / `CAL_SKIP_FAIL` im Telemetrie-Log.
+- **FreqSweep v2** (`L5_programs/characterization/Characterization.cpp`): Komplett ersetzt. Statt linearer Chirp 10 log-spaced Bänder 10–200 Hz, pro Band **Bisektion** bis Stall (max 6 Iter), Ergebnis in `cal.freqStallAmp[b]`. Alle 5 Runs voller Bisektions-Sweep (Re-Home pro Stall), dazwischen **Learning-Pfad**: 0.85×/1.15× der gespeicherten Amplitude testen, bei korrekter Stall/Kein-Stall-Kombi ×1.02 nudgen, sonst Fallback auf Bisektion. Pro `(f, amp)`-Test 200 ms Schwingen + Tacho-Pulse-Counting (Stall = pulses < swings/2). Liefert echte Frequenz-Stallgrenze-Kurve.
+- **NVS-Schema 4001 → 4002** (`Types.h` + `Storage_Calib.cpp`): Felder `uint16_t freqStallAmp[10]` + `uint8_t freqRunCount` + `_pad[3]` ergänzt. Alte 4001-Daten werden in `load()` als invalid verworfen (size-mismatch + version-mismatch). **Konsequenz:** automatischer Re-Calib beim ersten Boot nach 4.1.3-Update.
+- **ElegantOTA-Reboot-Fix** (`main_v4.cpp`): `ElegantOTA.loop()` fehlte im main-loop bis 4.1.2. Folge: Browser-Updates wurden korrekt empfangen und in die Boot-Partition geschrieben (`Update.end(true)`), aber `_reboot`-Flag wurde nie ausgewertet → Board lief mit alter Firmware weiter. Workaround beim 4.1.2 → 4.1.3-Flash war Power-Cycle. Ab 4.1.3 ist `ElegantOTA.loop()` neben `ArduinoOTA.handle()` im main-loop, Auto-Reboot nach 2 s funktioniert.
+- **Canvas auf /preview-Polling** (`L7_web/WebServer.cpp` ~Z. 313): Lokale Simplex-Animation komplett entfernt. Drei Render-Pfade: `drawNoise` (32×32 Pixmap → temp-Canvas → 128×128 hochskaliert mit `imageSmoothingEnabled=false`), `drawWave` (128 Bytes als 1D-Polyline, Bit7 markiert Phasen-Start als orange vertikale Linie), `drawIdle` (dunkler Screen mit pulsierendem Hue). Polling 10 Hz, `visibilityState`-Guard.
 
 ---
 
@@ -437,3 +445,7 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 | 4.0.0 | 2026-04-26 | User | Initiale FSD für modulare v4 |
 | 4.0.1 | 2026-04-29 | Gemini | Update Phase 6+: micros-Timing, Synthesis-Task, Edge-FreqSweep, Auto-Homing |
 | 4.0.2 | 2026-05-02 | Claude | µs-Migration in `.cpp` nachgezogen, NVS-VER 4002, ElegantOTA produktiv, Bounds-Stand Z-Motor dokumentiert, Phase 7 (GUI-Reaktivierung) eröffnet |
+| 4.1.0 | 2026-05-02 | Claude | Phase 7A: `/bounds`-Endpoint, Engine-Cap aus NVS-Charakterisierung |
+| 4.1.1 | 2026-05-02 | Claude | Phase 7B: `/set` antwortet mit JSON-Echo statt Plain-`OK` |
+| 4.1.2 | 2026-05-02 | Claude | Phase 7C: `Synthesis::getPreviewBytes()` + `/preview`-Endpoint, Status-Polling auf 10 Hz hochgezogen |
+| 4.1.3 | 2026-05-04 | Claude | Phase 7D: Canvas-JS auf `/preview`-Polling. Backlog mitgenommen: Calib-Skip via Step-Counting (Plan A), FreqSweep v2 mit 10-Band-Bisektion + Learning (Plan B). NVS-VER `CalibrationData` → 4002. ElegantOTA-Reboot-Fix (`ElegantOTA.loop()` im main-loop). |

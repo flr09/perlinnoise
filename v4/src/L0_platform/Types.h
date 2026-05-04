@@ -38,6 +38,11 @@ struct MotorState {
 };
 
 // --- Pro-Motor-Kalibrierung (NVS-persistent) ---
+//
+// FreqSweep-Felder (v4002): pro Frequenzband die zuletzt ermittelte Stall-
+// Amplitude in Steps. 0 = noch unbekannt → Full-Bisektion. freqRunCount
+// zählt Sweep-Durchläufe; alle 5 Runs erfolgt voller Stall-Sweep zur
+// Re-Kalibrierung der Lern-Werte, dazwischen schneller Verify-Pfad.
 struct CalibrationData {
     float    triggerStartDeg  = 0.0f;   // CW edge offset from center [deg]
     float    triggerEndDeg    = 0.0f;   // CCW edge offset [deg]
@@ -48,7 +53,10 @@ struct CalibrationData {
     uint8_t  sgThrs           = 0;
     uint8_t  stableRuns       = 0;
     uint32_t tpwmThrs         = 0;
-    uint32_t nvsVersion       = 4001;   // v4 Schema (war 3619 in v3)
+    uint16_t freqStallAmp[10] = {0,0,0,0,0,0,0,0,0,0};  // Stall-Amplitude pro Band (steps)
+    uint8_t  freqRunCount     = 0;       // Counter für Re-Calib-Zyklus
+    uint8_t  _pad[3]          = {0,0,0}; // explizites Padding für stable layout
+    uint32_t nvsVersion       = 4002;    // v4002 Schema (FreqSweep-Felder ergänzt)
 };
 
 } // namespace v4

@@ -10,6 +10,7 @@
 
 #include <Arduino.h>
 #include <ArduinoOTA.h>
+#include <ElegantOTA.h>
 
 #include "L0_platform/Platform.h"
 #include "L0_platform/Logger.h"
@@ -142,5 +143,6 @@ void setup() {
 
 void loop() {
     ArduinoOTA.handle();
+    ElegantOTA.loop();   // ohne diesen Aufruf rebootet ElegantOTA nach Upload nicht
     delay(10);
 }

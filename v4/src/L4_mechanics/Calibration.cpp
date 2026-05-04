@@ -21,6 +21,14 @@
 
 namespace Calibration {
 
+// Toleranz (relativ) für 1-Touch-Skip via Zungenbreiten-Vergleich.
+// ±5% Differenz zwischen gemessener (P1+P2 schnell) und gespeicherter Breite
+// werden als „Mechanik unverändert" akzeptiert → P3+P4 (3-Touch) entfallen.
+// Latenz-Bias (~5ms × 2000sps ≈ 10 Mikrosteps bei 16MS) ist auf beiden
+// Kanten gleich → Zungenbreite ist invariant, nur die Mitte bekommt einen
+// kleinen Offset (~1°), für Engineering-Tests akzeptabel.
+constexpr float SKIP_TOL = 0.05f;
+
 void run(uint8_t motorIdx) {
     if (!HalPins::hasSensor(motorIdx)) {
         Logger::addLog(String("CAL M") + (char)('X' + motorIdx) + ": kein Sensor — abgelehnt");
@@ -29,10 +37,20 @@ void run(uint8_t motorIdx) {
     auto* s = Stepper::get(motorIdx);
     if (!s) return;
 
+    // Vorab: vorhandene NVS-Cal laden, um Skip-Pfad vorzubereiten.
+    v4::CalibrationData prevCal;
+    StorageCalib::load(motorIdx, prevCal);
+    long expectedWidth = 0;
+    if (prevCal.valid) {
+        expectedWidth = labs(Units::degToSteps(motorIdx,
+            prevCal.triggerEndDeg - prevCal.triggerStartDeg));
+    }
+
     uint8_t pin = HalPins::MOTORS[motorIdx].tachoPin;
     Tmc::setPower(motorIdx, true);
     Stepper::setMicrosteps(motorIdx, 16);
-    Logger::addLog(String("CAL M") + (char)('X' + motorIdx) + ": v4 calib (fast)");
+    Logger::addLog(String("CAL M") + (char)('X' + motorIdx) + ": v4 calib (fast)"
+        + (prevCal.valid ? String(", expW=") + expectedWidth : String(", no NVS")));
     s->setAcceleration(15000);
     CAL_MARK("CAL_START", 0);
 
@@ -80,10 +98,11 @@ void run(uint8_t motorIdx) {
         CAL_MARK("CAL_P1_FAIL", s->getCurrentPosition());
         return;
     }
-    CAL_MARK("CAL_P1_FOUND", s->getCurrentPosition());
+    long p1Pos = s->getCurrentPosition();
+    CAL_MARK("CAL_P1_FOUND", p1Pos);
 
     // Motor läuft weiter CW — jetzt Austritt suchen (HIGH).
-    long startPos2 = s->getCurrentPosition();
+    long startPos2 = p1Pos;
     bool exited = false;
     while (true) {
         if (HalSensor::checkStable(pin, HIGH, 5)) { exited = true; break; }
@@ -103,30 +122,65 @@ void run(uint8_t motorIdx) {
     delay(80);
     // Position bei P2_OK = Zungen-Austritt (CW von rechts). Zungen-Eintritt
     // ist in P1_FOUND geloggt. Zungenbreite = pos(P2_OK) - pos(P1_FOUND).
-    CAL_MARK("CAL_P2_OK", s->getCurrentPosition());
+    long p2Pos = s->getCurrentPosition();
+    CAL_MARK("CAL_P2_OK", p2Pos);
 
-    // Phase 3: rechte Kante A2 (3-Touch CCW)
-    Logger::addLog("CAL: P3 rechte Kante (3-Touch)...");
-    long a2 = EdgeTouch::touch(motorIdx, LOW, -1, 800, 3);
-    if (a2 == LONG_MIN) { Logger::addLog("ERR: P3 Touch"); CAL_MARK("CAL_P3_FAIL", 0); return; }
-    CAL_MARK("CAL_A2", a2);
-
-    // Phase 4: EdgeTouch macht intern eigenen Backoff — kein expliziter
-    // Anlauf nötig.
-    Logger::addLog("CAL: P4 linke Kante (3-Touch)...");
-    long a1 = EdgeTouch::touch(motorIdx, LOW, 1, 800, 3);
-    if (a1 == LONG_MIN) { Logger::addLog("ERR: P4 Touch"); CAL_MARK("CAL_P4_FAIL", 0); return; }
-    CAL_MARK("CAL_A1", a1);
-
-    // Berechnung & Speicherung
-    long center = (a1 + a2) / 2;
-    v4::CalibrationData cal;
-    StorageCalib::load(motorIdx, cal);
-    cal.triggerStartDeg = Units::stepsToDeg(motorIdx, a1 - center);
-    cal.triggerEndDeg   = Units::stepsToDeg(motorIdx, a2 - center);
-    cal.valid           = true;
-    StorageCalib::save(motorIdx, cal);
-    CAL_MARK("CAL_CENTER", center);
+    // 1-Touch-Skip: gemessene Zungenbreite (P2-P1) gegen NVS vergleichen.
+    // Bei Übereinstimmung sind die mechanischen Kanten unverändert → P3+P4
+    // (3-Touch je 3s) entfallen, Mitte = (P1+P2)/2 ist gut genug.
+    long center;
+    if (prevCal.valid && expectedWidth > 0) {
+        long measuredWidth = labs(p2Pos - p1Pos);
+        long absDelta = labs(measuredWidth - expectedWidth);
+        float relDelta = (float)absDelta / (float)expectedWidth;
+        if (relDelta <= SKIP_TOL) {
+            center = (p1Pos + p2Pos) / 2;
+            Logger::addLog(String("CAL: SKIP P3+P4 (Δ=") + absDelta + " steps, "
+                + (int)(relDelta * 1000) + "‰)");
+            CAL_MARK("CAL_SKIP_OK", measuredWidth);
+            CAL_MARK("CAL_CENTER", center);
+            // triggerStartDeg/EndDeg bleiben aus NVS — Mechanik ist unverändert.
+        } else {
+            Logger::addLog(String("CAL: SKIP miss (gem=") + measuredWidth
+                + " erw=" + expectedWidth + " Δ=" + absDelta + ") → 3-Touch");
+            CAL_MARK("CAL_SKIP_FAIL", measuredWidth);
+            // Fallback auf vollen 3-Touch-Pfad.
+            Logger::addLog("CAL: P3 rechte Kante (3-Touch)...");
+            long a2 = EdgeTouch::touch(motorIdx, LOW, -1, 800, 3);
+            if (a2 == LONG_MIN) { Logger::addLog("ERR: P3 Touch"); CAL_MARK("CAL_P3_FAIL", 0); return; }
+            CAL_MARK("CAL_A2", a2);
+            Logger::addLog("CAL: P4 linke Kante (3-Touch)...");
+            long a1 = EdgeTouch::touch(motorIdx, LOW, 1, 800, 3);
+            if (a1 == LONG_MIN) { Logger::addLog("ERR: P4 Touch"); CAL_MARK("CAL_P4_FAIL", 0); return; }
+            CAL_MARK("CAL_A1", a1);
+            center = (a1 + a2) / 2;
+            v4::CalibrationData cal = prevCal;
+            cal.triggerStartDeg = Units::stepsToDeg(motorIdx, a1 - center);
+            cal.triggerEndDeg   = Units::stepsToDeg(motorIdx, a2 - center);
+            cal.valid           = true;
+            StorageCalib::save(motorIdx, cal);
+            CAL_MARK("CAL_CENTER", center);
+        }
+    } else {
+        // Erst-Calib (oder NVS leer/stale): voller 3-Touch wie bisher.
+        Logger::addLog("CAL: P3 rechte Kante (3-Touch)...");
+        long a2 = EdgeTouch::touch(motorIdx, LOW, -1, 800, 3);
+        if (a2 == LONG_MIN) { Logger::addLog("ERR: P3 Touch"); CAL_MARK("CAL_P3_FAIL", 0); return; }
+        CAL_MARK("CAL_A2", a2);
+        Logger::addLog("CAL: P4 linke Kante (3-Touch)...");
+        long a1 = EdgeTouch::touch(motorIdx, LOW, 1, 800, 3);
+        if (a1 == LONG_MIN) { Logger::addLog("ERR: P4 Touch"); CAL_MARK("CAL_P4_FAIL", 0); return; }
+        CAL_MARK("CAL_A1", a1);
+        center = (a1 + a2) / 2;
+        // prevCal als Basis übernehmen (erhält learnedCurrentMA, sgThrs etc.,
+        // selbst wenn Schema stale war — die Bytes wurden in load() gefüllt).
+        v4::CalibrationData cal = prevCal;
+        cal.triggerStartDeg = Units::stepsToDeg(motorIdx, a1 - center);
+        cal.triggerEndDeg   = Units::stepsToDeg(motorIdx, a2 - center);
+        cal.valid           = true;
+        StorageCalib::save(motorIdx, cal);
+        CAL_MARK("CAL_CENTER", center);
+    }
 
     // Auf Mitte fahren und Nullpunkt setzen
     Logger::addLog("CAL: Mitte → 0°");

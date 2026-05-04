@@ -1,6 +1,6 @@
 # PerlinNoise v4 — Modulare Motorsteuerung
 
-**Stand:** 2026-05-02 — Firmware **v4.0.2** läuft auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22). Phasen 1–6 abgeschlossen, Phase 7 (GUI-Reaktivierung) startet.
+**Stand:** 2026-05-04 — Firmware **v4.1.3** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22), Phasen 1–6 abgeschlossen, **Phase 7 (GUI-Reaktivierung) abgeschlossen** (A: Bounds, B: /set-Echo, C: /preview, D: Canvas auf /preview-Polling). Plus zwei Backlog-Punkte mitgenommen: Calib-Skip via Zungenbreite (3-Touch entfällt bei unveränderter Mechanik) und FreqSweep-Redesign (10 Bänder, Bisektion bis Stall, Learning).
 **Branch:** `v4-modular`
 
 ## Was ist v4?
@@ -33,7 +33,8 @@ Vollständige Spezifikation: [`docs/FSD.md`](docs/FSD.md).
 - **Phase 4** — Bewegungs-Synthese (L5b) ✅ Engine, Bindung an UI offen
 - **Phase 5** — Watchdog + Profile (L6) ✅
 - **Phase 6** — Voll-UI (L7) ✅ Layout, GUI-Bindung kaputt ⚠️
-- **Phase 7** — GUI-Reaktivierung (Bounds → Slider, /set-Echo, /preview, Wellenform-Canvas) ◀ **aktuell**
+- **Phase 7** — GUI-Reaktivierung (Bounds, /set-Echo, /preview, Canvas) ✅ (v4.1.0–4.1.3)
+- **Backlog mitgenommen in 4.1.3:** Calib-Skip via Zungenbreite, FreqSweep v2 (10 Bänder, Bisektion + Learning), ElegantOTA-Reboot-Fix
 
 Detailliert in [`../AGENT_COORDINATION.md`](../AGENT_COORDINATION.md).
 

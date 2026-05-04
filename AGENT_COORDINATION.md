@@ -1,10 +1,10 @@
 # 📌 AGENT COORDINATION HUB
 
 ## 🕒 Aktueller Status (LIVE)
-- **Stand:** 2026-05-02
+- **Stand:** 2026-05-04
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.0.2** läuft auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22)
-- **Phase:** v4 Phase 1–6 abgeschlossen ✅ — Charakterisierungs-Suite (L5a) produktiv, L5b Synthese-Engine im Code, **L7 GUI-Reaktivierung beginnt** (Phase A: Bounds aus Testsuite an Slider binden, Phase B: `/set`-Echo, Phase C: `/preview`-Endpoint, Phase D: Wellenform-Visualisierung)
+- **Firmware:** **v4.1.3** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — Phase 7 abgeschlossen, Backlog Calib-Skip + FreqSweep-v2 mitgenommen
+- **Phase:** v4 Phase 1–7 abgeschlossen ✅ — GUI vollständig reaktiviert (Bounds, /set-Echo, /preview, Canvas auf 10 Hz Polling). NVS-Schema 4001 → **4002** (FreqSweep-Lernfelder ergänzt, alte Cal-Daten invalidiert → Re-Calib beim ersten Boot nach Update).
 - **Vorgänger v4_iteration1/** liegt zur Seite (3 Commits, baubar via env `fysetc_e4_v4_iter1`)
 - **v3 wurde überschrieben** durch v4 (gleiches Board). v3-Quellcode + 35 v3-Bin-Snapshots in Git gesichert. Re-Flash auf v3.7.32 jederzeit möglich via `v3/firmware_v3_3.7.32_20260328_1230.bin`.
 
@@ -38,7 +38,8 @@ L0 Plattform                  (Boot, Tasks, Sync, Log)
 | 4 | L5b Bewegungs-Synthese (V1-Funktionalität zurück) | ✅ Engine läuft, UI-Bindung offen |
 | 5 | L6 Watchdog + Profile (aus v4_iteration1 integrieren) | ✅ |
 | 6 | L7 Voll-UI (Lab + Performance + Telemetry-Viewer) | ✅ Layout, **GUI-Bindung kaputt** ⚠️ |
-| **7** | **L7 GUI-Reaktivierung** (Bounds → Slider, /set-Echo, /preview, Wellenform-Canvas) | **aktuell** |
+| 7 | L7 GUI-Reaktivierung (Bounds, /set-Echo, /preview, Canvas) | ✅ v4.1.0–4.1.3 |
+| Backlog | Calib-Skip via Zungenbreite + FreqSweep v2 (10 Bänder, Bisektion, Learning) | ✅ in v4.1.3 mitgenommen |
 
 ## 🛠️ Wichtige Erkenntnisse (Shared Knowledge)
 
@@ -59,6 +60,14 @@ L0 Plattform                  (Boot, Tasks, Sync, Log)
 - **ElegantOTA** als Web-Updater integriert (`/update`, Auth `admin/12345678`) — Flash via Browser, Flashbox bleibt Fallback.
 - **Bounds aus Charakterisierung sind in NVS** (`CalibrationData` in `Types.h:41`): `maxRpm`, `maxAccel`, `learnedCurrentMA`, `sgThrs` — Phase 7 macht diese Werte zu den Slider-Bounds in der GUI (statt hardcoded Maxima).
 - **Stand 2026-05-02 Z-Motor:** `maxRpm=1500`, `maxAccel=500000`, `Sweet-Spot Floor=1000mA`, `SG-Thrs=180`. X/Y/E noch ohne Sensor → keine Bounds.
+
+### Lessons aus Phase 7 + Backlog → v4.1.3 (2026-05-04)
+
+- **Calib-Skip via Step-Counting** (`L4_mechanics/Calibration.cpp`): Wenn NVS-Cal valid ist und die nach P1+P2 gemessene Zungenbreite ±5 % zur gespeicherten passt, entfallen P3+P4 (3-Touch ×2). Mitte = (P1+P2)/2. Erspart 6–10 s pro Calib bei unveränderter Mechanik. Latenz-Bias der schnellen P1/P2-Suche ist auf beiden Kanten gleich → Zungenbreite ist invariant, Mitte hat ~1 ° Offset (für Engineering-Tests akzeptabel).
+- **FreqSweep v2** (`L5_programs/characterization/Characterization.cpp`): 10 log-spaced Bänder 10–200 Hz, **Bisektion** bis Stall pro Band statt linearer Chirp. Pro Band wird `freqStallAmp[b]` in NVS gelernt. Alle 5 Runs voller Bisektions-Sweep (mehrere Stalls + Re-Homes), dazwischen Learning-Pfad: 0.85×/1.15× der gespeicherten Amplitude testen, bei Erfolg ×1.02 nudgen. Liefert echte Charakterisierungskurve `(f, max_stable_amp)` statt nur „7 Impulse".
+- **NVS-Schema 4001 → 4002** (`Types.h` + `Storage_Calib.cpp`): Felder `freqStallAmp[10]` und `freqRunCount` ergänzt. Alte 4001-Daten werden in `load()` als invalid verworfen (size-mismatch + version-mismatch) → automatischer Re-Calib beim ersten Boot.
+- **ElegantOTA-Reboot-Fix** (`main_v4.cpp`): `ElegantOTA.loop()` fehlte im main-loop → nach Upload wurde `_reboot=true` gesetzt aber nie ausgewertet, Update lag in der Boot-Partition aber das Board startete nicht neu. Workaround damals: Power-Cycle. Ab 4.1.3 ist `ElegantOTA.loop()` in `loop()` neben `ArduinoOTA.handle()`, Browser-Updates rebooten automatisch nach 2 s.
+- **Canvas auf /preview-Polling** (`L7_web/WebServer.cpp`): Lokale Simplex-IIFE entfernt, stattdessen `setInterval(drawPreview, 100)`. Modi: 0–2 Noise-Pixmap (32×32 hochskaliert via temp-Canvas), 3–5 Wave-Plot mit Bit7-Phasen-Marker, sonst Idle-Screen. `visibilityState`-Guard wie beim Status-Polling.
 
 ## 🚦 Build-Targets
 

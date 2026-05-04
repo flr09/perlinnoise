@@ -310,41 +310,63 @@ function apply(d){
   if(d.log)appendLog(d.log);
 }
 
-/* SIMPLEX NOISE FIELD ANIMATION --------------------------------------- */
-/* Lokale Animation — Phase D wird das durch /preview-Polling ersetzen.  */
+/* CANVAS-PREVIEW (10 Hz Polling von /preview) ------------------------- */
+/* Engine liefert je nach moveType: 32x32 Noise-Pixmap, 128-Byte Wave    */
+/* (Bit7 = Phasen-Marker), oder w=0 für Idle/Step.                       */
 (function(){
   var c=document.getElementById('noiseCanvas');if(!c)return;
   var ctx=c.getContext('2d');
-  var W=128,H=128;c.width=W;c.height=H;
-  var p=new Uint8Array(256);for(var i=0;i<256;i++)p[i]=Math.floor(Math.random()*256);
-  var perm=new Uint8Array(512),pm12=new Uint8Array(512);
-  for(i=0;i<512;i++){perm[i]=p[i&255];pm12[i]=perm[i]%12}
-  var F2=.5*(Math.sqrt(3)-1),G2=(3-Math.sqrt(3))/6;
-  function grad(h,x,y){var hh=h%6,u=hh<4?x:y,v=hh<4?y:x;return((hh&1)===0?u:-u)+((hh&2)===0?v:-v)}
-  function noise(x,y){
-    var s=(x+y)*F2,i=Math.floor(x+s),j=Math.floor(y+s);
-    var t=(i+j)*G2,X0=i-t,Y0=j-t,x0=x-X0,y0=y-Y0;
-    var i1,j1;if(x0>y0){i1=1;j1=0}else{i1=0;j1=1}
-    var x1=x0-i1+G2,y1=y0-j1+G2,x2=x0-1+2*G2,y2=y0-1+2*G2;
-    var ii=i&255,jj=j&255,n0=0,n1=0,n2=0;
-    var t0=.5-x0*x0-y0*y0;if(t0>=0){t0*=t0;n0=t0*t0*grad(pm12[ii+perm[jj]],x0,y0)}
-    var t1a=.5-x1*x1-y1*y1;if(t1a>=0){t1a*=t1a;n1=t1a*t1a*grad(pm12[ii+i1+perm[jj+j1]],x1,y1)}
-    var t2a=.5-x2*x2-y2*y2;if(t2a>=0){t2a*=t2a;n2=t2a*t2a*grad(pm12[ii+1+perm[jj+1]],x2,y2)}
-    return 70*(n0+n1+n2);
+  c.width=128;c.height=128;
+  var idleHue=0;
+  function drawIdle(){
+    ctx.fillStyle='#0b0e14';ctx.fillRect(0,0,128,128);
+    idleHue=(idleHue+1)%360;
+    ctx.fillStyle='hsl('+idleHue+',60%,18%)';
+    ctx.font='10px monospace';ctx.textAlign='center';
+    ctx.fillText('idle',64,68);
   }
-  var off=0;
-  function draw(){
-    var img=ctx.createImageData(W,H),d=img.data;
-    var scale=0.04;
-    for(var y=0;y<H;y++)for(var x=0;x<W;x++){
-      var n=noise((x+off)*scale,y*scale);
-      var g=Math.max(0,Math.min(255,Math.floor((n+1)/2*255)));
-      var k=(y*W+x)*4;d[k]=d[k+1]=d[k+2]=g;d[k+3]=255;
+  function drawNoise(data){
+    var img=ctx.createImageData(32,32),d=img.data;
+    for(var k=0;k<1024;k++){
+      var g=data[k]||0;
+      d[k*4]=d[k*4+1]=d[k*4+2]=g;d[k*4+3]=255;
     }
-    ctx.putImageData(img,0,0);
-    off+=.4;requestAnimationFrame(draw);
+    // 32x32 → 128x128 hochskaliert via temporäres Canvas
+    var tmp=document.createElement('canvas');tmp.width=32;tmp.height=32;
+    tmp.getContext('2d').putImageData(img,0,0);
+    ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(tmp,0,0,128,128);
   }
-  draw();
+  function drawWave(data){
+    ctx.fillStyle='#0b0e14';ctx.fillRect(0,0,128,128);
+    ctx.strokeStyle='#7fd0ff';ctx.lineWidth=1;
+    ctx.beginPath();
+    for(var x=0;x<128;x++){
+      var b=data[x]||0;
+      var v=b&0x7f;          // unteres 7 Bit = Sample (0..127)
+      var y=64-(v-64);        // zentriert um Mitte
+      if(x===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+    // Phasen-Marker (Bit7 gesetzt) als kurze vertikale Linie
+    ctx.strokeStyle='#ffb84d';
+    for(var i=0;i<128;i++){
+      if(data[i]&0x80){
+        ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,12);ctx.stroke();
+      }
+    }
+  }
+  function drawPreview(){
+    if(document.visibilityState==='hidden')return;
+    fetch('/preview').then(function(r){return r.json()}).then(function(j){
+      if(!j||!j.data||!j.data.length){drawIdle();return}
+      var mode=j.mode|0;
+      if(mode<=2)drawNoise(j.data);
+      else if(mode<=5)drawWave(j.data);
+      else drawIdle();
+    }).catch(function(){drawIdle()});
+  }
+  setInterval(drawPreview,100);drawPreview();
 })();
 buildDials();
 

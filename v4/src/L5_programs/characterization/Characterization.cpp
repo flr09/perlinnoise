@@ -340,65 +340,187 @@ void runKatapult(uint8_t i) {
     resetMotorState(i, stalled);
 }
 
-// --- 6) FreqSweep: Linearer Chirp 10–200 Hz, Schwingung um SENSOR-KANTE ---
-// Durch das Schwingen um die Kante (triggerStartDeg) statt um die Mitte
-// wird bei JEDER Amplitude (auch < 1°) ein Tacho-Puls erzeugt, solange der
-// Motor die Schritte hält. Das erlaubt eine präzise Analyse des
-// Frequenzgangs bis in den hohen Bereich.
+// --- 6) FreqSweep v2: 10 log-spaced Bänder, Bisektion bis Stall, Learning ---
+//
+// Pro Frequenzband wird die maximale Amplitude bestimmt, bei der der Motor
+// noch nicht stallt — direkt durch Anfahren der Stall-Grenze. Ergebnis pro
+// Band wird in NVS (cal.freqStallAmp[band]) gespeichert.
+//
+// Alle FREQ_FULL_EVERY Runs läuft die volle Bisektion (mehrere Stalls + Re-
+// Homes pro Band). Dazwischen Learning-Pfad: 0.85× und 1.15× der gespeicherten
+// Amplitude prüfen — wenn beide Erwartungen passen, leichter Nudge nach oben.
+constexpr uint8_t FREQ_BANDS      = 10;
+constexpr float   FREQ_BAND_HZ[FREQ_BANDS] = {
+    10.0f, 14.0f, 19.0f, 26.0f, 36.0f, 50.0f, 69.0f, 96.0f, 132.0f, 200.0f
+};
+constexpr uint8_t FREQ_FULL_EVERY = 5;
+constexpr float   FREQ_LEARN_LO   = 0.85f;
+constexpr float   FREQ_LEARN_HI   = 1.15f;
+constexpr float   FREQ_NUDGE_UP   = 1.02f;
+constexpr int     FS_TEST_MS      = 200;
+constexpr int     FS_MIN_SWINGS   = 4;
+
+// Test ein (f, amp)-Punkt. Schwingt N Halbschwingungen um edgePos, zählt
+// Tacho-Pulse. Stall = pulses < swings/2.
+static bool fsTestPoint(uint8_t i, float f, long amp, long edgePos, int& dir) {
+    auto* s = Stepper::get(i);
+    if (!s || amp < FREQ_AMP_MIN) return true;
+    float halfPeriodMs = 500.0f / f;  // 1/(2f) in ms
+    int swings = (int)max((float)FS_MIN_SWINGS, (float)FS_TEST_MS / halfPeriodMs);
+
+    // Speed: peak-Geschwindigkeit für Halbschwingung amp in 1/(2f) sec.
+    // Sinusförmiges Profil → peak ≈ π·amp·f, hier konservativ 4·amp·f (S-Kurve).
+    uint32_t targetSps = (uint32_t)max(100.0f, 4.0f * (float)amp * f);
+    s->setAcceleration(FREQ_ACCEL_MAX);
+    s->setSpeedInHz(targetSps);
+
+    uint32_t p0 = HalTacho::getPulseCount(i);
+    for (int n = 0; n < swings; n++) {
+        if (Op::pendingStop) { s->stopMove(); return true; }
+        s->moveTo(edgePos + (dir * amp));
+        unsigned long t0 = millis();
+        unsigned long maxMs = (unsigned long)(halfPeriodMs * 3.0f) + 20;
+        while (s->isRunning() && (millis() - t0) < maxMs) {
+            if (Op::pendingStop) { s->stopMove(); return true; }
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        if (s->isRunning()) { s->stopMove(); Motion::waitWhileRunning(i, nullptr, 100); }
+        dir = -dir;
+    }
+    uint32_t pulses = HalTacho::getPulseCount(i) - p0;
+    bool stall = pulses < (uint32_t)(swings / 2);
+    Telemetry::recordDataPoint(i, "FS_TEST", f);
+    Logger::addLog(String("FS f=") + (int)f + " amp=" + amp
+        + " p=" + pulses + "/" + swings + (stall ? " STALL" : ""));
+    return stall;
+}
+
+// Re-Home + zurück zur Edge-Position. Ruft Homing::run(), nutzt cal.triggerStartDeg
+// als Edge-Referenz. Returns neue edgePos in steps.
+static long fsRehomeToEdge(uint8_t i, float edgeDeg) {
+    Homing::run(i);
+    auto* s = Stepper::get(i);
+    if (!s) return 0;
+    // Homing endet bei MS=64, FreqSweep braucht aber MS=64 → passt.
+    Stepper::setMicrosteps(i, 64);
+    s->setAcceleration(20000);
+    s->setSpeedInHz(8000);
+    Motion::moveToDeg(i, edgeDeg);
+    Motion::waitWhileRunning(i, &Op::pendingStop, 5000);
+    return s->getCurrentPosition();
+}
+
+// Volle Bisektion für ein Band. Returns max stabile Amplitude (steps).
+// Bei Stall innerhalb der Suche wird re-homed. outRehomed signalisiert ob
+// danach noch ein finales Re-Home nötig ist.
+static long fsBisect(uint8_t i, float f, long ampMax, float edgeDeg,
+                     long& edgePos, int& dir) {
+    long low  = FREQ_AMP_MIN;
+    long high = ampMax;
+    if (high <= low) return low;
+    bool stallTop = fsTestPoint(i, f, high, edgePos, dir);
+    if (!stallTop) {
+        // Selbst bei ampMax kein Stall — Band lebt durch, max stabil = ampMax.
+        return high;
+    }
+    edgePos = fsRehomeToEdge(i, edgeDeg);
+
+    int iter = 0;
+    long tol = max((long)2, ampMax / 50);
+    while ((high - low) > tol && iter < 6 && !Op::pendingStop) {
+        long mid = (low + high) / 2;
+        bool stall = fsTestPoint(i, f, mid, edgePos, dir);
+        if (stall) {
+            high = mid;
+            edgePos = fsRehomeToEdge(i, edgeDeg);
+        } else {
+            low = mid;
+        }
+        iter++;
+    }
+    return low;
+}
+
+// Learning-Pfad: erwartet stored amp im NVS. Probe 0.85× (kein Stall erwartet)
+// und 1.15× (Stall erwartet). Bei Erfolg Nudge ×1.02. Bei Mismatch Returns 0
+// → Aufrufer fällt zurück auf Bisektion.
+static long fsLearningVerify(uint8_t i, float f, long stored, long ampMax,
+                             float edgeDeg, long& edgePos, int& dir) {
+    if (stored <= 0) return 0;
+    long lo = max((long)FREQ_AMP_MIN, (long)(stored * FREQ_LEARN_LO));
+    long hi = min(ampMax, (long)(stored * FREQ_LEARN_HI));
+    bool stallLo = fsTestPoint(i, f, lo, edgePos, dir);
+    if (stallLo) {
+        // Schon unter stored stallt → Lern-Wert war zu hoch, Re-Home + Bisekt.
+        edgePos = fsRehomeToEdge(i, edgeDeg);
+        return 0;
+    }
+    bool stallHi = fsTestPoint(i, f, hi, edgePos, dir);
+    if (!stallHi) {
+        // Über stored kein Stall → Lern-Wert war zu konservativ, Bisekt.
+        return 0;
+    }
+    edgePos = fsRehomeToEdge(i, edgeDeg);
+    long nudged = (long)(stored * FREQ_NUDGE_UP);
+    return min(nudged, ampMax);
+}
+
 void runFreqSweep(uint8_t i) {
     if (i >= 4) return;
     v4::CalibrationData cal; StorageCalib::load(i, cal);
     if (!cal.valid) { Logger::addLog("FreqSweep: nicht kalibriert"); return; }
+    if (!HalPins::hasSensor(i)) { Logger::addLog("FreqSweep: kein Sensor"); return; }
     Tmc::setPower(i, true);
     Stepper::setMicrosteps(i, 64);
     auto* s = Stepper::get(i);
     if (!s) { resetMotorState(i, false); return; }
-    Logger::addLog("Freq Sweep (um Sensor-KANTE schwingend)");
 
-    // Auf die Start-Kante fahren (ca. -15°)
+    bool fullSweep = (cal.freqRunCount % FREQ_FULL_EVERY) == 0;
+    Logger::addLog(String("FreqSweep v2 (run #") + cal.freqRunCount
+        + (fullSweep ? ", FULL bisect)" : ", LEARN verify)"));
+
+    // Auf Sensor-Kante fahren — alle Tests schwingen um diesen Punkt.
     float edgeDeg = cal.triggerStartDeg;
     s->setSpeedInHz(8000); s->setAcceleration(20000);
     Motion::moveToDeg(i, edgeDeg);
     if (!waitOrStop(i, 5000)) { resetMotorState(i, false); return; }
     long edgePos = s->getCurrentPosition();
-
-    unsigned long tStart = millis();
-    float tDur = FREQ_SWEEP_S * 1000.0f;
     int dir = 1;
-    uint32_t pSweepStart = HalTacho::getPulseCount(i);
-    
-    while (!Op::pendingStop) {
-        float elapsed  = (float)(millis() - tStart);
-        float progress = elapsed / tDur;
-        if (progress >= 1.0f) break;
+    long sprQuarter = (long)Stepper::stepsPerRev(i) / 4;
 
-        float f = FREQ_MIN_HZ + (FREQ_MAX_HZ - FREQ_MIN_HZ) * progress;
-        // Amplitude nimmt mit 1/f^2 ab.
-        float ampF = (float)FREQ_ACCEL_MAX / (16.0f * f * f);
-        long  amp  = (long)min(ampF * 0.9f, (float)Stepper::stepsPerRev(i) / 8.0f);
-        
-        if (amp < 2) break; 
+    bool anyStall = false;
+    for (uint8_t b = 0; b < FREQ_BANDS && !Op::pendingStop; b++) {
+        float f = FREQ_BAND_HZ[b];
+        // Physikalisches Maximum bei gegebener Acc-Grenze: amp ≤ acc/(16·f²)
+        long ampPhysMax = (long)((float)FREQ_ACCEL_MAX / (16.0f * f * f));
+        long ampMax = min(sprQuarter, max((long)FREQ_AMP_MIN, ampPhysMax));
 
-        s->setSpeedInHz((uint32_t)sqrtf((float)FREQ_ACCEL_MAX * (float)amp));
-        s->setAcceleration(FREQ_ACCEL_MAX);
-        
-        // Schwinge um die exakte Kante
-        s->moveTo(edgePos + (dir * amp));
-        
-        while (s->isRunning()) {
-            if (Op::pendingStop) { s->stopMove(); break; }
-            Telemetry::recordDataPoint(i, "FS", f);
-            vTaskDelay(pdMS_TO_TICKS(2)); // Höhere Telemetrie-Auflösung beim Sweep
+        long result = 0;
+        if (!fullSweep) {
+            result = fsLearningVerify(i, f, (long)cal.freqStallAmp[b],
+                                      ampMax, edgeDeg, edgePos, dir);
+            if (result == 0) {
+                Logger::addLog(String("FS band ") + b + ": verify miss → bisect");
+                anyStall = true;
+                result = fsBisect(i, f, ampMax, edgeDeg, edgePos, dir);
+            }
+        } else {
+            result = fsBisect(i, f, ampMax, edgeDeg, edgePos, dir);
+            anyStall = true;  // Full enthält i.d.R. Stalls
         }
-        dir = -dir;
+
+        cal.freqStallAmp[b] = (uint16_t)max((long)0, min((long)0xFFFF, result));
+        Logger::addLog(String("FS band ") + b + " f=" + (int)f
+            + " stallAmp=" + cal.freqStallAmp[b]);
+        Telemetry::recordDataPoint(i, "FS_BAND", f);
     }
-    
-    uint32_t pTotal = HalTacho::getPulseCount(i) - pSweepStart;
-    Logger::addLog(String("FreqSweep fertig. Impulse: ") + pTotal);
-    
-    // Wenn 0 Impulse bei FreqSweep (obwohl wir an der Kante schwingen), 
-    // dann war es ein Stall oder mechanisches Problem.
-    resetMotorState(i, (pTotal == 0));
+
+    cal.freqRunCount = (uint8_t)((cal.freqRunCount + 1) % 100);
+    StorageCalib::save(i, cal);
+    Logger::addLog(String("FreqSweep v2 fertig (next run = ")
+        + cal.freqRunCount + (((cal.freqRunCount % FREQ_FULL_EVERY) == 0) ? " FULL)" : " LEARN)"));
+
+    resetMotorState(i, anyStall);
 }
 
 // --- 7) CurrentSweepHiRPM: B-EMF Sweet-Spot bei hoher RPM ---
