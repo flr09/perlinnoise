@@ -54,21 +54,29 @@ void run(uint8_t motorIdx) {
     s->setAcceleration(15000);
     CAL_MARK("CAL_START", 0);
 
-    // Vorbereitung: Sensor verlassen (falls aktiv)
-    while (digitalRead(pin) == LOW) {
-        if (Op::pendingStop) return;
+    // Phase 0: Sensor verlassen falls aktiv. Hartes Distanz-Limit 1 rev —
+    // mehr darf der Motor während Calib in keiner Phase fahren (Anti-Wickel-
+    // Garantie + Geschwindigkeit). Wenn Sensor nach 1 rev CCW immer noch LOW
+    // bleibt, ist mechanisch oder elektrisch was kaputt → klarer Abort.
+    if (digitalRead(pin) == LOW) {
         s->setSpeedInHz(2500);
         s->runBackward();
-        unsigned long t0 = millis();
+        long startPos0 = s->getCurrentPosition();
+        long maxP0 = (long)Stepper::stepsPerRev(motorIdx);  // 1 rev hart
         bool exited = false;
-        while (millis() - t0 < 3000) {
+        while (true) {
             if (HalSensor::checkStable(pin, HIGH, 5)) { exited = true; break; }
-            if (Op::pendingStop) break;
+            if (Op::pendingStop) { s->stopMove(); return; }
+            if (labs(s->getCurrentPosition() - startPos0) > maxP0) break;
             vTaskDelay(pdMS_TO_TICKS(1));
         }
-        if (!exited) break;
+        s->stopMove();
+        if (!exited) {
+            Logger::addLog(String("ERR: P0 Sensor stuck LOW nach ") + maxP0 + " steps (1 rev)");
+            CAL_MARK("CAL_P0_STUCK", s->getCurrentPosition());
+            return;
+        }
     }
-    s->stopMove();
     if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 1500)) { CAL_MARK("CAL_P0_TIMEOUT", 0); return; }
     delay(80);
     CAL_MARK("CAL_P0_OK", s->getCurrentPosition());
@@ -82,20 +90,26 @@ void run(uint8_t motorIdx) {
     s->setSpeedInHz(2000);   // moderater, kürzere Decel falls doch nötig
     s->runForward();
     long startPos = s->getCurrentPosition();
-    long maxDelta = (long)Stepper::stepsPerRev(motorIdx) * 3;  // 3 rev: P1 + Zunge
+    // Hartes Limit: Sensor MUSS innerhalb 1 rev liegen (nur eine Zunge pro
+    // Motor). 1.2 rev als Sicherheits-Margin für Slop und Startposition. Das
+    // alte `* 3` ließ den Motor bis zu 3 Umdrehungen fahren — bei 2000 sps
+    // ~5 s, kabel-wickelnd und langsam ohne Mehrwert.
+    long maxDelta = (long)((float)Stepper::stepsPerRev(motorIdx) * 1.2f);
     unsigned long t0 = millis();
     bool found = false;
     while (true) {
         if (HalSensor::checkStable(pin, LOW, 5)) { found = true; break; }
         if (Op::pendingStop) break;
-        if (millis() - t0 > 15000) break;
+        if (millis() - t0 > 6000) break;   // 1.2 rev @ 2000 sps ≈ 1.9 s, 6 s Margin
         if (labs(s->getCurrentPosition() - startPos) > maxDelta) break;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     if (!found) {
         s->stopMove();
-        Logger::addLog("ERR: P1 Eintritt");
-        CAL_MARK("CAL_P1_FAIL", s->getCurrentPosition());
+        long traveled = labs(s->getCurrentPosition() - startPos);
+        Logger::addLog(String("ERR: P1 Eintritt nicht gefunden nach ") + traveled
+            + " steps (max " + maxDelta + ")");
+        CAL_MARK("CAL_P1_FAIL", traveled);
         return;
     }
     long p1Pos = s->getCurrentPosition();

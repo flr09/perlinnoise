@@ -23,7 +23,9 @@ Quellen: dieser Eintrag · `AGENT_COORDINATION.md` Lessons · `v4/docs/FSD.md` �
 | 15 | 2026-04-30 | 🔴 | Phase 6 GUI: `/set` antwortet `"OK"` plain → JS kann Slider nach POST nicht refreshen | ✅ v4.1.1 (`/set` JSON-Echo des `v4::rt`-State) |
 | 16 | 2026-04-30 | 🔴 | Phase 6 GUI: kein `/preview`-Endpoint → Canvas zeigt lokale Simplex-Animation, ignoriert Engine | ✅ v4.1.2 (`Synthesis::getPreviewBytes()` + `/preview`) |
 | 17 | 2026-04-30 | 🔴 | Phase 6 GUI: Wellenform-Wechsel (moveType 3–5) nicht im Canvas sichtbar | ✅ v4.1.3 (Canvas pollt `/preview` 10 Hz, mode-switch via `j.mode`) |
-| 18 | 2026-04-29 | 🔴 | FreqSweep „Show 7/7" lieferte nur 7 Impulse, fuhr nicht in Stall — Hyperbel-Beziehung amp×f² nicht modelliert | ✅ v4.1.3 (FreqSweep v2: 10 Bänder, Bisektion bis Stall, Learning, NVS 4001→4002) |
+| 18 | 2026-04-29 | 🔴 | FreqSweep „Show 7/7" lieferte nur 7 Impulse, fuhr nicht in Stall — Hyperbel-Beziehung amp×f² nicht modelliert | 🔴 backlog (v2-Versuch in 4.1.3-rc1 zurückgerollt, siehe ID 21+22) |
+| 21 | 2026-05-05 | 🔴 | FreqSweep v2: Re-Home-Race nach Stall bei kleiner amp → EdgeTouch miss → Folgetests an Müll-Position | 🔴 reverted in 4.1.3 (linearer Chirp aus 4.1.2 wieder aktiv) |
+| 22 | 2026-05-05 | 🔴 | FreqSweep v2 Stall-Detektor: amp < Sensor-Hysterese erzeugt 0 Pulse, fälschlich als Stall klassifiziert → Bisektion läuft in Floor (stallAmp=5 für mehrere Bänder) | 🔴 reverted in 4.1.3 (NVS-Felder bleiben als Reserve für späteren v2-Versuch mit Stallguard-Cross-Check) |
 
 ---
 
@@ -108,4 +110,15 @@ Quellen: dieser Eintrag · `AGENT_COORDINATION.md` Lessons · `v4/docs/FSD.md` �
 ### [ID 18] FreqSweep „Show 7/7" → 7 Impulse, kein Stall
 - **Symptom:** Charakterisierungs-Vorführung lieferte nur sieben Tacho-Pulse, der Motor stallte bei keiner Frequenz. Damit kein wissenschaftlich verwertbarer Wert.
 - **Root Cause:** Linearer Chirp 10–200 Hz mit fester Amplitude `acc/(16·f²)·0.9`. Bei jeder Frequenz war die Amplitude unterhalb der Stall-Schwelle.
-- **Fix v4.1.3 (Plan B):** Komplett neu — 10 log-spaced Bänder, pro Band Bisektion bis Stall (max 6 Iter, Toleranz 2 % von ampMax). Ergebnisse `cal.freqStallAmp[10]` in NVS gespeichert (Schema 4001 → 4002). Alle 5 Runs voller Bisektions-Sweep, dazwischen Learning-Pfad (0.85×/1.15× der gespeicherten Amplitude prüfen, bei Erfolg ×1.02 nudgen).
+- **Versuchter Fix in 4.1.3-rc1 (Plan B, ZURÜCKGEROLLT):** 10 log-spaced Bänder, Bisektion bis Stall, Learning-Pfad. Auf realer Hardware zwei harte Bugs: ID 21 (Re-Home-Race) + ID 22 (Hysterese-Floor-Detektor). Code in 4.1.3-rc3 wieder ersetzt durch den linearen Chirp aus 4.1.2.
+- **Status:** zurück auf bekannten Zustand. Echter Fix bleibt Backlog — nächster Versuch braucht Stall-Detektor, der zwischen „Motor stallt" und „Bewegung zu klein für Sensor-Hysterese" unterscheiden kann (z.B. TMC StallGuard cross-checked mit Tacho-Cross-Counting bei garantiert sensor-überquerender Mindest-Amplitude).
+
+### [ID 21] FreqSweep v2 Re-Home-Race (Hardware-Test 2026-05-05)
+- **Symptom (Run #4 LEARN auf Z, 4.1.3-rc1):** Bei f=10 amp=265 nur 1 Puls statt 4 erwartet → STALL klassifiziert → `Homing::run()` → `EdgeTouch MZ: miss` → `HOME: Touch fehlgeschlagen`. Folgetests an unbekannter Position, Bisektion kollabierte.
+- **Root Cause:** `fsRehomeToEdge()` ruft `Homing::run()` auch dann, wenn der Motor weit weg von der Sensor-Zunge gestrandet ist. Homing erwartet die Zunge in Reichweite einer 2-rev-CW-Suche, was nach Stall in einem schon ausgelenkten Zustand nicht garantiert ist.
+- **Status:** Code zurückgerollt, alter linearer Chirp aktiv. Ein zukünftiger v2 muss das Re-Home-Verfahren robuster machen (z.B. mehrfachen Re-Anlauf mit größerer Suchreichweite) oder Stall-Tests so kurz halten, dass die Position nicht weit driftet.
+
+### [ID 22] FreqSweep v2 Hysterese-Floor-Detektor (Hardware-Test 2026-05-05)
+- **Symptom (Z-Motor, mehrere Bänder):** Bisektion lief bei 10 Hz, 36 Hz, 50 Hz, 69 Hz, 96 Hz auf `stallAmp=5` (= `FREQ_AMP_MIN`). Bei kleinen Amplituden lieferte der Tacho 0 Pulse → Detektor `pulses < swings/2` klassifiziert als Stall → Bisektion bringt low immer kleiner.
+- **Root Cause:** Die Sensor-Hysterese bedeutet, dass amp < irgendeine Mindest-Strecke (~hysteresis_in_steps) keine Crossings erzeugt, auch wenn der Motor mechanisch sauber schwingt. Mein Detektor unterscheidet das nicht von echtem Stall.
+- **Status:** Code zurückgerollt. Korrektur-Idee für späteren v2: vor Tests an einer Frequenz erst `min_detectable_amp` empirisch bestimmen (Bisektion gegen 0 Pulse, ohne Stall-Klassifizierung), dann Stall-Suche nur oberhalb dieser Floor. Oder den Detektor unabhängig vom Tacho machen (TMC StallGuard).
