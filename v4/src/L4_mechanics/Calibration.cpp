@@ -102,27 +102,39 @@ void run(uint8_t motorIdx) {
     CAL_MARK("CAL_P1_FOUND", p1Pos);
 
     // Motor läuft weiter CW — jetzt Austritt suchen (HIGH).
+    // KRITISCH (Bug-Fix v4.1.3-rc2): p2Pos muss SOFORT beim Trigger erfasst
+    // werden, vor stopMove + waitWhileRunning. Sonst kommt der Bremsweg
+    // (~133 Steps bei 2000 sps + 15000 acc) als systematische Asymmetrie
+    // zwischen p1Pos und p2Pos in die Zungenbreiten-Messung — gemessene
+    // Breite wäre konstant zu groß, SKIP_TOL=5% würde nie greifen.
+    //
+    // Logic-Check: p1Pos und p2Pos werden beide direkt nach dem Trigger der
+    // gleichen `HalSensor::checkStable(pin, …, 5)`-Funktion erfasst. Der
+    // 5-Sample-Filter hat denselben Latenz-Bias (~5 ms × Geschwindigkeit) auf
+    // beiden Seiten. Bei der Differenz `p2Pos - p1Pos` hebt sich der Bias auf.
     long startPos2 = p1Pos;
     bool exited = false;
+    long p2Pos = 0;
     while (true) {
-        if (HalSensor::checkStable(pin, HIGH, 5)) { exited = true; break; }
+        if (HalSensor::checkStable(pin, HIGH, 5)) {
+            p2Pos = s->getCurrentPosition();
+            exited = true;
+            break;
+        }
         if (Op::pendingStop) break;
         if (millis() - t0 > 18000) break;
         if (labs(s->getCurrentPosition() - startPos2) > (long)Stepper::stepsPerRev(motorIdx)) break;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     s->stopMove();
-    long zungenBreite = labs(s->getCurrentPosition() - startPos2);
     if (!exited) {
+        long zungenBreite = labs(s->getCurrentPosition() - startPos2);
         Logger::addLog(String("ERR: P2 Austritt nach ") + zungenBreite + " steps");
         CAL_MARK("CAL_P2_FAIL", zungenBreite);
         return;
     }
     if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) { CAL_MARK("CAL_P2_TIMEOUT", 0); return; }
     delay(80);
-    // Position bei P2_OK = Zungen-Austritt (CW von rechts). Zungen-Eintritt
-    // ist in P1_FOUND geloggt. Zungenbreite = pos(P2_OK) - pos(P1_FOUND).
-    long p2Pos = s->getCurrentPosition();
     CAL_MARK("CAL_P2_OK", p2Pos);
 
     // 1-Touch-Skip: gemessene Zungenbreite (P2-P1) gegen NVS vergleichen.
@@ -133,16 +145,18 @@ void run(uint8_t motorIdx) {
         long measuredWidth = labs(p2Pos - p1Pos);
         long absDelta = labs(measuredWidth - expectedWidth);
         float relDelta = (float)absDelta / (float)expectedWidth;
+        // Diagnose-Log: IMMER, damit auch im Miss-Fall sichtbar ist warum.
+        Logger::addLog(String("CAL: check d=") + measuredWidth
+            + " exp=" + expectedWidth
+            + " Δ=" + absDelta + " (" + (int)(relDelta * 1000) + "‰)");
         if (relDelta <= SKIP_TOL) {
             center = (p1Pos + p2Pos) / 2;
-            Logger::addLog(String("CAL: SKIP P3+P4 (Δ=") + absDelta + " steps, "
-                + (int)(relDelta * 1000) + "‰)");
+            Logger::addLog(String("CAL: SKIP P3+P4 OK"));
             CAL_MARK("CAL_SKIP_OK", measuredWidth);
             CAL_MARK("CAL_CENTER", center);
             // triggerStartDeg/EndDeg bleiben aus NVS — Mechanik ist unverändert.
         } else {
-            Logger::addLog(String("CAL: SKIP miss (gem=") + measuredWidth
-                + " erw=" + expectedWidth + " Δ=" + absDelta + ") → 3-Touch");
+            Logger::addLog(String("CAL: SKIP miss → 3-Touch fallback"));
             CAL_MARK("CAL_SKIP_FAIL", measuredWidth);
             // Fallback auf vollen 3-Touch-Pfad.
             Logger::addLog("CAL: P3 rechte Kante (3-Touch)...");
