@@ -112,4 +112,114 @@ void forceFlush(const v4::RuntimeConfig& cfg) {
     if (dirty) writeNow(cfg);
 }
 
+// --- Presets (Bug-ID 23b) ---
+//
+// Eigener NVS-Namespace `presets`, Slot-Keys "s0"..."s7". Wir verwenden
+// dasselbe Blob-Layout wie für die Live-Config + ein `valid`-Flag. Save/Load
+// sofort — keine Debounce, weil Preset-Aktionen explizite User-Klicks sind
+// (selten, kein Wear-Out-Risiko).
+
+static constexpr const char* NS_PR = "presets";
+
+struct PresetBlob {
+    uint32_t schema = SCHEMA;
+    bool     valid  = false;
+    uint8_t  _pad0[3] = {0,0,0};
+    uint8_t  moveType;
+    float    speed;
+    float    angle;
+    float    radius;
+    float    framesize;
+    float    contrast;
+    float    zShape;
+    float    edgeC;
+    float    rangeDeg;
+    float    mspace;
+    uint8_t  dynamics;
+    uint8_t  fan;
+    uint8_t  lamp;
+    float    stepAngle;
+    float    stepOffset;
+    float    holdMs;
+    uint32_t accelMax;
+    uint8_t  _pad1[1] = {0};
+};
+
+static String pKey(uint8_t slot) { return String("s") + slot; }
+
+void savePreset(uint8_t slot, const v4::RuntimeConfig& cfg) {
+    if (slot >= 8) return;
+    Preferences p; p.begin(NS_PR, false);
+    PresetBlob b;
+    b.valid      = true;
+    b.moveType   = (uint8_t)cfg.moveType;
+    b.speed      = cfg.speed;
+    b.angle      = cfg.angle;
+    b.radius     = cfg.radius;
+    b.framesize  = cfg.framesize;
+    b.contrast   = cfg.contrast;
+    b.zShape     = cfg.zShape;
+    b.edgeC      = cfg.edgeC;
+    b.rangeDeg   = cfg.rangeDeg;
+    b.mspace     = cfg.mspace;
+    b.dynamics   = (uint8_t)cfg.dynamics;
+    b.fan        = (uint8_t)cfg.fan;
+    b.lamp       = (uint8_t)cfg.lamp;
+    b.stepAngle  = cfg.stepAngle;
+    b.stepOffset = cfg.stepOffset;
+    b.holdMs     = cfg.holdMs;
+    b.accelMax   = cfg.accelMax;
+    p.putBytes(pKey(slot).c_str(), &b, sizeof(PresetBlob));
+    p.end();
+    Logger::addLog(String("PRESET ") + slot + ": saved");
+}
+
+bool loadPreset(uint8_t slot, v4::RuntimeConfig& cfg) {
+    if (slot >= 8) return false;
+    Preferences p; p.begin(NS_PR, true);
+    PresetBlob b;
+    bool ok = false;
+    if (p.getBytesLength(pKey(slot).c_str()) == sizeof(PresetBlob)) {
+        p.getBytes(pKey(slot).c_str(), &b, sizeof(PresetBlob));
+        if (b.valid && b.schema == SCHEMA) {
+            cfg.moveType   = b.moveType;
+            cfg.speed      = b.speed;
+            cfg.angle      = b.angle;
+            cfg.radius     = b.radius;
+            cfg.framesize  = b.framesize;
+            cfg.contrast   = b.contrast;
+            cfg.zShape     = b.zShape;
+            cfg.edgeC      = b.edgeC;
+            cfg.rangeDeg   = b.rangeDeg;
+            cfg.mspace     = b.mspace;
+            cfg.dynamics   = b.dynamics;
+            cfg.fan        = b.fan;
+            cfg.lamp       = b.lamp;
+            cfg.stepAngle  = b.stepAngle;
+            cfg.stepOffset = b.stepOffset;
+            cfg.holdMs     = b.holdMs;
+            cfg.accelMax   = b.accelMax;
+            // Live-Wert geändert → in normaler Debounce-Save mitnehmen
+            touch();
+            ok = true;
+            Logger::addLog(String("PRESET ") + slot + ": loaded");
+        }
+    }
+    p.end();
+    return ok;
+}
+
+bool isPresetValid(uint8_t slot) {
+    if (slot >= 8) return false;
+    Preferences p; p.begin(NS_PR, true);
+    PresetBlob b;
+    bool ok = false;
+    if (p.getBytesLength(pKey(slot).c_str()) == sizeof(PresetBlob)) {
+        p.getBytes(pKey(slot).c_str(), &b, sizeof(PresetBlob));
+        ok = (b.valid && b.schema == SCHEMA);
+    }
+    p.end();
+    return ok;
+}
+
 } // namespace StorageRuntime

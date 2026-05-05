@@ -29,4 +29,12 @@ void tickFlush(const v4::RuntimeConfig& cfg);
 // nichts dirty, kein Schreiben.
 void forceFlush(const v4::RuntimeConfig& cfg);
 
+// --- Presets (8 Slots, NVS-persistent) — Bug-ID 23b ---
+// Slot 0..7. savePreset/loadPreset schreiben/lesen sofort (kein Debounce —
+// User-Aktion ist explizit). isPresetValid testet ob Slot belegt ist.
+
+void savePreset(uint8_t slot, const v4::RuntimeConfig& cfg);
+bool loadPreset(uint8_t slot, v4::RuntimeConfig& cfg);  // true bei Erfolg
+bool isPresetValid(uint8_t slot);
+
 } // namespace StorageRuntime

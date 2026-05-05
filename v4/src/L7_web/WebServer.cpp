@@ -765,8 +765,38 @@ void begin() {
         if (a == "show") { Op::pending.show = m; r->send(200, "text/plain", "OK"); return; }
         if (a == "resetTele") { Telemetry::resetBuffer(); r->send(200, "text/plain", "OK"); return; }
         if (a == "synth") { Synthesis::start(); r->send(200, "text/plain", "OK"); return; }
+        // Bug-ID 23b: Preset-Slots in NVS (analog v1, aber Server-seitig)
+        if (a == "savep") {
+            int slot = r->hasParam("slot") ? r->getParam("slot")->value().toInt() : -1;
+            if (slot < 0 || slot >= 8) { r->send(400, "text/plain", "slot 0..7"); return; }
+            StorageRuntime::savePreset((uint8_t)slot, v4::rt);
+            r->send(200, "text/plain", "OK"); return;
+        }
+        if (a == "loadp") {
+            int slot = r->hasParam("slot") ? r->getParam("slot")->value().toInt() : -1;
+            if (slot < 0 || slot >= 8) { r->send(400, "text/plain", "slot 0..7"); return; }
+            bool ok = StorageRuntime::loadPreset((uint8_t)slot, v4::rt);
+            if (!ok) { r->send(404, "text/plain", "slot empty"); return; }
+            // Wenn Engine läuft, sanft restarten damit neue Werte sofort wirken
+            if (v4::rt.running) { Synthesis::stop(); Synthesis::start(); }
+            r->send(200, "text/plain", "OK"); return;
+        }
 
         r->send(501, "text/plain", "unknown action");
+    });
+
+    // /presets — JSON-Array mit valid-Status pro Slot 0..7. Browser-UI kann
+    // damit belegte vs. leere Slots visualisieren.
+    server.on("/presets", HTTP_GET, [](AsyncWebServerRequest* r) {
+        String j = "{\"slots\":[";
+        for (uint8_t i = 0; i < 8; i++) {
+            if (i > 0) j += ",";
+            j += StorageRuntime::isPresetValid(i) ? "true" : "false";
+        }
+        j += "]}";
+        AsyncWebServerResponse* res = r->beginResponse(200, "application/json", j);
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        r->send(res);
     });
 
     // Helper: serialisiert v4::rt als JSON. Quelle für /config und /set-Echo.
