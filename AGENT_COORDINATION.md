@@ -1,9 +1,9 @@
 # 📌 AGENT COORDINATION HUB
 
 ## 🕒 Aktueller Status (LIVE)
-- **Stand:** 2026-05-04
+- **Stand:** 2026-05-05
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.1.3** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — Phase 7 abgeschlossen, Backlog Calib-Skip + FreqSweep-v2 mitgenommen. [Bug-Log](v4/docs/project_perlin_bugs.md)
+- **Firmware:** **v4.1.4** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — Phase 7 abgeschlossen, Calib-Skip mit Self-Consistency aktiv (Calib-Zeit ~15 s → ~5 s). [Bug-Log](v4/docs/project_perlin_bugs.md)
 - **Phase:** v4 Phase 1–7 abgeschlossen ✅ — GUI vollständig reaktiviert (Bounds, /set-Echo, /preview, Canvas auf 10 Hz Polling). NVS-Schema 4001 → **4002** (FreqSweep-Lernfelder ergänzt, alte Cal-Daten invalidiert → Re-Calib beim ersten Boot nach Update).
 - **Vorgänger v4_iteration1/** liegt zur Seite (3 Commits, baubar via env `fysetc_e4_v4_iter1`)
 - **v3 wurde überschrieben** durch v4 (gleiches Board). v3-Quellcode + 35 v3-Bin-Snapshots in Git gesichert. Re-Flash auf v3.7.32 jederzeit möglich via `v3/firmware_v3_3.7.32_20260328_1230.bin`.

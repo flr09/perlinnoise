@@ -39,10 +39,15 @@ struct MotorState {
 
 // --- Pro-Motor-Kalibrierung (NVS-persistent) ---
 //
-// FreqSweep-Felder (v4002): pro Frequenzband die zuletzt ermittelte Stall-
-// Amplitude in Steps. 0 = noch unbekannt → Full-Bisektion. freqRunCount
-// zählt Sweep-Durchläufe; alle 5 Runs erfolgt voller Stall-Sweep zur
-// Re-Kalibrierung der Lern-Werte, dazwischen schneller Verify-Pfad.
+// FreqSweep-Felder (v4002, derzeit unbenutzt — Reserve für späteren v2):
+// pro Frequenzband die zuletzt ermittelte Stall-Amplitude in Steps.
+//
+// Calib-Skip-Felder (v4003): fastWidthSteps speichert die in der letzten
+// erfolgreichen 3-Touch-Calib gemessene P1+P2-Zungenbreite (in Steps bei
+// 16 Mikrosteps). Beim nächsten Calib-Lauf wird die frische P1+P2-Messung
+// gegen diesen Wert verglichen — Apples-vs-Apples, daher self-consistent
+// trotz Sensor-Hysterese und Drehrichtungs-Bias der 3-Touch-Methode.
+// 0 = noch unbekannt → kein Skip möglich, fällt auf 3-Touch zurück.
 struct CalibrationData {
     float    triggerStartDeg  = 0.0f;   // CW edge offset from center [deg]
     float    triggerEndDeg    = 0.0f;   // CCW edge offset [deg]
@@ -53,10 +58,11 @@ struct CalibrationData {
     uint8_t  sgThrs           = 0;
     uint8_t  stableRuns       = 0;
     uint32_t tpwmThrs         = 0;
-    uint16_t freqStallAmp[10] = {0,0,0,0,0,0,0,0,0,0};  // Stall-Amplitude pro Band (steps)
-    uint8_t  freqRunCount     = 0;       // Counter für Re-Calib-Zyklus
-    uint8_t  _pad[3]          = {0,0,0}; // explizites Padding für stable layout
-    uint32_t nvsVersion       = 4002;    // v4002 Schema (FreqSweep-Felder ergänzt)
+    uint16_t freqStallAmp[10] = {0,0,0,0,0,0,0,0,0,0};  // (Reserve)
+    uint8_t  freqRunCount     = 0;       // (Reserve)
+    uint8_t  _pad[1]          = {0};     // explizites Padding für stable layout
+    uint16_t fastWidthSteps   = 0;       // P1+P2-Zungenbreite (16 MS), 0=unbekannt
+    uint32_t nvsVersion       = 4003;    // v4003 Schema (Calib-Skip self-consistency)
 };
 
 } // namespace v4

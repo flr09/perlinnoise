@@ -38,19 +38,21 @@ void run(uint8_t motorIdx) {
     if (!s) return;
 
     // Vorab: vorhandene NVS-Cal laden, um Skip-Pfad vorzubereiten.
+    // Skip-Referenz ist `fastWidthSteps` aus dem letzten 3-Touch-Calib —
+    // gemessen mit derselben P1+P2-Methodik wie der Skip-Check, daher
+    // self-consistent (heben Sensor-Hysterese + Latenz-Bias gegeneinander auf).
+    // 0 = noch unbekannt (frisch nach Schema-Bump) → kein Skip möglich.
     v4::CalibrationData prevCal;
     StorageCalib::load(motorIdx, prevCal);
-    long expectedWidth = 0;
-    if (prevCal.valid) {
-        expectedWidth = labs(Units::degToSteps(motorIdx,
-            prevCal.triggerEndDeg - prevCal.triggerStartDeg));
-    }
+    long expectedWidth = (prevCal.valid && prevCal.fastWidthSteps > 0)
+        ? (long)prevCal.fastWidthSteps : 0;
 
     uint8_t pin = HalPins::MOTORS[motorIdx].tachoPin;
     Tmc::setPower(motorIdx, true);
     Stepper::setMicrosteps(motorIdx, 16);
     Logger::addLog(String("CAL M") + (char)('X' + motorIdx) + ": v4 calib (fast)"
-        + (prevCal.valid ? String(", expW=") + expectedWidth : String(", no NVS")));
+        + (expectedWidth > 0 ? String(", fastW=") + expectedWidth
+                             : String(", no fastW (3-Touch)")));
     s->setAcceleration(15000);
     CAL_MARK("CAL_START", 0);
 
@@ -186,11 +188,16 @@ void run(uint8_t motorIdx) {
             cal.triggerStartDeg = Units::stepsToDeg(motorIdx, a1 - center);
             cal.triggerEndDeg   = Units::stepsToDeg(motorIdx, a2 - center);
             cal.valid           = true;
+            // Self-Consistency: speichere die in DIESEM Run gemessene P1+P2-
+            // Breite als neue Skip-Referenz. Beim nächsten Calib wird die
+            // frische Messung gegen diesen Wert geprüft → Methodik konsistent.
+            cal.fastWidthSteps  = (uint16_t)min((long)labs(p2Pos - p1Pos), (long)0xFFFF);
             StorageCalib::save(motorIdx, cal);
+            Logger::addLog(String("CAL: fastWidth=") + cal.fastWidthSteps + " gespeichert");
             CAL_MARK("CAL_CENTER", center);
         }
     } else {
-        // Erst-Calib (oder NVS leer/stale): voller 3-Touch wie bisher.
+        // Erst-Calib (oder NVS leer/stale/Schema-Bump): voller 3-Touch.
         Logger::addLog("CAL: P3 rechte Kante (3-Touch)...");
         long a2 = EdgeTouch::touch(motorIdx, LOW, -1, 800, 3);
         if (a2 == LONG_MIN) { Logger::addLog("ERR: P3 Touch"); CAL_MARK("CAL_P3_FAIL", 0); return; }
@@ -206,7 +213,9 @@ void run(uint8_t motorIdx) {
         cal.triggerStartDeg = Units::stepsToDeg(motorIdx, a1 - center);
         cal.triggerEndDeg   = Units::stepsToDeg(motorIdx, a2 - center);
         cal.valid           = true;
+        cal.fastWidthSteps  = (uint16_t)min((long)labs(p2Pos - p1Pos), (long)0xFFFF);
         StorageCalib::save(motorIdx, cal);
+        Logger::addLog(String("CAL: fastWidth=") + cal.fastWidthSteps + " (initial)");
         CAL_MARK("CAL_CENTER", center);
     }
 

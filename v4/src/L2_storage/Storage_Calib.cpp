@@ -5,7 +5,7 @@
 namespace StorageCalib {
 
 static constexpr const char* NS = "calib";
-static constexpr uint32_t SCHEMA = 4002;
+static constexpr uint32_t SCHEMA = 4003;
 
 static String key(uint8_t motorIdx) {
     return String("m") + (char)('X' + motorIdx);

@@ -6,7 +6,7 @@ Quellen: dieser Eintrag · `AGENT_COORDINATION.md` Lessons · `v4/docs/FSD.md` �
 
 | ID | Date | Type | Title | Status |
 |---|---|---|---|---|
-| 1 | 2026-05-04 | 🔴 | Calibration-Skip Logic Error (Decel-Bias) | ✅ v4.1.3-rc2 ⏳ verify |
+| 1 | 2026-05-04 | 🔴 | Calibration-Skip Logic Error (Decel-Bias) | ✅ v4.1.3-rc2 + v4.1.4 (Self-Consistency) verifiziert |
 | 2 | 2026-05-02 | 🔴 | ElegantOTA Reboot missing loop() | ✅ v4.1.3 ⏳ verify |
 | 3 | 2026-05-04 | 🟡 | NoiseEngine Redundancy (Synthesis.cpp duplication) | 🟡 backlog |
 | 4 | 2026-05-04 | 🟡 | Tacho ISR Dead Code (Polling preferred) | 🟡 backlog |
@@ -33,7 +33,8 @@ Quellen: dieser Eintrag · `AGENT_COORDINATION.md` Lessons · `v4/docs/FSD.md` �
 - **Symptom:** Calib-Skip greift nie, auch bei unveränderter Mechanik. Zweiter Calib-Lauf gleich langsam wie der erste.
 - **Root Cause:** In `v4/src/L4_mechanics/Calibration.cpp` rc1 wurde `p2Pos` nach `s->stopMove()` + `Motion::waitWhileRunning()` + `delay(80)` erfasst, `p1Pos` aber direkt beim Trigger. Bei 2000 sps + 15000 Decel ergibt `v²/(2a) ≈ 133` Steps Bremsweg, der systematisch nur in `p2Pos` einging. `relDelta = 133 / expectedWidth` lag immer weit über 5 %.
 - **Fix (rc2):** `p2Pos = s->getCurrentPosition()` direkt in der Trigger-Schleife beim `checkStable(HIGH, 5)`-Treffer, vor `stopMove`. Logic-Check: beide Positionen durchlaufen denselben 5-Sample-Filter, der Bias hebt sich bei der Differenz auf. Diagnose-Log `CAL: check d=… exp=… Δ=… (…‰)` läuft jetzt immer.
-- **Verifikation offen:** zweiter Calib-Lauf nach Re-Calib soll `CAL: SKIP P3+P4 OK` mit Δ deutlich unter 5 % loggen.
+- **Folge-Befund Hardware-Test 2026-05-05:** rc2-Fix war notwendig aber nicht hinreichend. Selbst mit korrektem p2Pos-Capture lag der Vergleich der gemessenen P1+P2-Breite gegen die aus 3-Touch berechnete `triggerEnd-triggerStart` bei Δ ~45 % → SKIP fiel weiterhin auf 3-Touch zurück. Methodik-Mismatch: 3-Touch fährt entgegengesetzte Drehrichtungen pro Kante (Sensor-Hysterese), P1+P2 dieselbe Drehrichtung — Werte schlicht nicht direkt vergleichbar.
+- **Self-Consistency-Fix v4.1.4:** Neues NVS-Feld `fastWidthSteps` (Schema 4002 → 4003). Wird im 3-Touch-Pfad gleich aus der MITgemessenen P1+P2 dieser Run gespeichert. Skip-Vergleich nun gegen `fastWidthSteps` (Apples-vs-Apples). Verifikation: 1. Calib initialisiert (3-Touch + fastW=186 saved), 2. Calib SKIP_OK mit Δ=1 (5‰), Calib-Zeit von ~15 s auf ~5 s.
 
 ### [ID 2] ElegantOTA Reboot missing loop()
 - **Symptom:** Browser-/curl-Upload an `/ota/upload` meldet `OK`, Board läuft mit alter Firmware weiter.
