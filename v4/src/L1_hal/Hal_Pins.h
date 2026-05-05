@@ -45,6 +45,10 @@ constexpr uint8_t ENABLE_PIN = 25;
 constexpr uint8_t UART_RX    = 21;
 constexpr uint8_t UART_TX    = 22;
 
+// MOSFET-Ausgänge am FYSETC E4
+constexpr uint8_t FAN_PIN    = 13;  // BED-MOSFET → Lüfter (PWM)
+constexpr uint8_t LAMP_PIN   = 2;   // HOTEND-MOSFET → Lampe (discrete on/off; externer Treiber dimmt)
+
 constexpr bool hasSensor(uint8_t i) {
     return i < MOTOR_COUNT && MOTORS[i].tachoPin != 0xFF;
 }

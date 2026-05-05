@@ -4,6 +4,7 @@
 #include "../../L0_platform/Logger.h"
 #include "../../L0_platform/Types.h"
 #include "../../L1_hal/Hal_Pins.h"
+#include "../../L1_hal/Hal_Output.h"
 #include "../../L2_storage/Storage_Calib.h"
 #include "../../L3_driver/Stepper.h"
 #include "../../L3_driver/Tmc2209.h"
@@ -50,10 +51,29 @@ static float dynRange() {
 }
 
 void init() {
-    // SimplexNoise-Konstruktor läuft bereits beim Modulelaufzeit.
-    // Hier nur reset der Pfad-Variablen.
+    HalOutput::init();
+    // NoiseEngine-Konstruktor läuft bereits zur Modul-Init-Zeit.
     flightX = flightY = timeAcc = 0.0f;
     lastTickMs = 0;
+}
+
+// Output-State-Throttling: tick() läuft 100 Hz, aber Fan/Lamp werden nur bei
+// Wertänderung an die HAL gepusht. Verhindert 100 ledcWrite/digitalWrite pro
+// Sekunde ohne Mehrwert. -1 = noch nie geschrieben → erster Push immer.
+static int lastFanWritten  = -1;
+static int lastLampWritten = -1;
+
+static void pushOutputs() {
+    int curFan  = (int)v4::rt.fan;
+    int curLamp = v4::rt.lamp > 0 ? 1 : 0;
+    if (curFan != lastFanWritten) {
+        HalOutput::setFan((uint8_t)curFan);
+        lastFanWritten = curFan;
+    }
+    if (curLamp != lastLampWritten) {
+        HalOutput::setLamp(curLamp != 0);
+        lastLampWritten = curLamp;
+    }
 }
 
 // Engine-Cap aus NVS-Charakterisierung. Wenn Motor nicht kalibriert ist
@@ -117,10 +137,15 @@ void stop() {
 }
 
 void tick() {
-    if (!v4::rt.running) return;
     unsigned long now = millis();
     if (now - lastTickMs < TICK_MS) return;
     lastTickMs = now;
+
+    // Fan/Lamp werden auch bei stehender Synthese gepusht — User soll Lüfter
+    // hochdrehen können, ohne erst Engine starten zu müssen.
+    pushOutputs();
+
+    if (!v4::rt.running) return;
 
     float dt = (float)TICK_MS / 1000.0f;
     float effSpeed = v4::rt.speed * dynSpeed();

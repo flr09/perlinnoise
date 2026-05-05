@@ -26,8 +26,26 @@ Quellen: dieser Eintrag · `AGENT_COORDINATION.md` Lessons · `v4/docs/FSD.md` �
 | 18 | 2026-04-29 | 🔴 | FreqSweep „Show 7/7" lieferte nur 7 Impulse, fuhr nicht in Stall — Hyperbel-Beziehung amp×f² nicht modelliert | 🔴 backlog (v2-Versuch in 4.1.3-rc1 zurückgerollt, siehe ID 21+22) |
 | 21 | 2026-05-05 | 🔴 | FreqSweep v2: Re-Home-Race nach Stall bei kleiner amp → EdgeTouch miss → Folgetests an Müll-Position | 🔴 reverted in 4.1.3 (linearer Chirp aus 4.1.2 wieder aktiv) |
 | 22 | 2026-05-05 | 🔴 | FreqSweep v2 Stall-Detektor: amp < Sensor-Hysterese erzeugt 0 Pulse, fälschlich als Stall klassifiziert → Bisektion läuft in Floor (stallAmp=5 für mehrere Bänder) | 🔴 reverted in 4.1.3 (NVS-Felder bleiben als Reserve für späteren v2-Versuch mit Stallguard-Cross-Check) |
+| 23 | 2026-05-05 | 🟡 | Missing Persistence: Slider/Presets verlieren Werte nach Reboot (Browser-LocalStorage) | 🟡 in Arbeit (v4.1.8 Config + v4.1.9 Presets) |
+| 24 | 2026-05-05 | 🔴 | Square/Saw springt zu langsam → wirkt sinusförmig (`DEFAULT_ACC_NOISE` 4000 zu niedrig für Wave-Modi) | 🔴 in Arbeit (v4.1.7) |
+| 25 | 2026-05-05 | 🔴 | EdgeC-Slider wird in `Synthesis::tick()` ignoriert (nur `zShape` + `contrast` angewendet) | 🔴 in Arbeit (v4.1.7) |
+| 26 | 2026-05-05 | 🟡 | HAL Totholz: `v4::rt.fan/lamp` werden gesetzt aber nirgends an GPIO ausgegeben (PWM Fan GPIO 13, Lamp GPIO 2) | ✅ v4.1.6 (`Hal_Output` mit PWM-Fan + discrete Lamp, throttled in tick()) |
+| 27 | 2026-05-05 | 🔴 | **Gemini v4.2.0 Sammel-Commit kritisch defekt:** `WebServer::begin` umbenannt zu `init` ohne Header/main-Update → Linker greift auf Arduino-Lib `WebServer::begin` → unsere Endpoints nie registriert. Plus NVS-Wear-Out durch `save()` bei jedem /set, plus 1 M sps² Acc-Cap, plus blocking delay() im /wifisave. | ✅ v4.1.5 reset (Commit `8c0f389` verworfen, neu aufgeteilt v4.1.6–v4.2.0 mit Hardware-Test pro Schritt) |
 
 ---
+
+### [ID 26] HAL Totholz (Fan/Lamp)
+- **Problem:** `v4::rt.fan` (0..255) und `v4::rt.lamp` wurden in `/set` gesetzt, aber `Synthesis.cpp` reichte sie nirgends an die GPIO weiter. Lüfter & Lampe nie ansteuerbar.
+- **Fix v4.1.6:** Neuer `HalOutput`-Block (L1) mit PWM-Fan (GPIO 13, LEDC-Channel 4, 5 kHz, 8 Bit) und discrete Lamp (GPIO 2). `Synthesis::init()` ruft `HalOutput::init()`. `Synthesis::tick()` ruft `pushOutputs()` mit Wert-Throttle: nur bei Änderung von `v4::rt.fan/lamp` wird `ledcWrite/digitalWrite` aufgerufen — keine 100 GPIO-Calls/s ohne Mehrwert. Funktioniert auch bei stehender Synthese (Push vor `if (!running) return`).
+
+### [ID 27] Gemini v4.2.0 Sammel-Commit defekt
+- **Befund:** Commit `8c0f389` ("v4.2.0: Hardware, Persistence, Performance, EdgeC") kompilierte SUCCESS, hätte aber als Firmware kaputt funktioniert:
+  - **Kritisch:** `WebServer::begin()` in `.cpp` umbenannt zu `init()`, aber `WebServer.h` und `main_v4.cpp:133` nicht angepasst. Linker griff zur Arduino-Library `lib052/WebServer/WebServer.cpp` → unsere `init()` würde nie aufgerufen, alle Endpoints + ElegantOTA tot. Symbol-Check via `nm` bestätigte `_ZN9WebServer4initEv` (unsere) vs `_ZN9WebServer5beginEv` (Arduino-Lib).
+  - **NVS-Wear-Out:** `StorageRuntime::save(c)` bei JEDEM /set-Call. Slider-Drag = ~50 Writes/s × 60 s = 3000 Writes/min. ESP32-NVS-Cells (~100 k Cycles) wären in <1 h verschlissen.
+  - **Acc-Cap zu hoch:** `accCap = 1000000` (1 Mio sps²) für Wave-/STEP-Mode. Bei uncal-Motor (cal.valid=false) keine Heruntercappung → 250× Default → Mechanik-Schock.
+  - **Blocking delay() im /wifisave-Handler:** `delay(100); ESP.restart()` blockiert AsyncWebServer-Task — Response kommt nicht zuverlässig durch.
+  - **synth-Action zum Toggle gemacht** (war: nur start) — UI-Verhaltensänderung ohne Test.
+- **Fix:** Hard-Reset auf v4.1.5, Aufteilung in 5 saubere Tags v4.1.6 → v4.2.0 mit Hardware-Test je Schritt. Bug-Log dokumentiert die Aufteilung.
 
 ### [ID 1] Calibration-Skip Logic Error (Decel-Bias)
 - **Symptom:** Calib-Skip greift nie, auch bei unveränderter Mechanik. Zweiter Calib-Lauf gleich langsam wie der erste.
