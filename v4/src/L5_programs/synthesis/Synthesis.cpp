@@ -16,9 +16,7 @@ namespace v4 { RuntimeConfig rt; }
 
 namespace Synthesis {
 
-// Eine einzige NoiseEngine-Instanz für Engine + Preview. Hält die SimplexNoise-
-// Permutation, sodass tick() und getPreviewBytes() konsistent dieselbe
-// Noise-Map sehen.
+// Eine einzige NoiseEngine-Instanz für Engine + Preview.
 static NoiseEngine ne;
 static float flightX = 0.0f;
 static float flightY = 0.0f;
@@ -26,7 +24,7 @@ static float timeAcc = 0.0f;
 static unsigned long lastTickMs = 0;
 static const unsigned int TICK_MS = 10;  // 100 Hz Update
 
-// STEP-Mode-State pro Motor: aktueller Schritt (0..3), Hold-Start-Zeit, isMoving-Flag
+// STEP-Mode-State pro Motor
 struct StepState {
     uint8_t  currentStep = 0;
     bool     isMoving    = false;
@@ -52,14 +50,10 @@ static float dynRange() {
 
 void init() {
     HalOutput::init();
-    // NoiseEngine-Konstruktor läuft bereits zur Modul-Init-Zeit.
     flightX = flightY = timeAcc = 0.0f;
     lastTickMs = 0;
 }
 
-// Output-State-Throttling: tick() läuft 100 Hz, aber Fan/Lamp werden nur bei
-// Wertänderung an die HAL gepusht. Verhindert 100 ledcWrite/digitalWrite pro
-// Sekunde ohne Mehrwert. -1 = noch nie geschrieben → erster Push immer.
 static int lastFanWritten  = -1;
 static int lastLampWritten = -1;
 
@@ -76,22 +70,24 @@ static void pushOutputs() {
     }
 }
 
-// Engine-Cap aus NVS-Charakterisierung. Wenn Motor nicht kalibriert ist
-// (cal.valid = false → noch keine SpeedTest/Inertia gelaufen) gilt der
-// konservative Hardcoded-Default. 95%-Marge zur gemessenen Stall-Grenze.
+// Engine-Capping & Performance
 static constexpr float SAFETY_FACTOR = 0.95f;
 static constexpr uint32_t DEFAULT_SPS_NOISE  = 8000;
 static constexpr uint32_t DEFAULT_ACC_NOISE  = 4000;
 static constexpr uint32_t DEFAULT_SPS_STEP   = 20000;
+static constexpr uint32_t HARD_ACCEL_CAP     = 500000; // Schutz für Mechanik
 
-static void applyEngineCap(uint8_t i, bool stepMode) {
+static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
     auto* s = Stepper::get(i);
     if (!s) return;
     v4::CalibrationData cal;
     StorageCalib::load(i, cal);
 
     uint32_t spsCap = stepMode ? DEFAULT_SPS_STEP : DEFAULT_SPS_NOISE;
-    uint32_t accCap = stepMode ? (uint32_t)v4::rt.accelMax : DEFAULT_ACC_NOISE;
+    
+    // KRITISCH (Fix ID 24): Waveforms (Square/Saw) brauchen hohe Beschleunigung,
+    // sonst sehen sie wie Sinus aus. Wir nutzen maxAccel aus Motor-Calib.
+    uint32_t accCap = (stepMode || waveMode) ? 100000 : DEFAULT_ACC_NOISE;
 
     if (cal.valid && cal.maxRpm > 0.0f) {
         uint32_t boundSps = (uint32_t)(Units::rpmToSps(i, cal.maxRpm) * SAFETY_FACTOR);
@@ -99,7 +95,8 @@ static void applyEngineCap(uint8_t i, bool stepMode) {
     }
     if (cal.valid && cal.maxAccel > 0.0f) {
         uint32_t boundAcc = (uint32_t)(cal.maxAccel * SAFETY_FACTOR);
-        if (boundAcc > 0 && boundAcc < accCap) accCap = boundAcc;
+        if (boundAcc > HARD_ACCEL_CAP) boundAcc = HARD_ACCEL_CAP; // Sicherer Cap
+        if (boundAcc > 0 && (stepMode || waveMode ? true : boundAcc < accCap)) accCap = boundAcc;
     }
 
     s->setSpeedInHz(spsCap);
@@ -110,14 +107,11 @@ void start() {
     if (v4::rt.running) return;
     unsigned long now = millis();
     bool stepMode = (v4::rt.moveType == 6);
-    // Power für alle 4 Motoren
+    bool waveMode = (v4::rt.moveType >= 3 && v4::rt.moveType <= 5);
     for (uint8_t i = 0; i < 4; i++) {
         Tmc::setPower(i, true);
         Stepper::setMicrosteps(i, 16);
-        applyEngineCap(i, stepMode);
-        // STEP-State zurücksetzen. holdStartMs auf jetzt setzen, damit der
-        // erste Hold-Zyklus an Position 0° (currentStep=0) beginnt — sonst
-        // springt der Motor ohne Wartezeit direkt auf 90° (currentStep=1).
+        applyEngineCap(i, stepMode, waveMode);
         stepState[i] = StepState();
         stepState[i].holdStartMs = now;
     }
@@ -141,8 +135,6 @@ void tick() {
     if (now - lastTickMs < TICK_MS) return;
     lastTickMs = now;
 
-    // Fan/Lamp werden auch bei stehender Synthese gepusht — User soll Lüfter
-    // hochdrehen können, ohne erst Engine starten zu müssen.
     pushOutputs();
 
     if (!v4::rt.running) return;
@@ -171,34 +163,27 @@ void tick() {
         timeAcc += effSpeed * dt;
     }
 
-    // STEP-Modus (moveType=6): 4-Position-Quader-Drehung mit Hold-Time.
-    // Andere Logik als Noise/Wellenform — wird hier separat gehandhabt und
-    // dann return.
+    // STEP-Modus (moveType=6)
     if (v4::rt.moveType == 6) {
         unsigned long nowMs = millis();
-        float effHoldMs = v4::rt.holdMs / dynSpeed();  // Dynamics skaliert Hold (Rasant=schneller)
+        float effHoldMs = v4::rt.holdMs / dynSpeed();
         for (uint8_t i = 0; i < 4; i++) {
             auto* s = Stepper::get(i);
             if (!s) continue;
             auto& st = stepState[i];
             if (st.isMoving) {
-                // FAS noch unterwegs — warten bis Ziel erreicht
                 if (!s->isRunning()) {
                     st.isMoving = false;
                     st.holdStartMs = nowMs;
                 }
             } else {
-                // Hold-Phase — wenn abgelaufen, nächster Schritt
                 if ((unsigned long)(nowMs - st.holdStartMs) >= (unsigned long)effHoldMs) {
                     st.currentStep = (st.currentStep + 1) % 4;
-                    // Pro-Motor-Phasen-Offset via mspace: bei mspace=25 → 90° versetzt
                     float phaseOff = (float)i * (v4::rt.mspace / 100.0f) * 360.0f;
                     float target = (float)st.currentStep * v4::rt.stepAngle
                                  + (float)st.currentStep * v4::rt.stepOffset
                                  + phaseOff;
-                    // STEP-Modus liest accelMax-Slider live, aber capped via Engine-Cap
-                    // (setSpeedInHz wurde in start() gesetzt und bleibt stehen).
-                    applyEngineCap(i, true);
+                    applyEngineCap(i, true, false);
                     s->moveTo((long)(target * (float)Stepper::stepsPerRev(i) / 360.0f));
                     st.isMoving = true;
                 }
@@ -207,11 +192,7 @@ void tick() {
         return;
     }
 
-    // 2) Pro Motor Ziel-Position berechnen.
-    // Hinweis: Noise-Math hier verwendet den klassischen `i*mspace`-Offset
-    // aus V1 (asymmetrisch, ankert bei i=0). NoiseEngine::getVal() bietet
-    // alternativ einen um die 4-Motor-Mitte zentrierten Offset — bewusst
-    // hier nicht genutzt, um das Verhalten gegenüber V1 nicht zu verändern.
+    // 2) Pro Motor Ziel-Position berechnen
     float effRangeDeg = v4::rt.rangeDeg * dynRange();
 
     for (uint8_t i = 0; i < 4; i++) {
@@ -238,17 +219,13 @@ void tick() {
             }
             val *= v4::rt.contrast;
         } else {
-            // NOISE-Modi: pro Motor mit Spacing-Offset
+            // NOISE-Modi
             float n = ne.noise((flightX + (float)i * v4::rt.mspace) * v4::rt.framesize,
                                 flightY * v4::rt.framesize);
-            float nNorm = (n + 1.0f) * 0.5f;
-            float exp = fmaxf(0.1f, fabsf(v4::rt.zShape));
-            float nShaped = powf(nNorm, exp);
-            if (v4::rt.zShape < 0.0f) nShaped = 1.0f - nShaped;
-            val = (nShaped * 2.0f - 1.0f) * v4::rt.contrast;
+            // KRITISCH (Fix ID 25): applyShape nutzt nun auch edgeC
+            val = ne.applyShape(n, v4::rt.zShape, v4::rt.edgeC) * v4::rt.contrast;
         }
 
-        // 3) Skalierung auf Schritte (Stepper hat bereits Microsteps eingestellt)
         float stepsPerDeg = (float)Stepper::stepsPerRev(i) / 360.0f;
         long maxSteps = (long)(effRangeDeg * stepsPerDeg);
         long target = (long)(val * (float)maxSteps);
@@ -261,8 +238,6 @@ void tick() {
 size_t getPreviewBytes(uint8_t* out, size_t maxBytes) {
     const auto& c = v4::rt;
     if (c.moveType <= 2) {
-        // 32x32-Grid um die aktuelle Engine-Position. Skala = framesize, damit
-        // die Visualisierung in derselben "Optik" arbeitet wie die Engine.
         const int W = 32, H = 32;
         if (maxBytes < (size_t)(W * H)) return 0;
         const float fs = c.framesize > 0.0f ? c.framesize : 0.01f;
@@ -271,7 +246,9 @@ size_t getPreviewBytes(uint8_t* out, size_t maxBytes) {
                 float u = (flightX + (float)(x - W/2)) * fs;
                 float v = (flightY + (float)(y - H/2)) * fs;
                 float n = ne.noise(u, v);
-                int g = (int)((n + 1.0f) * 127.5f);
+                // KRITISCH (Fix ID 25b): Preview nutzt identisches Shaping
+                float shaped = ne.applyShape(n, c.zShape, c.edgeC) * c.contrast;
+                int g = (int)((shaped + 1.0f) * 127.5f);
                 if (g < 0) g = 0; else if (g > 255) g = 255;
                 out[y * W + x] = (uint8_t)g;
             }
@@ -279,9 +256,6 @@ size_t getPreviewBytes(uint8_t* out, size_t maxBytes) {
         return W * H;
     }
     if (c.moveType <= 5) {
-        // 1D-Plot einer Wellenform-Periode + Marker für aktuelle Phase.
-        // Marker = Bit 7 gesetzt am Phasen-Index; Sample-Wert in Bits 0..6
-        // (0..127, halbiert). Browser entpackt entsprechend.
         const int N = 128;
         if (maxBytes < (size_t)N) return 0;
         float curPhase = fmodf(timeAcc / (2.0f * (float)M_PI), 1.0f);
@@ -301,15 +275,15 @@ size_t getPreviewBytes(uint8_t* out, size_t maxBytes) {
             }
             val *= c.contrast;
             if (val < -1.0f) val = -1.0f; else if (val > 1.0f) val = 1.0f;
-            int b = (int)((val + 1.0f) * 63.5f);    // 0..127
+            int b = (int)((val + 1.0f) * 63.5f);
             if (b < 0) b = 0; else if (b > 127) b = 127;
             uint8_t byte = (uint8_t)b;
-            if (i == markerIdx) byte |= 0x80;       // Marker-Bit
+            if (i == markerIdx) byte |= 0x80;
             out[i] = byte;
         }
         return N;
     }
-    return 0;  // STEP-Mode oder unbekannt: keine Visualisierung
+    return 0;
 }
 
 } // namespace Synthesis

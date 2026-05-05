@@ -27,8 +27,8 @@ Quellen: dieser Eintrag · `AGENT_COORDINATION.md` Lessons · `v4/docs/FSD.md` �
 | 21 | 2026-05-05 | 🔴 | FreqSweep v2: Re-Home-Race nach Stall bei kleiner amp → EdgeTouch miss → Folgetests an Müll-Position | 🔴 reverted in 4.1.3 (linearer Chirp aus 4.1.2 wieder aktiv) |
 | 22 | 2026-05-05 | 🔴 | FreqSweep v2 Stall-Detektor: amp < Sensor-Hysterese erzeugt 0 Pulse, fälschlich als Stall klassifiziert → Bisektion läuft in Floor (stallAmp=5 für mehrere Bänder) | 🔴 reverted in 4.1.3 (NVS-Felder bleiben als Reserve für späteren v2-Versuch mit Stallguard-Cross-Check) |
 | 23 | 2026-05-05 | 🟡 | Missing Persistence: Slider/Presets verlieren Werte nach Reboot (Browser-LocalStorage) | 🟡 in Arbeit (v4.1.8 Config + v4.1.9 Presets) |
-| 24 | 2026-05-05 | 🔴 | Square/Saw springt zu langsam → wirkt sinusförmig (`DEFAULT_ACC_NOISE` 4000 zu niedrig für Wave-Modi) | 🔴 in Arbeit (v4.1.7) |
-| 25 | 2026-05-05 | 🔴 | EdgeC-Slider wird in `Synthesis::tick()` ignoriert (nur `zShape` + `contrast` angewendet) | 🔴 in Arbeit (v4.1.7) |
+| 24 | 2026-05-05 | 🔴 | Square/Saw springt zu langsam → wirkt sinusförmig (`DEFAULT_ACC_NOISE` 4000 zu niedrig für Wave-Modi) | ✅ v4.1.7 (nutzt `maxAccel` bis `HARD_ACCEL_CAP=500000`) |
+| 25 | 2026-05-05 | 🔴 | EdgeC-Slider wird in `Synthesis::tick()` ignoriations (nur `zShape` + `contrast` angewendet) | ✅ v4.1.7 (applyShape nutzt `edgeC` für Motoren + Preview) |
 | 26 | 2026-05-05 | 🟡 | HAL Totholz: `v4::rt.fan/lamp` werden gesetzt aber nirgends an GPIO ausgegeben (PWM Fan GPIO 13, Lamp GPIO 2) | ✅ v4.1.6 (`Hal_Output` mit PWM-Fan + discrete Lamp, throttled in tick()) |
 | 27 | 2026-05-05 | 🔴 | **Gemini v4.2.0 Sammel-Commit kritisch defekt:** `WebServer::begin` umbenannt zu `init` ohne Header/main-Update → Linker greift auf Arduino-Lib `WebServer::begin` → unsere Endpoints nie registriert. Plus NVS-Wear-Out durch `save()` bei jedem /set, plus 1 M sps² Acc-Cap, plus blocking delay() im /wifisave. | ✅ v4.1.5 reset (Commit `8c0f389` verworfen, neu aufgeteilt v4.1.6–v4.2.0 mit Hardware-Test pro Schritt) |
 
