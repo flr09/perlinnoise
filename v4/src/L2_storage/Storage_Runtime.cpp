@@ -1,0 +1,115 @@
+#include "Storage_Runtime.h"
+#include <Preferences.h>
+#include "../L0_platform/Logger.h"
+
+namespace StorageRuntime {
+
+static constexpr const char* NS = "rtconf";
+static constexpr uint32_t SCHEMA = 4200;
+static constexpr uint32_t DEBOUNCE_MS = 5000;
+
+// NVS-Blob: explizites Layout, damit Schema-Bumps kontrollierbar sind und
+// nicht jedes Aliasing-Detail der RuntimeConfig-Struct die NVS-Größe ändert.
+struct Blob {
+    uint32_t schema = SCHEMA;
+    uint8_t  moveType;
+    float    speed;
+    float    angle;
+    float    radius;
+    float    framesize;
+    float    contrast;
+    float    zShape;
+    float    edgeC;
+    float    rangeDeg;
+    float    mspace;
+    uint8_t  dynamics;
+    uint8_t  fan;
+    uint8_t  lamp;
+    float    stepAngle;
+    float    stepOffset;
+    float    holdMs;
+    uint32_t accelMax;
+    uint8_t  _pad[2] = {0, 0};
+};
+
+static unsigned long lastTouchMs = 0;
+static bool          dirty       = false;
+
+void load(v4::RuntimeConfig& cfg) {
+    Preferences p;
+    p.begin(NS, true);
+    Blob b;
+    if (p.getBytesLength("last") == sizeof(Blob)) {
+        p.getBytes("last", &b, sizeof(Blob));
+        if (b.schema == SCHEMA) {
+            cfg.moveType   = b.moveType;
+            cfg.speed      = b.speed;
+            cfg.angle      = b.angle;
+            cfg.radius     = b.radius;
+            cfg.framesize  = b.framesize;
+            cfg.contrast   = b.contrast;
+            cfg.zShape     = b.zShape;
+            cfg.edgeC      = b.edgeC;
+            cfg.rangeDeg   = b.rangeDeg;
+            cfg.mspace     = b.mspace;
+            cfg.dynamics   = b.dynamics;
+            cfg.fan        = b.fan;
+            cfg.lamp       = b.lamp;
+            cfg.stepAngle  = b.stepAngle;
+            cfg.stepOffset = b.stepOffset;
+            cfg.holdMs     = b.holdMs;
+            cfg.accelMax   = b.accelMax;
+            Logger::addLog("RT: loaded NVS config");
+        } else {
+            Logger::addLog(String("RT: NVS schema stale (")
+                + b.schema + " != " + SCHEMA + "), defaults aktiv");
+        }
+    } else {
+        Logger::addLog("RT: NVS leer, defaults aktiv");
+    }
+    p.end();
+}
+
+void touch() {
+    lastTouchMs = millis();
+    dirty       = true;
+}
+
+static void writeNow(const v4::RuntimeConfig& cfg) {
+    Preferences p;
+    p.begin(NS, false);
+    Blob b;
+    b.moveType   = (uint8_t)cfg.moveType;
+    b.speed      = cfg.speed;
+    b.angle      = cfg.angle;
+    b.radius     = cfg.radius;
+    b.framesize  = cfg.framesize;
+    b.contrast   = cfg.contrast;
+    b.zShape     = cfg.zShape;
+    b.edgeC      = cfg.edgeC;
+    b.rangeDeg   = cfg.rangeDeg;
+    b.mspace     = cfg.mspace;
+    b.dynamics   = (uint8_t)cfg.dynamics;
+    b.fan        = (uint8_t)cfg.fan;
+    b.lamp       = (uint8_t)cfg.lamp;
+    b.stepAngle  = cfg.stepAngle;
+    b.stepOffset = cfg.stepOffset;
+    b.holdMs     = cfg.holdMs;
+    b.accelMax   = cfg.accelMax;
+    p.putBytes("last", &b, sizeof(Blob));
+    p.end();
+    dirty = false;
+    Logger::addLog("RT: saved");
+}
+
+void tickFlush(const v4::RuntimeConfig& cfg) {
+    if (!dirty) return;
+    if (millis() - lastTouchMs < DEBOUNCE_MS) return;
+    writeNow(cfg);
+}
+
+void forceFlush(const v4::RuntimeConfig& cfg) {
+    if (dirty) writeNow(cfg);
+}
+
+} // namespace StorageRuntime

@@ -26,7 +26,7 @@ Quellen: dieser Eintrag · `AGENT_COORDINATION.md` Lessons · `v4/docs/FSD.md` �
 | 18 | 2026-04-29 | 🔴 | FreqSweep „Show 7/7" lieferte nur 7 Impulse, fuhr nicht in Stall — Hyperbel-Beziehung amp×f² nicht modelliert | 🔴 backlog (v2-Versuch in 4.1.3-rc1 zurückgerollt, siehe ID 21+22) |
 | 21 | 2026-05-05 | 🔴 | FreqSweep v2: Re-Home-Race nach Stall bei kleiner amp → EdgeTouch miss → Folgetests an Müll-Position | 🔴 reverted in 4.1.3 (linearer Chirp aus 4.1.2 wieder aktiv) |
 | 22 | 2026-05-05 | 🔴 | FreqSweep v2 Stall-Detektor: amp < Sensor-Hysterese erzeugt 0 Pulse, fälschlich als Stall klassifiziert → Bisektion läuft in Floor (stallAmp=5 für mehrere Bänder) | 🔴 reverted in 4.1.3 (NVS-Felder bleiben als Reserve für späteren v2-Versuch mit Stallguard-Cross-Check) |
-| 23 | 2026-05-05 | 🟡 | Missing Persistence: Slider/Presets verlieren Werte nach Reboot (Browser-LocalStorage) | 🟡 in Arbeit (v4.1.8 Config + v4.1.9 Presets) |
+| 23 | 2026-05-05 | 🟡 | Missing Persistence: Slider/Presets verlieren Werte nach Reboot (Browser-LocalStorage) | 🟡 Config ✅ v4.1.9 (Storage_Runtime mit 5 s Debounce, NVS-Wear-Out-Schutz). Presets offen für v4.1.10. |
 | 24 | 2026-05-05 | 🔴 | Square/Saw springt zu langsam → wirkt sinusförmig (`DEFAULT_ACC_NOISE` 4000 zu niedrig für Wave-Modi) | ✅ v4.1.7 (nutzt `maxAccel` bis `HARD_ACCEL_CAP=500000`) |
 | 25 | 2026-05-05 | 🔴 | EdgeC-Slider wird in `Synthesis::tick()` ignoriations (nur `zShape` + `contrast` angewendet) | ✅ v4.1.7 (applyShape nutzt `edgeC` für Motoren + Preview) |
 | 26 | 2026-05-05 | 🟡 | HAL Totholz: `v4::rt.fan/lamp` werden gesetzt aber nirgends an GPIO ausgegeben (PWM Fan GPIO 13, Lamp GPIO 2) | ✅ v4.1.6 (`Hal_Output` mit PWM-Fan + discrete Lamp, throttled in tick()) |

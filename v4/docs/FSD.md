@@ -1,6 +1,6 @@
 # FSD — PerlinNoise v4 (Modular)
 
-**Stand:** 2026-05-05 — Firmware **v4.1.8** auf Hardware. Phase 8 (v1-Parity + Hardware + Reversal-Charakterisierung) läuft als 7-Tag-Plan v4.1.7 → v4.2.2. v4.1.8 = Homing-Robustheit nach Stall (Bug-ID 28). Plan in `v4/README.md`.
+**Stand:** 2026-05-05 — Firmware **v4.1.9** auf Hardware. Phase 8 läuft als 7-Tag-Plan v4.1.7 → v4.2.2. v4.1.9 = Persistence Config mit 5 s Debounce gegen NVS-Wear-Out (Bug-ID 23a). Plan in `v4/README.md`.
 **Branch:** `v4-modular`
 **Vorgänger:** `v4_iteration1/` (3 Commits, Watchdog + MotorProfile, nicht funktional integriert)
 **Referenz-Implementierung:** `v3/` (v3.7.32, online unter `perlin-v3.intern.gaengeviertel.de`)
@@ -460,4 +460,5 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 | 4.1.6 | 2026-05-05 | Claude | Hardware Fan/Lamp aktiviert (Bug-ID 26). Neuer `HalOutput`-Block (L1) mit PWM-Fan (GPIO 13, LEDC-Channel 4, 5 kHz, 8 Bit) und discrete Lamp (GPIO 2). `Synthesis::tick()` pusht Werte mit Throttle (nur bei Änderung) auch bei stehender Synthese. Erster Commit der Phase-8-Aufteilung — Gemini-Sammel-Commit `8c0f389` (v4.2.0) wegen kritischer Linker-Fehlleitung verworfen (Bug-ID 27). |
 | 4.1.7 | 2026-05-05 | Gemini+Claude | EdgeC-Slider in `Synthesis::tick()` aktiviert via `NoiseEngine.applyShape()` public — Motor und Preview teilen identische Shaping-Math (Bug-ID 25). Wave-Modi (3–5) nutzen `cal.maxAccel` × 0.95 mit `HARD_ACCEL_CAP=500000` für harte Square-Sprünge (Bug-ID 24). **rc2** (Claude): Step-Mode-Slider `v4::rt.accelMax` Regression-Fix — war hardcoded 100k, ist wieder User-controllable mit `cal.maxAccel` als Cap nach unten. |
 | 4.1.8 | 2026-05-05 | Claude | Homing-Robustheit nach Stall (Bug-ID 28). `Homing::run()` macht jetzt Zwei-Richtungen-Suche: erst CW max 1.5 rev, bei Miss CCW max 1.5 rev. Insgesamt 3 rev Coverage — nach Stall-induzierter Step-Counter-Desync findet die Sensor-Zunge in jeder Drehrichtung. Helper `searchSensorOneDir(motorIdx, pin, dir, maxRev)` extrahiert. |
+| 4.1.9 | 2026-05-05 | Claude | Persistence Config mit Debounce (Bug-ID 23a). Neuer L2-Block `Storage_Runtime` (Schema 4200) speichert RuntimeConfig in NVS-Section `rtconf`. `WebServer::begin()` ruft `load(v4::rt)`, `/set`-Handler ruft `touch()`, main-loop ruft `tickFlush()` alle 10 ms — schreibt erst nach **5 s Ruhe** (kein NVS-Wear-Out beim Slider-Drag, vermeidet Bug-ID 27). Hardware-verifiziert: `speed=0.555, fan=128` überleben Reboot. |
 | 4.1.7 | 2026-05-05 | Gemini | Phase 8B+C: Wave-Accel Performance (Fix ID 24) + EdgeC Fix (Fix ID 25). `applyEngineCap` nutzt `maxAccel` für Wave-Modi (capped auf 500k). Noise-Shaping konsolidiert in `ne.applyShape`. |

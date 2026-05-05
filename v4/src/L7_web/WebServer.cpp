@@ -6,6 +6,7 @@
 #include "../L1_hal/Hal_Pins.h"
 #include "../L1_hal/Hal_Tacho.h"
 #include "../L2_storage/Storage_Calib.h"
+#include "../L2_storage/Storage_Runtime.h"
 #include "../L3_driver/Units.h"
 #include "../L3_driver/Tmc2209.h"
 #include "../L3_driver/Stepper.h"
@@ -678,6 +679,11 @@ static String motorJson(uint8_t i) {
 }
 
 void begin() {
+    // Bug-ID 23a: Runtime-Slider-Werte aus NVS laden, bevor WebServer-
+    // Endpoints arbeiten. Wenn NVS leer/stale, bleiben die Defaults aus
+    // RuntimeConfig.h.
+    StorageRuntime::load(v4::rt);
+
     server.on("/", HTTP_GET, [](AsyncWebServerRequest* r) {
         r->send(200, "text/html", FPSTR(INDEX_HTML));
     });
@@ -809,6 +815,10 @@ void begin() {
         getF("so",     c.stepOffset);  // step offset
         getF("ht",     c.holdMs);      // hold time [ms]
         if (r->hasParam("am")) c.accelMax = (uint32_t)r->getParam("am")->value().toInt();
+        // Bug-ID 23a: NVS-Persistence mit Debounce. touch() markiert dirty +
+        // setzt Zeitstempel; tickFlush() im main-loop schreibt erst nach 5 s
+        // Ruhe. Schutz vor NVS-Wear-Out beim Slider-Drag (ID 27).
+        StorageRuntime::touch();
         // Echo: aktuelle State zurück, damit Slider/Anzeige sich synchronisieren.
         char buf[512]; writeConfigJson(buf, sizeof(buf));
         AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);

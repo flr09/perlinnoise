@@ -19,6 +19,7 @@
 #include "L1_hal/Hal_Pcnt.h"
 #include "L1_hal/Hal_Tacho.h"
 #include "L2_storage/Storage.h"
+#include "L2_storage/Storage_Runtime.h"
 #include "L3_driver/Tmc2209.h"
 #include "L3_driver/Stepper.h"
 #include "L4_mechanics/Calibration.h"
@@ -144,5 +145,9 @@ void setup() {
 void loop() {
     ArduinoOTA.handle();
     ElegantOTA.loop();   // ohne diesen Aufruf rebootet ElegantOTA nach Upload nicht
+    // Bug-ID 23a: Throttled NVS-Persistence der RuntimeConfig. touch() im
+    // /set-Handler markiert dirty + setzt Zeitstempel; tickFlush() schreibt
+    // erst 5 s nach der letzten Slider-Änderung — schützt NVS vor Wear-Out.
+    StorageRuntime::tickFlush(v4::rt);
     delay(10);
 }
