@@ -13,7 +13,13 @@ struct NoiseConfig {
 class NoiseEngine {
 public:
     NoiseEngine() : sn() {}
-    
+
+    // Raw-Passthrough zur unterliegenden SimplexNoise-Instanz. Wird genutzt,
+    // wo die Caller-Math nicht zur getVal-Symmetrie passt (z.B. tick() mit
+    // i*mspace-Offset statt (i-1.5)*spacing) oder kein Shape gewollt ist
+    // (Preview-Visualisierung).
+    float noise(float x, float y) { return sn.noise(x, y); }
+
     float getVal(float flightX, float flightY, int motorIdx, float spacing, const NoiseConfig& cfg) {
         float offsetX = (motorIdx - 1.5f) * spacing;
         float sampleX = (flightX + offsetX) * cfg.framesize;

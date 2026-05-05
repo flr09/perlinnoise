@@ -1,6 +1,6 @@
 # FSD — PerlinNoise v4 (Modular)
 
-**Stand:** 2026-05-05 — Firmware **v4.1.4** auf Hardware, Phasen 1–7 abgeschlossen. Calib-Skip mit Self-Consistency (`fastWidthSteps`) verifiziert: Calib-Zeit ~15 s → ~5 s bei unveränderter Mechanik.
+**Stand:** 2026-05-05 — Firmware **v4.1.5** auf Hardware, Phasen 1–7 abgeschlossen. Calib-Skip mit Self-Consistency (`fastWidthSteps`) verifiziert: Calib-Zeit ~15 s → ~5 s bei unveränderter Mechanik. Bauhaus-Refactor: NoiseEngine + Hal_Tacho-Toter-Code aufgeräumt.
 **Branch:** `v4-modular`
 **Vorgänger:** `v4_iteration1/` (3 Commits, Watchdog + MotorProfile, nicht funktional integriert)
 **Referenz-Implementierung:** `v3/` (v3.7.32, online unter `perlin-v3.intern.gaengeviertel.de`)
@@ -456,3 +456,4 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 | 4.1.2 | 2026-05-02 | Claude | Phase 7C: `Synthesis::getPreviewBytes()` + `/preview`-Endpoint, Status-Polling auf 10 Hz hochgezogen |
 | 4.1.3 | 2026-05-05 | Claude | Phase 7D: Canvas-JS auf `/preview`-Polling. Calib-Skip-Methodik mit Decel-Bias-Fix (rc2) eingebaut, fällt aktuell wegen Methodik-Mismatch P1+P2 vs. 3-Touch immer auf 3-Touch zurück (Self-Consistency-Fix in 4.1.4). Calib mit 360°-Limit (Phase 0+1). FreqSweep v2 (rc1) wegen Re-Home-Race + Hysterese-Floor zurückgerollt (rc3) — linearer Chirp wieder aktiv. NVS-VER 4002 (Felder `freqStallAmp[10]` bleiben Reserve). ElegantOTA-Reboot-Fix (`ElegantOTA.loop()` im main-loop). |
 | 4.1.4 | 2026-05-05 | Claude | Calib-Skip Self-Consistency: NVS 4002 → 4003 mit `uint16_t fastWidthSteps`. 3-Touch-Pfad speichert die in DIESEM Run gemessene P1+P2-Breite als Skip-Referenz für den nächsten Lauf. Verifiziert: Calib-Zeit ~15 s → ~5 s bei Δ=1 Step (5 ‰) in Lauf #2. Hebt Sensor-Hysterese und Methodik-Mismatch auf, weil Referenz und Messung mit derselben Methode entstehen. |
+| 4.1.5 | 2026-05-05 | Claude | Bauhaus-Refactor (kein funktionaler Change): NoiseEngine konsolidiert die SimplexNoise-Instanz, `Synthesis::tick()` und `getPreviewBytes()` rufen jetzt `ne.noise(x,y)` statt eigener `static SimplexNoise sn`. Tote ISR-Templates in `Hal_Tacho.cpp` entfernt (1 kHz-Polling-Task ist und bleibt der einzige Detection-Pfad). Ungenutzter `NoiseConfig nc` aus tick() raus. |

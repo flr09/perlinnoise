@@ -8,8 +8,8 @@ Quellen: dieser Eintrag · `AGENT_COORDINATION.md` Lessons · `v4/docs/FSD.md` �
 |---|---|---|---|---|
 | 1 | 2026-05-04 | 🔴 | Calibration-Skip Logic Error (Decel-Bias) | ✅ v4.1.3-rc2 + v4.1.4 (Self-Consistency) verifiziert |
 | 2 | 2026-05-02 | 🔴 | ElegantOTA Reboot missing loop() | ✅ v4.1.3 ⏳ verify |
-| 3 | 2026-05-04 | 🟡 | NoiseEngine Redundancy (Synthesis.cpp duplication) | 🟡 backlog |
-| 4 | 2026-05-04 | 🟡 | Tacho ISR Dead Code (Polling preferred) | 🟡 backlog |
+| 3 | 2026-05-04 | 🟡 | NoiseEngine Redundancy (Synthesis.cpp duplication) | ✅ v4.1.5 (NoiseEngine.noise() Passthrough, sn-Instanz konsolidiert) |
+| 4 | 2026-05-04 | 🟡 | Tacho ISR Dead Code (Polling preferred) | ✅ v4.1.5 (ISR-Templates + void-casts entfernt) |
 | 5 | 2026-05-04 | 🔵 | Z-Motor Sweet-Spot > Hard-Limit (1000mA vs 900mA) | 🔵 noted |
 | 6 | 2026-04-29 | 🔴 | Tacho-Präzision: ms-Auflösung erzeugt spurious Stalls bei >1000 RPM | ✅ v4.0.1/4.0.2 (`micros()`-Migration, NVS 4001→4002) |
 | 7 | 2026-04-29 | 🔴 | SynthesisTask blockierte Movement während Engineering-Tests | ✅ v4 (decoupled SynthesisTask Core 1, Prio 2) |

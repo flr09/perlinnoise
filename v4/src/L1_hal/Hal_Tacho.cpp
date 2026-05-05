@@ -7,30 +7,12 @@ namespace HalTacho {
 
 TachoState tacho[4];
 
-// FALLING-Trigger: ISR feuert nur bei HIGH→LOW. Spart das digitalRead in der ISR
-// und vermeidet das Risiko dass die ISR auf der falschen Flanke kommt und
-// digitalRead bereits umgeschaltet hat.
-
-template<uint8_t I>
-static void IRAM_ATTR tachoIsr() {
-    tacho[I].pulseCount++;
-    unsigned long now = micros();
-    if (tacho[I].lastLowUs > 0) {
-        unsigned long p = now - tacho[I].lastLowUs;
-        if (p >= NOISE_FILTER_US) tacho[I].periodUs = p;
-    }
-    tacho[I].lastLowUs = now;
-    tacho[I].latch = true;
-}
-
-// Hochfrequenter Software-Tacho-Poll-Task (5ms = 200 Hz). Polling im
-// 50ms-Watchdog-Tick verfehlt bei hoher Acc Sensor-Durchquerungen
-// (~30ms im Sensorfeld). Bei 5ms Polling: Nyquist bis ~12.000 RPM,
-// deckt alle realistischen Tests ab.
-//
-// Kein attachInterrupt — der wirft auf GPIO 15 `gpio_isr_handler` Error
-// (Strapping-Pin-Eigenheit). Polling per Task ist robust und CPU-Last
-// vernachlässigbar (~0.05%).
+// Software-Tacho-Polling per FreeRTOS-Task. attachInterrupt() ist auf GPIO 15
+// nicht verwendbar (Strapping-Pin-Eigenheit → `gpio_isr_handler` Error), und
+// auch auf den anderen Tacho-Pins wird konsequent gepollt, damit alle 4 Motoren
+// dieselbe Detection-Mechanik haben. 1 kHz Polling: Nyquist >12 000 RPM bei 1
+// PPR — deckt alle realistischen Tests ab. CPU-Last vernachlässigbar (~0.05 %).
+// Tote ISR-Templates (FALLING-Trigger) wurden in v4.1.5 entfernt.
 static int lastSensorState[4] = { -1, -1, -1, -1 };
 
 static void tachoPollTask(void*) {
@@ -66,9 +48,6 @@ void reattach() {
         }
         Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " (poll-1kHz)");
     }
-    (void)tachoIsr<0>;
-    (void)tachoIsr<1>;
-    (void)tachoIsr<2>;
 }
 
 void init() {

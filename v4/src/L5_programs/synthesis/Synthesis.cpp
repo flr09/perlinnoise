@@ -15,7 +15,10 @@ namespace v4 { RuntimeConfig rt; }
 
 namespace Synthesis {
 
-static SimplexNoise sn;
+// Eine einzige NoiseEngine-Instanz für Engine + Preview. Hält die SimplexNoise-
+// Permutation, sodass tick() und getPreviewBytes() konsistent dieselbe
+// Noise-Map sehen.
+static NoiseEngine ne;
 static float flightX = 0.0f;
 static float flightY = 0.0f;
 static float timeAcc = 0.0f;
@@ -179,13 +182,12 @@ void tick() {
         return;
     }
 
-    // 2) Pro Motor Ziel-Position berechnen
+    // 2) Pro Motor Ziel-Position berechnen.
+    // Hinweis: Noise-Math hier verwendet den klassischen `i*mspace`-Offset
+    // aus V1 (asymmetrisch, ankert bei i=0). NoiseEngine::getVal() bietet
+    // alternativ einen um die 4-Motor-Mitte zentrierten Offset — bewusst
+    // hier nicht genutzt, um das Verhalten gegenüber V1 nicht zu verändern.
     float effRangeDeg = v4::rt.rangeDeg * dynRange();
-    NoiseConfig nc;
-    nc.framesize = v4::rt.framesize;
-    nc.contrast  = v4::rt.contrast;
-    nc.zShape    = v4::rt.zShape;
-    nc.edgeC     = v4::rt.edgeC;
 
     for (uint8_t i = 0; i < 4; i++) {
         auto* s = Stepper::get(i);
@@ -212,7 +214,7 @@ void tick() {
             val *= v4::rt.contrast;
         } else {
             // NOISE-Modi: pro Motor mit Spacing-Offset
-            float n = sn.noise((flightX + (float)i * v4::rt.mspace) * v4::rt.framesize,
+            float n = ne.noise((flightX + (float)i * v4::rt.mspace) * v4::rt.framesize,
                                 flightY * v4::rt.framesize);
             float nNorm = (n + 1.0f) * 0.5f;
             float exp = fmaxf(0.1f, fabsf(v4::rt.zShape));
@@ -243,7 +245,7 @@ size_t getPreviewBytes(uint8_t* out, size_t maxBytes) {
             for (int x = 0; x < W; x++) {
                 float u = (flightX + (float)(x - W/2)) * fs;
                 float v = (flightY + (float)(y - H/2)) * fs;
-                float n = sn.noise(u, v);
+                float n = ne.noise(u, v);
                 int g = (int)((n + 1.0f) * 127.5f);
                 if (g < 0) g = 0; else if (g > 255) g = 255;
                 out[y * W + x] = (uint8_t)g;
