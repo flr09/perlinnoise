@@ -7,6 +7,7 @@
 #include "../L1_hal/Hal_Tacho.h"
 #include "../L2_storage/Storage_Calib.h"
 #include "../L2_storage/Storage_Runtime.h"
+#include "../L2_storage/Storage_Wifi.h"
 #include "../L3_driver/Units.h"
 #include "../L3_driver/Tmc2209.h"
 #include "../L3_driver/Stepper.h"
@@ -22,6 +23,27 @@
 namespace WebServer {
 
 static AsyncWebServer server(80);
+
+// Bug-ID 23c (vermeidet Geminis blocking-delay-Bug aus 8c0f389): Reboot
+// nicht im AsyncWebServer-Handler triggern (delay() blockiert anderen
+// Traffic + Response-Send wird unterbrochen). Stattdessen Flag setzen,
+// Tick im main-loop führt 1.5 s nach Set den ESP.restart() aus —
+// genug Zeit für die HTTP-Response zum Browser.
+static bool          rebootPending  = false;
+static unsigned long rebootAtMs     = 0;
+static constexpr unsigned long REBOOT_DELAY_MS = 1500;
+
+void tickReboot() {
+    if (!rebootPending) return;
+    if (millis() < rebootAtMs) return;
+    Logger::addLog("WebServer: ESP.restart() scheduled — bye");
+    ESP.restart();
+}
+
+static void scheduleReboot() {
+    rebootPending = true;
+    rebootAtMs    = millis() + REBOOT_DELAY_MS;
+}
 
 // HTML-UI: Bauhaus-strict Variante, Design vom User via Browser-Claude
 // (webdesign/variant-a-strict.html, 2026-04-26). Phase 4 → PHASE=4 setzt
@@ -783,6 +805,25 @@ void begin() {
         }
 
         r->send(501, "text/plain", "unknown action");
+    });
+
+    // /wifisave — speichert SSID+PW in NVS und triggert deferred Reboot
+    // (Reboot 1.5 s nach Response, kein delay() im Handler — vermeidet Bug-ID 27).
+    server.on("/wifisave", HTTP_GET, [](AsyncWebServerRequest* r) {
+        if (!r->hasParam("s") || !r->hasParam("p")) {
+            r->send(400, "text/plain", "missing s or p"); return;
+        }
+        StorageWifi::save(r->getParam("s")->value(), r->getParam("p")->value());
+        r->send(200, "text/plain", "OK — Reboot in 1.5s");
+        scheduleReboot();
+    });
+
+    // /wificlear — löscht NVS-Creds und rebootet (fällt auf wifi_settings.h-
+    // Default zurück).
+    server.on("/wificlear", HTTP_GET, [](AsyncWebServerRequest* r) {
+        StorageWifi::clear();
+        r->send(200, "text/plain", "OK — Reboot in 1.5s, fallback creds aktiv");
+        scheduleReboot();
     });
 
     // /presets — JSON-Array mit valid-Status pro Slot 0..7. Browser-UI kann

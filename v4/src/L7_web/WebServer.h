@@ -15,4 +15,9 @@ namespace WebServer {
 
 void begin();
 
+// Im main-loop alle paar ms aufrufen. Triggert ESP.restart() wenn /wifisave
+// oder /wificlear einen deferred Reboot eingeplant haben (Bug-ID 23c:
+// Reboot nicht im Handler, sonst blockiert delay() die Response).
+void tickReboot();
+
 } // namespace WebServer

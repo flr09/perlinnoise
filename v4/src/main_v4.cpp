@@ -149,5 +149,6 @@ void loop() {
     // /set-Handler markiert dirty + setzt Zeitstempel; tickFlush() schreibt
     // erst 5 s nach der letzten Slider-Änderung — schützt NVS vor Wear-Out.
     StorageRuntime::tickFlush(v4::rt);
+    WebServer::tickReboot();   // Bug-ID 23c: deferred Reboot nach /wifisave|/wificlear
     delay(10);
 }
