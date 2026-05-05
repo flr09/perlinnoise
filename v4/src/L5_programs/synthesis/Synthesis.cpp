@@ -84,10 +84,15 @@ static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
     StorageCalib::load(i, cal);
 
     uint32_t spsCap = stepMode ? DEFAULT_SPS_STEP : DEFAULT_SPS_NOISE;
-    
-    // KRITISCH (Fix ID 24): Waveforms (Square/Saw) brauchen hohe Beschleunigung,
-    // sonst sehen sie wie Sinus aus. Wir nutzen maxAccel aus Motor-Calib.
-    uint32_t accCap = (stepMode || waveMode) ? 100000 : DEFAULT_ACC_NOISE;
+
+    // Initial-accCap je Modus:
+    //   Step  → User-Slider `v4::rt.accelMax` (in der UI einstellbar)
+    //   Wave  → 100k Default (Fix ID 24, Square/Saw brauchen harte Sprünge)
+    //   Noise → DEFAULT_ACC_NOISE (4000, ruhige Bewegung)
+    uint32_t accCap;
+    if (stepMode)      accCap = (uint32_t)v4::rt.accelMax;
+    else if (waveMode) accCap = 100000;
+    else               accCap = DEFAULT_ACC_NOISE;
 
     if (cal.valid && cal.maxRpm > 0.0f) {
         uint32_t boundSps = (uint32_t)(Units::rpmToSps(i, cal.maxRpm) * SAFETY_FACTOR);
@@ -95,8 +100,14 @@ static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
     }
     if (cal.valid && cal.maxAccel > 0.0f) {
         uint32_t boundAcc = (uint32_t)(cal.maxAccel * SAFETY_FACTOR);
-        if (boundAcc > HARD_ACCEL_CAP) boundAcc = HARD_ACCEL_CAP; // Sicherer Cap
-        if (boundAcc > 0 && (stepMode || waveMode ? true : boundAcc < accCap)) accCap = boundAcc;
+        if (boundAcc > HARD_ACCEL_CAP) boundAcc = HARD_ACCEL_CAP;
+        // Wave-Mode: cal.maxAccel als Override (für harte Sprünge).
+        // Step+Noise: cal.maxAccel nur als Cap nach unten — User-Slider bzw.
+        // konservativer Default bleibt gültig wenn er strenger ist.
+        if (boundAcc > 0) {
+            if (waveMode)               accCap = boundAcc;
+            else if (boundAcc < accCap) accCap = boundAcc;
+        }
     }
 
     s->setSpeedInHz(spsCap);

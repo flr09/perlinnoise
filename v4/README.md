@@ -1,6 +1,6 @@
 # PerlinNoise v4 — Modulare Motorsteuerung
 
-**Stand:** 2026-05-04 — Firmware **v4.1.3** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22), Phasen 1–6 abgeschlossen, **Phase 7 (GUI-Reaktivierung) abgeschlossen** (A: Bounds, B: /set-Echo, C: /preview, D: Canvas auf /preview-Polling). Plus zwei Backlog-Punkte mitgenommen: Calib-Skip via Zungenbreite (3-Touch entfällt bei unveränderter Mechanik) und FreqSweep-Redesign (10 Bänder, Bisektion bis Stall, Learning).
+**Stand:** 2026-05-05 — Firmware **v4.1.7** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22). Phasen 1–7 abgeschlossen. **Phase 8** (v1-Parity + Hardware + Reversal-Charakterisierung) läuft als 7-Tag-Plan v4.1.7 → v4.2.2.
 **Branch:** `v4-modular`
 
 ## Was ist v4?
@@ -34,7 +34,17 @@ Vollständige Spezifikation: [`docs/FSD.md`](docs/FSD.md).
 - **Phase 5** — Watchdog + Profile (L6) ✅
 - **Phase 6** — Voll-UI (L7) ✅ Layout, GUI-Bindung kaputt ⚠️
 - **Phase 7** — GUI-Reaktivierung (Bounds, /set-Echo, /preview, Canvas) ✅ (v4.1.0–4.1.3)
-- **Backlog mitgenommen in 4.1.3:** Calib-Skip via Zungenbreite, FreqSweep v2 (10 Bänder, Bisektion + Learning), ElegantOTA-Reboot-Fix
+- **v4.1.4** — Calib-Skip Self-Consistency (`fastWidthSteps` in NVS 4003, Calib-Zeit ~15 s → ~5 s) ✅
+- **v4.1.5** — Bauhaus-Refactor (NoiseEngine konsolidiert, Hal_Tacho-Toter-Code raus) ✅
+- **Phase 8** — v1-Parity + Hardware + Reversal-Charakterisierung, 7-Tag-Plan:
+  - **v4.1.6** ✅ Hardware Fan/Lamp HAL (HalOutput, PWM-Fan + discrete Lamp)
+  - **v4.1.7** ✅ EdgeC + Wave-Accel + Step-Mode-Slider-Fix (rc2): NoiseEngine.applyShape public, cal.maxAccel für Wave (Hard-Cap 500k), v4::rt.accelMax-Slider in Step-Mode wieder aktiv
+  - **v4.1.8** ⚪ Homing-Robustheit nach Stall (Bug-ID 28): erst CW dann CCW suchen, mehr als 2 rev erlauben
+  - **v4.1.9** ⚪ Persistence Config (Storage_Runtime mit Save-Throttling, ID 23a)
+  - **v4.1.10** ⚪ Persistence Presets (8 NVS-Slots, ID 23b)
+  - **v4.2.0** ⚪ WiFi NVS (Storage_Wifi + /wifisave nicht-blockierend)
+  - **v4.2.1** ⚪ FreqSweep v2 (echter Anlauf): Hysterese-Floor pro Frequenz vorab + Stallguard-Cross-Check, speichert Reversal-Limit pro Motor (NVS-Felder `freqStallAmp[10]` schon reserviert)
+  - **v4.2.2** ⚪ Synthesis Wave-Cap (ID 29): `effSpeed × effRange` cappen via NVS-Reversal-Limits → Square läuft so weit wie der Motor wirklich kann, kein Geeier mehr
 
 Detailliert in [`../AGENT_COORDINATION.md`](../AGENT_COORDINATION.md).
 
