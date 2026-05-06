@@ -1,9 +1,9 @@
 # 📌 AGENT COORDINATION HUB
 
 ## 🕒 Aktueller Status (LIVE)
-- **Stand:** 2026-05-05
+- **Stand:** 2026-05-06
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.2.1** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — Phase 8 läuft (v4.2.1: Reaktive Hardware-Caps + Cal-Cache). [Bug-Log](v4/docs/project_perlin_bugs.md)
+- **Firmware:** **v4.2.4** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — Phase 8 ✅ abgeschlossen (Persistence, FreqSweep v2, Wave-Cap, Sinus silent). Phase 9 geplant: TMC-Dynamics, 256 µSteps, SG4 — 5-Tag-Plan v4.3.0 → v4.3.4 (siehe `v4/README.md`). [Bug-Log](v4/docs/project_perlin_bugs.md)
 - **Phase:** v4 Phase 1–7 abgeschlossen ✅ — GUI vollständig reaktiviert (Bounds, /set-Echo, /preview, Canvas auf 10 Hz Polling). NVS-Schema 4001 → **4002** (FreqSweep-Lernfelder ergänzt, alte Cal-Daten invalidiert → Re-Calib beim ersten Boot nach Update).
 - **Vorgänger v4_iteration1/** liegt zur Seite (3 Commits, baubar via env `fysetc_e4_v4_iter1`)
 - **v3 wurde überschrieben** durch v4 (gleiches Board). v3-Quellcode + 35 v3-Bin-Snapshots in Git gesichert. Re-Flash auf v3.7.32 jederzeit möglich via `v3/firmware_v3_3.7.32_20260328_1230.bin`.

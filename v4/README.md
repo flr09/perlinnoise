@@ -1,6 +1,6 @@
 # PerlinNoise v4 — Modulare Motorsteuerung
 
-**Stand:** 2026-05-05 — Firmware **v4.1.7** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22). Phasen 1–7 abgeschlossen. **Phase 8** (v1-Parity + Hardware + Reversal-Charakterisierung) läuft als 7-Tag-Plan v4.1.7 → v4.2.2.
+**Stand:** 2026-05-06 — Firmware **v4.2.4** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22). Phasen 1–8 abgeschlossen. **Phase 9** (Dynamics under the hood — TMC-Tuning, 256 µSteps, SG4) geplant als 5-Tag-Plan v4.3.0 → v4.3.4.
 **Branch:** `v4-modular`
 
 ## Was ist v4?
@@ -36,15 +36,23 @@ Vollständige Spezifikation: [`docs/FSD.md`](docs/FSD.md).
 - **Phase 7** — GUI-Reaktivierung (Bounds, /set-Echo, /preview, Canvas) ✅ (v4.1.0–4.1.3)
 - **v4.1.4** — Calib-Skip Self-Consistency (`fastWidthSteps` in NVS 4003, Calib-Zeit ~15 s → ~5 s) ✅
 - **v4.1.5** — Bauhaus-Refactor (NoiseEngine konsolidiert, Hal_Tacho-Toter-Code raus) ✅
-- **Phase 8** — v1-Parity + Hardware + Reversal-Charakterisierung, 7-Tag-Plan:
+- **Phase 8** ✅ v1-Parity + Hardware + Reversal-Charakterisierung (abgeschlossen):
   - **v4.1.6** ✅ Hardware Fan/Lamp HAL (HalOutput, PWM-Fan + discrete Lamp)
-  - **v4.1.7** ✅ EdgeC + Wave-Accel + Step-Mode-Slider-Fix (rc2): NoiseEngine.applyShape public, cal.maxAccel für Wave (Hard-Cap 500k), v4::rt.accelMax-Slider in Step-Mode wieder aktiv
-  - **v4.1.8** ⚪ Homing-Robustheit nach Stall (Bug-ID 28): erst CW dann CCW suchen, mehr als 2 rev erlauben
-  - **v4.1.9** ⚪ Persistence Config (Storage_Runtime mit Save-Throttling, ID 23a)
-  - **v4.1.10** ⚪ Persistence Presets (8 NVS-Slots, ID 23b)
-  - **v4.2.0** ⚪ WiFi NVS (Storage_Wifi + /wifisave nicht-blockierend)
-  - **v4.2.1** ⚪ FreqSweep v2 (echter Anlauf): Hysterese-Floor pro Frequenz vorab + Stallguard-Cross-Check, speichert Reversal-Limit pro Motor (NVS-Felder `freqStallAmp[10]` schon reserviert)
-  - **v4.2.2** ⚪ Synthesis Wave-Cap (ID 29): `effSpeed × effRange` cappen via NVS-Reversal-Limits → Square läuft so weit wie der Motor wirklich kann, kein Geeier mehr
+  - **v4.1.7** ✅ EdgeC + Wave-Accel + Step-Mode-Slider-Fix (rc2)
+  - **v4.1.8** ✅ Homing-Robustheit nach Stall (Bug-ID 28: CW+CCW je 1.5 rev)
+  - **v4.1.9** ✅ Persistence Config (Storage_Runtime, 5 s Debounce, ID 23a)
+  - **v4.1.10** ✅ Persistence Presets (8 NVS-Slots, ID 23b)
+  - **v4.2.0** ✅ WiFi NVS + nicht-blockierender Reboot (ID 23c)
+  - **v4.2.1** ✅ Reactive Caps + Cal-Cache (Gemini, ID 24/29 partial/30)
+  - **v4.2.2** ✅ FreqSweep v2 retake (Tacho mit feinem 6..50 Hz Raster, IDs 18+21+22 — Sensor-Hysterese-Schwelle bei ~9 Hz auf Z-Mechanik)
+  - **v4.2.3** ✅ Synthesis Wave-Cap aus FreqSweep-v2-Daten (ID 29 final)
+  - **v4.2.4** ✅ Sinus silent — per-Wave-Mode Acc-Discrimination (ID 34)
+- **Phase 9** ⚪ Dynamics under the hood — TMC-Tuning, 256 µSteps, SG4 (geplant, 5-Tag-Plan):
+  - **v4.3.0** ⚪ `intpol(true)` für 256 µStep-Glätte ohne CPU-Last (Lichtinstallation, smoothere Sinus)
+  - **v4.3.1** ⚪ TPWMTHRS-Hybrid pro Mode (Sinus/Saw silent in StealthChop, Square Power in SpreadCycle)
+  - **v4.3.2** ⚪ `getSGResult()` API + TCOOLTHRS sicher konfiguriert (SGTHRS=0, kein DIAG-Trigger), DIAG-Pin-Sicherheit verifiziert
+  - **v4.3.3** ⚪ Tacho-Fusion-SGTHRS-Lernen im SpeedTest (evidenzbasierter SG-Schwellwert pro Motor in NVS)
+  - **v4.3.4** ⚪ Player-Watchdog: Tacho-Pulse-Erwartung pro Mode, bei Drift > 50 % über 3 s → Log + 5 s Pause + Re-Home + Resume (nur Synthesis, nicht Tests)
 
 Detailliert in [`../AGENT_COORDINATION.md`](../AGENT_COORDINATION.md).
 
