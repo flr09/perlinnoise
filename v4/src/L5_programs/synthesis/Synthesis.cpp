@@ -173,29 +173,40 @@ static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
     else if (waveMode) spsCap = 40000; // Waves dürfen schneller als Noise (8k)
     else               spsCap = DEFAULT_SPS_NOISE;
 
-    // accCap: Beschleunigung je Modus
+    // accCap pro Modus — feinere Differenzierung für Wave-Modi (Bug-ID 34):
+    //   Sinus    → silent, glatte Sinuskurve = niedrige Acc reicht völlig
+    //   Sawtooth → mittel: linearer Anstieg + Sprung am Periode-Ende
+    //   Square   → hart, Sprünge zwischen ±max → volle cal.maxAccel nötig
+    //   Step     → User-Slider
+    //   Noise    → ruhig, künstlerisch glatt
+    // Das vermeidet das mechanische Klacken bei Sinus, das aus 475k sps²
+    // kommt (User-Beobachtung 2026-05-06: „Sinus zu laut für silent").
+    bool isSinus  = (v4::rt.moveType == 3);
+    bool isSaw    = (v4::rt.moveType == 4);
+    bool isSquare = (v4::rt.moveType == 5);
+
     uint32_t accCap;
     if (stepMode)      accCap = (uint32_t)v4::rt.accelMax;
-    else if (waveMode) accCap = 100000; // Initialer Wave-Default
-    else               accCap = DEFAULT_ACC_NOISE;
+    else if (isSquare) accCap = 100000;             // wird unten via cal.maxAccel hochgezogen
+    else if (isSaw)    accCap = 50000;              // moderater Sprung am Periodenende
+    else if (isSinus)  accCap = DEFAULT_ACC_NOISE;  // 4000 — silent wie Noise
+    else               accCap = DEFAULT_ACC_NOISE;  // Noise
 
     // Hardware-Grenzen aus Charakterisierung (Evidenzbasiert)
     if (cal.valid && cal.maxRpm > 0.0f) {
         uint32_t boundSps = (uint32_t)(Units::rpmToSps(i, cal.maxRpm) * SAFETY_FACTOR);
-        // Wir deckeln den Modus-Default durch das physikalische Limit.
         if (boundSps > 0 && boundSps < spsCap) spsCap = boundSps;
     }
     if (cal.valid && cal.maxAccel > 0.0f) {
         uint32_t boundAcc = (uint32_t)(cal.maxAccel * SAFETY_FACTOR);
         if (boundAcc > HARD_ACCEL_CAP) boundAcc = HARD_ACCEL_CAP;
-        
-        if (waveMode) {
-            // Wave-Mode (Square/Saw): wir WOLLEN so hart wie möglich springen.
-            // Also nutzen wir die volle Hardware-Kapazität als festen Wert.
+
+        if (isSquare) {
+            // Square braucht harte Sprünge → volle Hardware-Kapazität
             accCap = boundAcc;
         } else {
-            // Step+Noise: Hardware-Grenze ist nur der Deckel für den User-Slider
-            // bzw. den konservativen Noise-Default.
+            // Step/Sinus/Saw/Noise: Hardware nur als Decke nach unten —
+            // der konservative Modus-Default bleibt gültig wenn er strenger ist.
             if (boundAcc > 0 && boundAcc < accCap) accCap = boundAcc;
         }
     }

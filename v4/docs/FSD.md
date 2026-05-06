@@ -1,6 +1,6 @@
 # FSD — PerlinNoise v4 (Modular)
 
-**Stand:** 2026-05-06 — Firmware **v4.2.3** auf Hardware. **Phase 8 abgeschlossen** (7-Tag-Plan v4.1.7 → v4.2.3). v4.2.3 = Synthesis Wave-Cap aus FreqSweep-v2-Daten: `effSpeed` wird im Wave-Mode physikalisch gecappt sodass die geforderte Reversal-Amplitude in der Halbperiode geschafft wird. Hardware-verifiziert: speed=10/range=300/dyn=rasant → 2.6 Hz → Cap auf 1.5 Hz auf Z-Mechanik. Geeier am Endpunkt physikalisch unmöglich.
+**Stand:** 2026-05-06 — Firmware **v4.2.4** auf Hardware. Phase 8 + Sinus-Silent-Fix abgeschlossen. v4.2.4 = per-Wave-Mode-Acc-Discrimination (Sinus=4k, Saw=50k, Square=volle cal.maxAccel). Nächste Forschungsrichtung: StallGuard4 + StealthChop2 + feine Microsteps (256) für „silent fine motion" in Lichtinstallationen — siehe `v4/docs/research_stallguard.md`.
 **Branch:** `v4-modular`
 **Vorgänger:** `v4_iteration1/` (3 Commits, Watchdog + MotorProfile, nicht funktional integriert)
 **Referenz-Implementierung:** `v3/` (v3.7.32, online unter `perlin-v3.intern.gaengeviertel.de`)
