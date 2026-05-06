@@ -24,6 +24,10 @@ static float timeAcc = 0.0f;
 static unsigned long lastTickMs = 0;
 static const unsigned int TICK_MS = 10;  // 100 Hz Update
 
+// Trackt den Modus beim letzten Tick, um bei Modus-Wechsel die Hardware-Caps
+// (Accel/Speed) reaktiv anzupassen.
+static int lastMoveType = -1;
+
 // STEP-Mode-State pro Motor
 struct StepState {
     uint8_t  currentStep = 0;
@@ -31,6 +35,9 @@ struct StepState {
     unsigned long holdStartMs = 0;
 };
 static StepState stepState[4];
+
+// Cache für Motor-Grenzen, um NVS-Zugriffe im 100Hz-Tick zu vermeiden.
+static v4::CalibrationData calCache[4];
 
 // Drive-Dynamics-Skalierungen aus V1 MANUAL.md
 static float dynSpeed() {
@@ -80,33 +87,38 @@ static constexpr uint32_t HARD_ACCEL_CAP     = 500000; // Schutz für Mechanik
 static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
     auto* s = Stepper::get(i);
     if (!s) return;
-    v4::CalibrationData cal;
-    StorageCalib::load(i, cal);
+    const auto& cal = calCache[i];
 
-    uint32_t spsCap = stepMode ? DEFAULT_SPS_STEP : DEFAULT_SPS_NOISE;
+    // spsCap: Ziel-Geschwindigkeit je Modus
+    uint32_t spsCap;
+    if (stepMode)      spsCap = DEFAULT_SPS_STEP;
+    else if (waveMode) spsCap = 40000; // Waves dürfen schneller als Noise (8k)
+    else               spsCap = DEFAULT_SPS_NOISE;
 
-    // Initial-accCap je Modus:
-    //   Step  → User-Slider `v4::rt.accelMax` (in der UI einstellbar)
-    //   Wave  → 100k Default (Fix ID 24, Square/Saw brauchen harte Sprünge)
-    //   Noise → DEFAULT_ACC_NOISE (4000, ruhige Bewegung)
+    // accCap: Beschleunigung je Modus
     uint32_t accCap;
     if (stepMode)      accCap = (uint32_t)v4::rt.accelMax;
-    else if (waveMode) accCap = 100000;
+    else if (waveMode) accCap = 100000; // Initialer Wave-Default
     else               accCap = DEFAULT_ACC_NOISE;
 
+    // Hardware-Grenzen aus Charakterisierung (Evidenzbasiert)
     if (cal.valid && cal.maxRpm > 0.0f) {
         uint32_t boundSps = (uint32_t)(Units::rpmToSps(i, cal.maxRpm) * SAFETY_FACTOR);
-        if (boundSps > 0 && (stepMode ? boundSps < spsCap : true)) spsCap = boundSps;
+        // Wir deckeln den Modus-Default durch das physikalische Limit.
+        if (boundSps > 0 && boundSps < spsCap) spsCap = boundSps;
     }
     if (cal.valid && cal.maxAccel > 0.0f) {
         uint32_t boundAcc = (uint32_t)(cal.maxAccel * SAFETY_FACTOR);
         if (boundAcc > HARD_ACCEL_CAP) boundAcc = HARD_ACCEL_CAP;
-        // Wave-Mode: cal.maxAccel als Override (für harte Sprünge).
-        // Step+Noise: cal.maxAccel nur als Cap nach unten — User-Slider bzw.
-        // konservativer Default bleibt gültig wenn er strenger ist.
-        if (boundAcc > 0) {
-            if (waveMode)               accCap = boundAcc;
-            else if (boundAcc < accCap) accCap = boundAcc;
+        
+        if (waveMode) {
+            // Wave-Mode (Square/Saw): wir WOLLEN so hart wie möglich springen.
+            // Also nutzen wir die volle Hardware-Kapazität als festen Wert.
+            accCap = boundAcc;
+        } else {
+            // Step+Noise: Hardware-Grenze ist nur der Deckel für den User-Slider
+            // bzw. den konservativen Noise-Default.
+            if (boundAcc > 0 && boundAcc < accCap) accCap = boundAcc;
         }
     }
 
@@ -122,11 +134,14 @@ void start() {
     for (uint8_t i = 0; i < 4; i++) {
         Tmc::setPower(i, true);
         Stepper::setMicrosteps(i, 16);
+        // NVS-Grenzen cachen
+        StorageCalib::load(i, calCache[i]);
         applyEngineCap(i, stepMode, waveMode);
         stepState[i] = StepState();
         stepState[i].holdStartMs = now;
     }
     flightX = flightY = timeAcc = 0.0f;
+    lastMoveType = v4::rt.moveType;
     v4::rt.running = true;
     Logger::addLog(String("Synth: START type=") + v4::rt.moveType);
 }
@@ -149,6 +164,19 @@ void tick() {
     pushOutputs();
 
     if (!v4::rt.running) return;
+
+    // KRITISCH (Fix ID 24/29): Reaktiv auf Modus-Wechsel reagieren.
+    // Wenn der User von Noise auf Square schaltet, müssen Accel/Speed
+    // neu berechnet und an die Stepper gepusht werden.
+    if (v4::rt.moveType != lastMoveType) {
+        bool stepMode = (v4::rt.moveType == 6);
+        bool waveMode = (v4::rt.moveType >= 3 && v4::rt.moveType <= 5);
+        for (uint8_t i = 0; i < 4; i++) {
+            applyEngineCap(i, stepMode, waveMode);
+        }
+        lastMoveType = v4::rt.moveType;
+        Logger::addLog(String("Synth: Mode switch -> ") + lastMoveType);
+    }
 
     float dt = (float)TICK_MS / 1000.0f;
     float effSpeed = v4::rt.speed * dynSpeed();

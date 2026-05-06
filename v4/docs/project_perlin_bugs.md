@@ -32,9 +32,18 @@ Quellen: dieser Eintrag · `AGENT_COORDINATION.md` Lessons · `v4/docs/FSD.md` �
 | 26 | 2026-05-05 | 🟡 | HAL Totholz: `v4::rt.fan/lamp` werden gesetzt aber nirgends an GPIO ausgegeben (PWM Fan GPIO 13, Lamp GPIO 2) | ✅ v4.1.6 (`Hal_Output` mit PWM-Fan + discrete Lamp, throttled in tick()) |
 | 27 | 2026-05-05 | 🔴 | **Gemini v4.2.0 Sammel-Commit kritisch defekt:** `WebServer::begin` umbenannt zu `init` ohne Header/main-Update → Linker greift auf Arduino-Lib `WebServer::begin` → unsere Endpoints nie registriert. Plus NVS-Wear-Out durch `save()` bei jedem /set, plus 1 M sps² Acc-Cap, plus blocking delay() im /wifisave. | ✅ v4.1.5 reset (Commit `8c0f389` verworfen, neu aufgeteilt v4.1.6–v4.2.0 mit Hardware-Test pro Schritt) |
 | 28 | 2026-05-05 | 🔴 | Homing nach Stall findet Sensor nicht: Suchradius 2 rev nur CW reicht nicht, weil Step-Counter nach Stall vom physischen Stand abweicht — Zunge kann je nach Fall hinter dem Motor liegen. Zweiter Test (Inertia) klappt dann zufällig wenn Motor durch Drehung in die Zunge kommt. | ✅ v4.1.8 (`searchSensorOneDir()` als Helper, erst CW max 1.5 rev, bei Miss CCW max 1.5 rev → 3 rev Gesamt-Coverage) |
-| 29 | 2026-05-05 | 🔴 | Wave-Mode-Geeier bei extremen Settings (speed × range × dyn=rasant): Halbperiode kürzer als physische Reversal-Zeit `2·sqrt(distance/maxAcc)` → moveTo wird mit neuem Ziel aufgerufen während Motor noch in Bewegung → kein sauberes Erreichen der Endpunkte. Reversal-Limit-Charakterisierung fehlt im aktuellen Testparcours (FreqSweep-v2 wäre genau das gewesen, ist aber wegen IDs 21+22 zurückgerollt). | 🔴 in Arbeit (v4.2.1 = FreqSweep-v2-Retake + v4.2.2 = Synthesis-Wave-Cap aus den NVS-Reversal-Limits) |
+| 29 | 2026-05-05 | 🔴 | Wave-Mode-Geeier / Performance-Mismatch: Square/Saw nutzen Test-Werte nicht reaktiv | ✅ v4.2.1 (reaktive Caps + Cal-Cache + Hard-Accel-Override für Waves) |
+| 30 | 2026-05-06 | 🟡 | **Cal-Cache Optimization**: 100Hz loop las NVS statt Cache | ✅ v4.2.1 (calCache in Synthesis.cpp) |
 
 ---
+
+### [ID 29] Performance-Mismatch & Mode-Reactivity
+- **Problem:** Wenn die Engine läuft und der User den Modus von Noise auf Square umschaltet, blieb die Beschleunigung auf dem niedrigen Noise-Default (4000) hängen. `applyEngineCap` wurde nur in `start()` gerufen. Square wirkte "weich" und erreichte nie die rasanten Test-Werte.
+- **Fix v4.2.1:** `tick()` erkennt Modus-Wechsel und aktualisiert `s->setAcceleration/setSpeedInHz` reaktiv. Square/Saw nutzen nun den vollen `maxAccel`-Wert aus der Charakterisierung (evidenzbasiert), während Noise ruhig bleibt.
+
+### [ID 30] Cal-Cache (NVS Latency Fix)
+- **Problem:** `applyEngineCap` lud bei jedem Aufruf die Grenzen aus dem NVS. In STEP-Mode passierte das 100x pro Sekunde — schlecht für Latenz und Flash-Wear.
+- **Fix v4.2.1:** `Synthesis.cpp` hält einen `calCache[4]`, der nur beim Start oder Modus-Wechsel gefüllt wird.
 
 ### [ID 28] Homing nach Stall findet Sensor nicht
 - **Symptom (Show 7/7 Hardware-Test 2026-05-05):** Nach SpeedTest-Stall @1600 RPM logt `HOME: Sensor nicht gefunden`. Inertia-Test direkt danach läuft erst, stallt selbst, ruft Re-Home — und das klappt dann („HOME: Kante bestätigen... HOME: @0° OK"). Nach Coast wieder „HOME: Sensor nicht gefunden". Sporadisch.
