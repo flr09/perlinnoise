@@ -1,6 +1,6 @@
 # FSD — PerlinNoise v4 (Modular)
 
-**Stand:** 2026-05-06 — Firmware **v4.2.4** auf Hardware. Phase 8 + Sinus-Silent-Fix abgeschlossen. v4.2.4 = per-Wave-Mode-Acc-Discrimination (Sinus=4k, Saw=50k, Square=volle cal.maxAccel). Nächste Forschungsrichtung: StallGuard4 + StealthChop2 + feine Microsteps (256) für „silent fine motion" in Lichtinstallationen — siehe `v4/docs/research_stallguard.md`.
+**Stand:** 2026-05-06 — Firmware **v4.3.0** auf Hardware. Phase 9 startet (TMC-Dynamics). v4.3.0 = `intpol(true)` für 256-µStep-Hardware-Interpolation: externe FAS-Steps (MS=64) werden vom TMC2209 intern auf 256 µSteps interpoliert → ultra-glatte Bewegung bei langsamen Drehzahlen ohne CPU-Last. Plan in `v4/README.md`.
 **Branch:** `v4-modular`
 **Vorgänger:** `v4_iteration1/` (3 Commits, Watchdog + MotorProfile, nicht funktional integriert)
 **Referenz-Implementierung:** `v3/` (v3.7.32, online unter `perlin-v3.intern.gaengeviertel.de`)
