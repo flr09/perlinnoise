@@ -1,6 +1,6 @@
 # FSD — PerlinNoise v4 (Modular)
 
-**Stand:** 2026-05-06 — Firmware **v4.2.0** auf Hardware. Phase 8 läuft als 7-Tag-Plan v4.1.7 → v4.2.2. v4.2.0 = WiFi-Credentials in NVS + nicht-blockierender Reboot (Bug-ID 23c). Persistence-Familie komplett (Config+Presets+WiFi).
+**Stand:** 2026-05-06 — Firmware **v4.2.2** auf Hardware. Phase 8 läuft als 7-Tag-Plan v4.1.7 → v4.2.3. v4.2.2 = FreqSweep v2 retake, Tacho-basiert mit feinem 6..50 Hz Raster. Hardware-Befund: Sensor-Hysterese-Schwelle liegt bei ~9 Hz auf Z-Mechanik. 2 echte Datenpunkte (6 Hz, 8 Hz) für die kommende Synthesis-Wave-Cap in v4.2.3.
 **Branch:** `v4-modular`
 **Vorgänger:** `v4_iteration1/` (3 Commits, Watchdog + MotorProfile, nicht funktional integriert)
 **Referenz-Implementierung:** `v3/` (v3.7.32, online unter `perlin-v3.intern.gaengeviertel.de`)

@@ -340,75 +340,191 @@ void runKatapult(uint8_t i) {
     resetMotorState(i, stalled);
 }
 
-// --- 6) FreqSweep: Linearer Chirp 10–200 Hz, Schwingung um SENSOR-KANTE ---
-// Stand v4.1.3: zurück auf den linearen Chirp aus 4.1.2. Die in rc1 ein-
-// geführte v2 (10 Bänder, Bisektion, Learning) hatte zwei harte Bugs auf
-// realer Hardware (siehe project_perlin_bugs.md):
-//   - Re-Home-Race: nach Stall bei kleiner amp scheiterte EdgeTouch; Folge-
-//     Tests starteten von Müll-Position, Werte kaskadierten falsch.
-//   - Hysterese-Floor: amp < Sensor-Hysterese erzeugt 0 Pulse, mein Detektor
-//     `pulses < swings/2` interpretierte das als Stall — Bisektion lief in
-//     den Floor (stallAmp=5 für Band 0/4/5/6).
-// Felder `freqStallAmp[10]` und `freqRunCount` in CalibrationData bleiben
-// als Reserve für eine spätere v2-Iteration mit besserem Stall-Detektor
-// (ggf. TMC StallGuard cross-checked mit Tacho).
+// --- 6) FreqSweep v2 retake: 10 Bänder, Hysterese-Floor + Stall-Bisektion ---
 //
-// Original-Logik: Schwingen um die Sensor-Kante (`triggerStartDeg`) garantiert
-// bei JEDER Amplitude einen Tacho-Puls, solange der Motor die Schritte hält.
+// Lessons aus dem ersten v2-Versuch (4.1.3-rc1, zurückgerollt — Bug-IDs 21+22):
+//   - Bug 22: amp < Sensor-Hysterese erzeugt 0 Pulse, der „pulses < swings/2"-
+//     Detektor interpretierte das als Stall → Bisektion lief in den Floor.
+//   - Bug 21: nach Stall scheiterte Re-Home (CW-Suche allein) → Folgetests an
+//     Müll-Position. Dank ID 28 ist Re-Home jetzt CW+CCW robust.
+//
+// v4.2.2-Lösung pro Band:
+//   1. Hysterese-Floor-Pre-Detection: kleinste amp finden bei der überhaupt
+//      Pulse entstehen. 0-Pulse-Tests zählen NICHT als Stall, nur als „unter
+//      der Wahrnehmungsschwelle". Falls floor > ampMaxPhys → Band überspringen.
+//   2. Stall-Bisektion oberhalb floor bis zur physikalischen Acc-Grenze.
+//      Stall = pulses == 0 BEI amp ≥ floor (also Motor schafft Bewegung
+//      mechanisch nicht mehr). Re-Home nach jedem Stall.
+//   3. Ergebnis pro Band in cal.freqStallAmp[band] (NVS-Schema 4003 schon
+//      reserviert).
+//
+// Zeitbudget: ~60–90 s pro Motor (10 Bänder × ~5 Tests × 250 ms + Re-Homes).
+
+// Frequenz-Raster für FreqSweep v2 retake (Tacho-only, da StallGuard bei
+// oszillierender Bewegung unzuverlässig — Befund 2026-05-06):
+// Engmaschig im 6..20 Hz Bereich, um die Hysterese-Schwelle der Sensorzunge
+// genau zu lokalisieren (User-Anliegen: ist es 12 oder 18 Hz?). Darüber
+// gröber 26..50 Hz — wird mit dieser Sensor-Mechanik vermutlich eh nicht
+// erfasst, aber zur Bestätigung der Sweet-Spot-Lage geprüft.
+constexpr uint8_t FREQ_BANDS_V2 = 10;
+constexpr float   FREQ_BAND_HZ_V2[FREQ_BANDS_V2] = {
+    6.0f, 8.0f, 10.0f, 12.0f, 14.0f, 16.0f, 20.0f, 26.0f, 36.0f, 50.0f
+};
+constexpr int     FS2_TEST_MS    = 250;
+constexpr int     FS2_MIN_SWINGS = 4;
+constexpr long    FS2_AMP_MIN    = 1;
+
+// Test ein (f, amp)-Punkt. Schwingt N Halbschwingungen um edgePos und liefert
+// Pulse + max(SG_RESULT). Tacho-Pulse für Sensor-basierte Erkennung (oft 0
+// wegen Sensor-Hysterese), SG_RESULT als sensor-unabhängige Last-Messung
+// vom TMC2209. Aufrufer kann Stall klassifizieren über (sgMax == 0): Motor
+// bewegt sich nicht erkennbar (entweder gestallt oder nicht angesteuert).
+static void fs2TestPoint(uint8_t i, float f, long amp, long edgePos, int& dir,
+                         int& outSwings, int& outPulses, uint16_t& outSgMax) {
+    outSwings = 0;
+    outPulses = 0;
+    outSgMax  = 0;
+    auto* s = Stepper::get(i);
+    if (!s || amp < FS2_AMP_MIN) return;
+    float halfPeriodMs = 500.0f / f;
+    int swings = (int)max((float)FS2_MIN_SWINGS, (float)FS2_TEST_MS / halfPeriodMs);
+    outSwings = swings;
+
+    uint32_t targetSps = (uint32_t)max(100.0f, 4.0f * (float)amp * f);
+    s->setAcceleration(FREQ_ACCEL_MAX);
+    s->setSpeedInHz(targetSps);
+
+    uint32_t p0 = HalTacho::getPulseCount(i);
+    uint16_t sgMax = 0;
+    for (int n = 0; n < swings; n++) {
+        if (Op::pendingStop) { s->stopMove(); return; }
+        s->moveTo(edgePos + (dir * amp));
+        unsigned long t0 = millis();
+        unsigned long maxMs = (unsigned long)(halfPeriodMs * 3.0f) + 20;
+        while (s->isRunning() && (millis() - t0) < maxMs) {
+            if (Op::pendingStop) { s->stopMove(); return; }
+            // SG_RESULT vom Telemetry-Hintergrund-Task (alle 100 ms gepollt).
+            // Lokales max tracken — wenn am Ende sgMax == 0 ist, hat sich der
+            // Motor in keiner Halbschwingung erkennbar bewegt.
+            uint16_t sg = Telemetry::getLatestSg(i);
+            if (sg > sgMax) sgMax = sg;
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        if (s->isRunning()) { s->stopMove(); Motion::waitWhileRunning(i, nullptr, 100); }
+        dir = -dir;
+    }
+    outPulses = (int)(HalTacho::getPulseCount(i) - p0);
+    outSgMax  = sgMax;
+}
+
+// Tacho-Bisektion: sucht die größte amp im Bereich [FS2_AMP_MIN, ampMax]
+// bei der `pulses >= swings/2` bleibt (= Sensor crossed regelmäßig). Wenn
+// das oberste amp keine Pulse erzeugt → Hysterese hat zugeschlagen (= Sensor
+// kann amp nicht mehr auflösen), wir loggen das als „Hysterese-Floor" und
+// returnen 0. Sonst Bisektion bis Stabilität.
+//
+// SG_RESULT wird zur Info mit-geloggt, aber nicht zur Klassifizierung
+// genutzt — auf dieser Hardware (Befund 2026-05-06) liefert SG bei
+// oszillierender Bewegung konstant 0.
+static long fs2BisectStallTacho(uint8_t i, float f, long ampMax,
+                                 long edgePos, int& dir, float edgeDeg,
+                                 long& edgePosOut, bool& outHysteresis) {
+    outHysteresis = false;
+    long lo = FS2_AMP_MIN;
+    long hi = ampMax;
+    edgePosOut = edgePos;
+    if (hi <= lo) return lo;
+
+    int swings, pulses; uint16_t sgMax;
+
+    // Erst Top testen — wenn dort schon 0 Pulse, ist es entweder echter
+    // Stall (Motor schafft amp×f² nicht) ODER Sensor-Hysterese (Motor
+    // bewegt sich, kreuzt Kante aber nicht). Auf dieser Mechanik bei f≥14
+    // ist es immer Hysterese. Wir loggen es und returnen 0.
+    fs2TestPoint(i, f, hi, edgePos, dir, swings, pulses, sgMax);
+    Logger::addLog(String("FS2 f=") + (int)f + " amp=" + hi
+        + " p=" + pulses + "/" + swings + " sg=" + sgMax
+        + (pulses == 0 ? " NO-PULSES" : ""));
+    if (pulses == 0) {
+        outHysteresis = true;
+        return 0;  // Sensor sieht es nicht — Band für diese Hardware unbrauchbar
+    }
+    if (pulses >= swings / 2) return hi;  // Top läuft sauber, kein Stall
+
+    // Hier: pulses zwischen 1 und swings/2-1 → Motor läuft, aber instabil.
+    // Bisektion runter bis stabil.
+    int iter = 0;
+    long tol = max((long)2, ampMax / 50);
+    while ((hi - lo) > tol && iter < 6 && !Op::pendingStop) {
+        long mid = (lo + hi) / 2;
+        fs2TestPoint(i, f, mid, edgePosOut, dir, swings, pulses, sgMax);
+        Logger::addLog(String("FS2 f=") + (int)f + " amp=" + mid
+            + " p=" + pulses + "/" + swings + " sg=" + sgMax);
+        if (pulses >= swings / 2) {
+            lo = mid;
+        } else {
+            hi = mid;
+            // Re-Home wegen möglichem Stall (Motor verlor Steps)
+            Homing::run(i);
+            auto* s = Stepper::get(i);
+            Stepper::setMicrosteps(i, 64);
+            s->setSpeedInHz(8000); s->setAcceleration(20000);
+            Motion::moveToDeg(i, edgeDeg);
+            Motion::waitWhileRunning(i, &Op::pendingStop, 5000);
+            edgePosOut = s->getCurrentPosition();
+        }
+        iter++;
+    }
+    return lo;
+}
+
 void runFreqSweep(uint8_t i) {
     if (i >= 4) return;
     v4::CalibrationData cal; StorageCalib::load(i, cal);
     if (!cal.valid) { Logger::addLog("FreqSweep: nicht kalibriert"); return; }
+    if (!HalPins::hasSensor(i)) { Logger::addLog("FreqSweep: kein Sensor"); return; }
     Tmc::setPower(i, true);
     Stepper::setMicrosteps(i, 64);
     auto* s = Stepper::get(i);
     if (!s) { resetMotorState(i, false); return; }
-    Logger::addLog("Freq Sweep (um Sensor-KANTE schwingend)");
+    Logger::addLog("FreqSweep v2 (Hysterese-Floor + Stall-Bisektion)");
 
-    // Auf die Start-Kante fahren (ca. -15°)
     float edgeDeg = cal.triggerStartDeg;
     s->setSpeedInHz(8000); s->setAcceleration(20000);
     Motion::moveToDeg(i, edgeDeg);
     if (!waitOrStop(i, 5000)) { resetMotorState(i, false); return; }
     long edgePos = s->getCurrentPosition();
-
-    unsigned long tStart = millis();
-    float tDur = FREQ_SWEEP_S * 1000.0f;
     int dir = 1;
-    uint32_t pSweepStart = HalTacho::getPulseCount(i);
+    long sprQuarter = (long)Stepper::stepsPerRev(i) / 4;
 
-    while (!Op::pendingStop) {
-        float elapsed  = (float)(millis() - tStart);
-        float progress = elapsed / tDur;
-        if (progress >= 1.0f) break;
+    bool anyStall = false;
+    int firstHysteresisBand = -1;
+    for (uint8_t b = 0; b < FREQ_BANDS_V2 && !Op::pendingStop; b++) {
+        float f = FREQ_BAND_HZ_V2[b];
+        long ampPhysMax = (long)((float)FREQ_ACCEL_MAX / (16.0f * f * f));
+        long ampMax = min(sprQuarter, max((long)FS2_AMP_MIN, ampPhysMax));
 
-        float f = FREQ_MIN_HZ + (FREQ_MAX_HZ - FREQ_MIN_HZ) * progress;
-        // Amplitude nimmt mit 1/f^2 ab.
-        float ampF = (float)FREQ_ACCEL_MAX / (16.0f * f * f);
-        long  amp  = (long)min(ampF * 0.9f, (float)Stepper::stepsPerRev(i) / 8.0f);
-
-        if (amp < 2) break;
-
-        s->setSpeedInHz((uint32_t)sqrtf((float)FREQ_ACCEL_MAX * (float)amp));
-        s->setAcceleration(FREQ_ACCEL_MAX);
-
-        // Schwinge um die exakte Kante
-        s->moveTo(edgePos + (dir * amp));
-
-        while (s->isRunning()) {
-            if (Op::pendingStop) { s->stopMove(); break; }
-            Telemetry::recordDataPoint(i, "FS", f);
-            vTaskDelay(pdMS_TO_TICKS(2)); // Höhere Telemetrie-Auflösung beim Sweep
-        }
-        dir = -dir;
+        bool hysteresis = false;
+        long stallAmp = fs2BisectStallTacho(i, f, ampMax, edgePos, dir,
+                                             edgeDeg, edgePos, hysteresis);
+        cal.freqStallAmp[b] = (uint16_t)max((long)0, min((long)0xFFFF, stallAmp));
+        if (hysteresis && firstHysteresisBand < 0) firstHysteresisBand = b;
+        Logger::addLog(String("FS2 b=") + b + " f=" + (int)f
+            + " stallAmp=" + cal.freqStallAmp[b]
+            + (hysteresis ? " (hysteresis-floor)" : "")
+            + " (ampMax=" + ampMax + ")");
+        anyStall = true;
+        Telemetry::recordDataPoint(i, "FS_BAND", f);
+    }
+    if (firstHysteresisBand >= 0) {
+        Logger::addLog(String("FS2 Sensor-Limit: erstmal Hysterese ab Band ")
+            + firstHysteresisBand + " (f=" + (int)FREQ_BAND_HZ_V2[firstHysteresisBand]
+            + " Hz)");
     }
 
-    uint32_t pTotal = HalTacho::getPulseCount(i) - pSweepStart;
-    Logger::addLog(String("FreqSweep fertig. Impulse: ") + pTotal);
-
-    // Wenn 0 Impulse bei FreqSweep (obwohl wir an der Kante schwingen),
-    // dann war es ein Stall oder mechanisches Problem.
-    resetMotorState(i, (pTotal == 0));
+    StorageCalib::save(i, cal);
+    Logger::addLog("FreqSweep v2 fertig — freqStallAmp[] in NVS gespeichert");
+    resetMotorState(i, anyStall);
 }
 
 // --- 7) CurrentSweepHiRPM: B-EMF Sweet-Spot bei hoher RPM ---
