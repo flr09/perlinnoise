@@ -63,6 +63,14 @@ void applyDefaults(uint8_t motorIdx, uint16_t runMA) {
     xSemaphoreGive(Sync::uartMutex);
 }
 
+void setTPWMTHRS(uint8_t motorIdx, uint32_t threshold) {
+    auto* d = driver(motorIdx);
+    if (!d) return;
+    if (xSemaphoreTake(Sync::uartMutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
+    d->TPWMTHRS(threshold);
+    xSemaphoreGive(Sync::uartMutex);
+}
+
 void setPower(uint8_t motorIdx, bool on) {
     auto* d = driver(motorIdx);
     if (!d) return;

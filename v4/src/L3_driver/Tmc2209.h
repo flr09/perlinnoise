@@ -21,6 +21,13 @@ void setPower(uint8_t motorIdx, bool on);
 bool isPowered(uint8_t motorIdx);
 void setAllPower(bool on);  // gemeinsamer ENABLE-Pin schaltet alle gleichzeitig
 
+// v4.3.1: TPWMTHRS-Schwelle für StealthChop ↔ SpreadCycle Übergang.
+// 0       = SpreadCycle immer (laut, volles Drehmoment)
+// 0xFFFFF = StealthChop immer (silent, weniger Drehmoment)
+// dazwischen: bei TSTEP < threshold läuft SpreadCycle (= über RPM-Schwelle).
+// Zur RPM-Konvertierung: Units::rpmToTpwmthrs(motorIdx, rpm).
+void setTPWMTHRS(uint8_t motorIdx, uint32_t threshold);
+
 // Backwards-compat aus Phase 1 — werden in Phase 3 entfernt
 void applyDefaultsX(uint16_t runMA = 800);
 void setPowerX(bool on);

@@ -215,6 +215,28 @@ static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
     s->setAcceleration(accCap);
 }
 
+// v4.3.1: TPWMTHRS-Hybrid pro Mode für Chopper-Selection.
+// StealthChop2 = silent + niedrigeres Drehmoment (für Sinus/Noise ideal).
+// SpreadCycle  = lauter + volles Drehmoment (für Square-Sprünge ideal).
+// Übergangs-Schwelle bei 500 RPM für Saw/Step (User-Vorgabe 2026-05-06):
+// unter 500 RPM = StealthChop, drüber = SpreadCycle.
+//   Sinus/Noise/Linear/Circle/Figure8: StealthChop immer (TPWMTHRS=0xFFFFF)
+//   Saw/Step:                          Übergang bei 500 RPM
+//   Square:                            SpreadCycle immer (TPWMTHRS=0)
+constexpr float CHOP_SWITCH_RPM = 500.0f;
+
+static void applyChopperMode(uint8_t i, int moveType) {
+    uint32_t tpwm;
+    if (moveType == 5) {
+        tpwm = 0;            // Square: SpreadCycle immer (volles Drehmoment)
+    } else if (moveType == 4 || moveType == 6) {
+        tpwm = Units::rpmToTpwmthrs(i, CHOP_SWITCH_RPM);  // Saw/Step: hybrid
+    } else {
+        tpwm = 0xFFFFF;      // Sinus/Noise/Linear/Circle/Figure8: StealthChop immer
+    }
+    Tmc::setTPWMTHRS(i, tpwm);
+}
+
 void start() {
     if (v4::rt.running) return;
     unsigned long now = millis();
@@ -226,6 +248,7 @@ void start() {
         // NVS-Grenzen cachen
         StorageCalib::load(i, calCache[i]);
         applyEngineCap(i, stepMode, waveMode);
+        applyChopperMode(i, v4::rt.moveType);
         stepState[i] = StepState();
         stepState[i].holdStartMs = now;
     }
@@ -262,6 +285,7 @@ void tick() {
         bool waveMode = (v4::rt.moveType >= 3 && v4::rt.moveType <= 5);
         for (uint8_t i = 0; i < 4; i++) {
             applyEngineCap(i, stepMode, waveMode);
+            applyChopperMode(i, v4::rt.moveType);
         }
         lastMoveType = v4::rt.moveType;
         Logger::addLog(String("Synth: Mode switch -> ") + lastMoveType);
