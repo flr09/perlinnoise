@@ -1,6 +1,6 @@
 # PerlinNoise v4 — Modulare Motorsteuerung
 
-**Stand:** 2026-05-06 — Firmware **v4.2.4** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22). Phasen 1–8 abgeschlossen. **Phase 9** (Dynamics under the hood — TMC-Tuning, 256 µSteps, SG4) geplant als 5-Tag-Plan v4.3.0 → v4.3.4.
+**Stand:** 2026-05-06 — Firmware **v4.3.1** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22). Phasen 1–8 abgeschlossen. **Phase 9** (Dynamics under the hood) läuft, 2 von 5 Schritten fertig (v4.3.0 + v4.3.1).
 **Branch:** `v4-modular`
 
 ## Was ist v4?
@@ -47,12 +47,12 @@ Vollständige Spezifikation: [`docs/FSD.md`](docs/FSD.md).
   - **v4.2.2** ✅ FreqSweep v2 retake (Tacho mit feinem 6..50 Hz Raster, IDs 18+21+22 — Sensor-Hysterese-Schwelle bei ~9 Hz auf Z-Mechanik)
   - **v4.2.3** ✅ Synthesis Wave-Cap aus FreqSweep-v2-Daten (ID 29 final)
   - **v4.2.4** ✅ Sinus silent — per-Wave-Mode Acc-Discrimination (ID 34)
-- **Phase 9** ⚪ Dynamics under the hood — TMC-Tuning, 256 µSteps, SG4 (geplant, 5-Tag-Plan):
-  - **v4.3.0** ⚪ `intpol(true)` für 256 µStep-Glätte ohne CPU-Last (Lichtinstallation, smoothere Sinus)
-  - **v4.3.1** ⚪ TPWMTHRS-Hybrid pro Mode (Sinus/Saw silent in StealthChop, Square Power in SpreadCycle)
-  - **v4.3.2** ⚪ `getSGResult()` API + TCOOLTHRS sicher konfiguriert (SGTHRS=0, kein DIAG-Trigger), DIAG-Pin-Sicherheit verifiziert
-  - **v4.3.3** ⚪ Tacho-Fusion-SGTHRS-Lernen im SpeedTest (evidenzbasierter SG-Schwellwert pro Motor in NVS)
-  - **v4.3.4** ⚪ Player-Watchdog: Tacho-Pulse-Erwartung pro Mode, bei Drift > 50 % über 3 s → Log + 5 s Pause + Re-Home + Resume (nur Synthesis, nicht Tests)
+- **Phase 9** Dynamics under the hood — TMC-Tuning, 256 µSteps, SG4 (5-Tag-Plan, läuft):
+  - **v4.3.0** ✅ `intpol(true)` für 256 µStep-Hardware-Interpolation (Lichtinstallation, glattere Sinus). Eine Zeile in `Tmc::applyDefaults()` — externe FAS-Steps werden vom TMC2209 intern auf 256 µSteps interpoliert.
+  - **v4.3.1** ✅ TPWMTHRS-Hybrid pro Mode (`Synthesis::applyChopperMode()`): Sinus/Noise/Linear/Circle/Figure8 → StealthChop immer (silent). Saw/Step → Schwelle bei **500 RPM** (`Units::rpmToTpwmthrs`). Square → SpreadCycle immer (Power für harte Sprünge). Aufruf in `start()` und beim Mode-Switch im `tick()`.
+  - **v4.3.2** ⚪ `getSGResult()` API in L3 + TCOOLTHRS sicher konfiguriert (SGTHRS=0, kein DIAG-Trigger). **Vor Aktivierung muss DIAG-Pin-Sicherheit verifiziert werden** — `Tmc2209.cpp` Z. 25-29 erwähnt Hardware-Leak auch bei offenem Sensorless-Homing-Jumper. Datasheet sagt: bei SGTHRS=0 löst DIAG nie aus, aber Code-Kommentar widerspricht. Empfehlung: erst nur Lese-Pfad implementieren (`SG_RESULT()`), aktiv setzen erst nach Oszi-Messung der DIAG-Pegel.
+  - **v4.3.3** ⚪ Tacho-Fusion-SGTHRS-Lernen im SpeedTest (Geminis Idee aus `research_stallguard.md`): Wenn `measureMotorRatio()` < `STALL_RATIO_THR` (echter Stall via Tacho), genau in dem Moment `SG_RESULT()` lesen → `cal.sgThrs` in NVS speichern. Evidenzbasierter Wert statt geraten. Anpassung in `Characterization.cpp::runSpeedTest`.
+  - **v4.3.4** ⚪ Player-Watchdog: Synthesis-Selbstheilung. Berechne pro Mode erwartete Tacho-Pulse-Rate (Wave: 2·f wenn Schwingungs-Amplitude > Sensor-Distanz; Noise: speed·range/sensor_width; Step: 1 pro Sprung). Vergleich gegen tatsächliche Pulse über 3 s gemittelt. Bei Drift > 50 % → `Logger::addLog("PLAYER WD: …")` + neues Pause-State (5 s) + `Homing::run(motorIdx)` (robust dank ID 28) + `Synthesis::resume()` mit gleichen `v4::rt`-Werten. Nur für Player aktiv, nicht für Tests.
 
 Detailliert in [`../AGENT_COORDINATION.md`](../AGENT_COORDINATION.md).
 
