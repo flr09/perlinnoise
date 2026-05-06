@@ -39,6 +39,84 @@ static StepState stepState[4];
 // Cache für Motor-Grenzen, um NVS-Zugriffe im 100Hz-Tick zu vermeiden.
 static v4::CalibrationData calCache[4];
 
+// FreqSweep v2 Frequenz-Bänder (MUSS mit Characterization::FREQ_BAND_HZ_V2
+// übereinstimmen). Lokal repliziert um L5-cross-Block-Coupling zu vermeiden.
+static constexpr uint8_t WAVE_CAP_BANDS = 10;
+static constexpr float   WAVE_CAP_FREQ_HZ[WAVE_CAP_BANDS] = {
+    6.0f, 8.0f, 10.0f, 12.0f, 14.0f, 16.0f, 20.0f, 26.0f, 36.0f, 50.0f
+};
+
+// Lookup max stabile Half-Amp (in MS=16 steps) für gegebene Frequenz f.
+// `cal.freqStallAmp[]` wurde im FreqSweep mit MS=64 gemessen → /4 für MS=16.
+// Strategie: höchstes Band ≤ f mit valid-Wert (>0) als Referenz, dann
+// Extrapolation nach amp ∝ 1/f² (Reversal-Physik). Bei f < lowest band
+// wird das niedrigste Band als Referenz genommen.
+static long maxAmpAtFreq(const v4::CalibrationData& cal, float f) {
+    if (f < 0.01f) return 0;
+    int useBand = -1;
+    for (int b = WAVE_CAP_BANDS - 1; b >= 0; b--) {
+        if (cal.freqStallAmp[b] > 0 && WAVE_CAP_FREQ_HZ[b] <= f) {
+            useBand = b; break;
+        }
+    }
+    if (useBand < 0) {
+        // f kleiner als alle valid Bänder — nimm das niedrigste valid als Ref
+        for (int b = 0; b < WAVE_CAP_BANDS; b++) {
+            if (cal.freqStallAmp[b] > 0) { useBand = b; break; }
+        }
+    }
+    if (useBand < 0) return 0;  // gar keine FreqSweep-Daten vorhanden
+    float f_ref     = WAVE_CAP_FREQ_HZ[useBand];
+    float amp_ref16 = (float)cal.freqStallAmp[useBand] / 4.0f;  // MS=64 → MS=16
+    float ratio     = f_ref / f;
+    return (long)(amp_ref16 * ratio * ratio);
+}
+
+// Cap effSpeed im Wave-Mode so, dass die geforderte Halb-Amplitude
+// (effRangeDeg in Synthesis-MS=16-Steps) physikalisch von der Motor-
+// Mechanik gehalten wird. Bug-ID 29: ohne diesen Cap führte
+// `speed × range × dyn=rasant` zu Geeier am Endpunkt, weil die Halb-
+// periode kürzer war als die Reversal-Zeit.
+//
+// Wenn `demanded > maxAtFreq(f)`: lösen für f_capped via amp ∝ 1/f²:
+// f_capped = f * sqrt(maxAtFreq(f) / demanded). Pro Motor das
+// restriktivste Limit gewinnt.
+static unsigned long lastCapLogMs = 0;
+static float capWaveSpeedFromFreqStallAmp(float effSpeed, float effRangeDeg) {
+    float effSpeedCapped = effSpeed;
+    int   restrictedMotor = -1;
+    float f = effSpeed / (2.0f * (float)M_PI);
+    if (f <= 0.001f) return effSpeed;
+    for (int i = 0; i < 4; i++) {
+        if (!Stepper::get(i)) continue;
+        const auto& cal = calCache[i];
+        if (!cal.valid) continue;
+        long demandedHalfAmp = (long)(effRangeDeg * (float)Stepper::stepsPerRev(i) / 360.0f);
+        long ampMaxSafe      = maxAmpAtFreq(cal, f);
+        if (ampMaxSafe <= 0) continue;
+        if (demandedHalfAmp > ampMaxSafe) {
+            float f_capped = f * sqrtf((float)ampMaxSafe / (float)demandedHalfAmp);
+            float effSpeedThis = f_capped * 2.0f * (float)M_PI;
+            if (effSpeedThis < effSpeedCapped) {
+                effSpeedCapped = effSpeedThis;
+                restrictedMotor = i;
+            }
+        }
+    }
+    if (effSpeedCapped < effSpeed && restrictedMotor >= 0) {
+        unsigned long nowMs = millis();
+        if (nowMs - lastCapLogMs > 1000) {
+            lastCapLogMs = nowMs;
+            float fOrig = effSpeed / (2.0f * (float)M_PI);
+            float fCap  = effSpeedCapped / (2.0f * (float)M_PI);
+            Logger::addLog(String("Wave-Cap M") + (char)('X' + restrictedMotor)
+                + ": " + String(fOrig, 1) + " Hz → " + String(fCap, 1) + " Hz @ "
+                + (int)effRangeDeg + "°");
+        }
+    }
+    return effSpeedCapped;
+}
+
 // Drive-Dynamics-Skalierungen aus V1 MANUAL.md
 static float dynSpeed() {
     switch (v4::rt.dynamics) {
@@ -180,6 +258,15 @@ void tick() {
 
     float dt = (float)TICK_MS / 1000.0f;
     float effSpeed = v4::rt.speed * dynSpeed();
+
+    // Bug-ID 29: Wave-Mode-Cap aus FreqSweep-v2-Daten. Cappt effSpeed wenn
+    // die geforderte Reversal-Amplitude bei aktueller Frequenz die Mechanik
+    // überfordern würde. effRange bleibt unverändert — User behält die
+    // volle Amplitude, nur die Wellen-Frequenz wird begrenzt.
+    if (v4::rt.moveType >= 3 && v4::rt.moveType <= 5) {
+        float effRangeDegLocal = v4::rt.rangeDeg * dynRange();
+        effSpeed = capWaveSpeedFromFreqStallAmp(effSpeed, effRangeDegLocal);
+    }
 
     // 1) Pfad-Generator
     if (v4::rt.moveType == 0) {            // LINEAR
