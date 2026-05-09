@@ -5,6 +5,7 @@
 #include "../../L0_platform/Types.h"
 #include "../../L1_hal/Hal_Pins.h"
 #include "../../L1_hal/Hal_Output.h"
+#include "../../L1_hal/Hal_Tacho.h"
 #include "../../L2_storage/Storage_Calib.h"
 #include "../../L3_driver/Stepper.h"
 #include "../../L3_driver/Tmc2209.h"
@@ -260,6 +261,92 @@ static void applyChopperMode(uint8_t i, int moveType) {
     Tmc::setTPWMTHRS(i, tpwm);
 }
 
+// v4.3.5: Player-Watchdog — Synthesis-Selbstheilung.
+//
+// Vergleicht im 3-s-Fenster die tatsächliche Tacho-Pulse-Rate gegen die
+// erwartete Rate für den aktuellen Mode. Bei Drift > 50 % stoppt der
+// Watchdog die Synthese und loggt — User merkt das im UI (running=false)
+// und kann manuell Re-Homen + Re-Starten. Auto-Recovery v2 wäre nice-
+// to-have, ist aber komplex (Homing::run blockiert, müsste über
+// Op::pending.home asynchron getriggert werden).
+//
+// Erste Version v1: nur Wave-Mode (moveType 3,4,5) wird überwacht.
+// Erwartete Pulses pro Halbschwingung = 2·f Hz × Zeit, gilt aber nur wenn
+// die geforderte Halb-Amplitude über der Sensor-Hysterese liegt (~250 Steps
+// auf Z, sonst kreuzt der Motor die Sensor-Kante nicht). Bei niedriger f
+// oder kleiner amp wird gar nicht überwacht (Pulse-Rate zu langsam für
+// statistisch signifikanten Vergleich).
+//
+// Test-Modi (Calib/Speed/FreqSweep) sind durch v4::rt.running == false
+// implizit ausgeschlossen.
+static unsigned long lastWdSnapshotMs = 0;
+static uint32_t      wdPulsesSnapshot[4] = {0,0,0,0};
+static constexpr uint32_t WD_WINDOW_MS  = 3000;
+static constexpr float    WD_RATIO_THR  = 0.5f;
+static constexpr long     WD_MIN_AMP_STEPS = 250;  // ~Sensor-Hysterese Z
+static constexpr float    WD_MIN_F_HZ      = 0.3f; // unter 0.3 Hz statistisch sinnlos
+
+static void tickWatchdog() {
+    if (!v4::rt.running) {
+        lastWdSnapshotMs = 0;
+        return;
+    }
+    bool waveMode = (v4::rt.moveType >= 3 && v4::rt.moveType <= 5);
+    if (!waveMode) {
+        lastWdSnapshotMs = 0;
+        return;
+    }
+
+    unsigned long now = millis();
+    if (lastWdSnapshotMs == 0) {
+        for (int i = 0; i < 4; i++) wdPulsesSnapshot[i] = HalTacho::getPulseCount(i);
+        lastWdSnapshotMs = now;
+        return;
+    }
+    if (now - lastWdSnapshotMs < WD_WINDOW_MS) return;
+
+    float effSpeed    = v4::rt.speed * dynSpeed();
+    float effRangeDeg = v4::rt.rangeDeg * dynRange();
+    effSpeed = capWaveSpeedFromFreqStallAmp(effSpeed, effRangeDeg);
+    float f = effSpeed / (2.0f * (float)M_PI);
+    if (f < WD_MIN_F_HZ) {
+        // Refresh snapshot; zu langsam für sinnvolle Auswertung
+        for (int i = 0; i < 4; i++) wdPulsesSnapshot[i] = HalTacho::getPulseCount(i);
+        lastWdSnapshotMs = now;
+        return;
+    }
+    float windowS = (float)(now - lastWdSnapshotMs) / 1000.0f;
+    float expected = 2.0f * f * windowS;
+
+    for (int i = 0; i < 4; i++) {
+        if (!HalPins::hasSensor(i)) continue;
+        if (!Stepper::get(i)) continue;
+        const auto& cal = calCache[i];
+        if (!cal.valid) continue;
+        long demandedHalfAmp = (long)(effRangeDeg * (float)Stepper::stepsPerRev(i) / 360.0f);
+        if (demandedHalfAmp < WD_MIN_AMP_STEPS) continue;
+        // tachoCutoffHz aus Phase A: oberhalb davon erwarten wir keine
+        // verlässlichen Pulse mehr (Sensor blind), also kein Drift-Trigger.
+        if (cal.tachoCutoffHz > 0 && f > (float)cal.tachoCutoffHz) continue;
+
+        uint32_t real32 = HalTacho::getPulseCount(i) - wdPulsesSnapshot[i];
+        float    real   = (float)real32;
+        float    ratio  = expected > 0.0f ? (real / expected) : 1.0f;
+        if (ratio < WD_RATIO_THR) {
+            Logger::addLog(String("PLAYER WD M") + (char)('X' + i)
+                + ": ratio=" + String(ratio, 2)
+                + " (real=" + (int)real + " exp=" + String(expected, 1)
+                + ", f=" + String(f, 1) + " Hz) → STOP");
+            stop();
+            return;
+        }
+    }
+
+    // Snapshot-Refresh für nächstes Fenster
+    for (int i = 0; i < 4; i++) wdPulsesSnapshot[i] = HalTacho::getPulseCount(i);
+    lastWdSnapshotMs = now;
+}
+
 void start() {
     if (v4::rt.running) return;
     unsigned long now = millis();
@@ -417,6 +504,10 @@ void tick() {
         if (target < -maxSteps) target = -maxSteps;
         s->moveTo(target);
     }
+
+    // v4.3.5: Player-Watchdog am Ende des Ticks. Misst Tacho-Pulse-Rate
+    // gegen erwartete Rate über 3-s-Fenster, stoppt Synthesis bei Drift > 50 %.
+    tickWatchdog();
 }
 
 size_t getPreviewBytes(uint8_t* out, size_t maxBytes) {

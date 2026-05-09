@@ -3,7 +3,7 @@
 ## 🕒 Aktueller Status (LIVE)
 - **Stand:** 2026-05-09
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.3.4** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — Phase 9 läuft (5/6). v4.3.4: FS2-Bisektion-internal Re-Sync (Bug 39) — f=36/50 jetzt sauber als Hysterese-Floor klassifiziert. v4.3.5 (Player-Watchdog) noch offen. [Bug-Log](v4/docs/project_perlin_bugs.md)
+- **Firmware:** **v4.3.5** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 abgeschlossen (6/6)**. v4.3.5: Player-Watchdog (Bug 41) — Synthesis::tickWatchdog vergleicht reale vs. erwartete Tacho-Rate, stoppt bei Drift > 50 %. Smoke-Test ohne false-positive, echter Stall-Test offen für User. [Bug-Log](v4/docs/project_perlin_bugs.md)
 
 ### Lessons aus Phase 8+ (v4.1.4 → v4.3.2-prep)
 
