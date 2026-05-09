@@ -3,7 +3,21 @@
 ## 🕒 Aktueller Status (LIVE)
 - **Stand:** 2026-05-06
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.3.1** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — Phase 9 läuft. v4.3.0 = `intpol(true)` 256-µStep-Glätte. v4.3.1 = TPWMTHRS-Hybrid pro Mode (StealthChop ↔ SpreadCycle, Schwelle 500 RPM für Saw/Step). [Bug-Log](v4/docs/project_perlin_bugs.md)
+- **Firmware:** **v4.3.1** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — Phase 9 läuft. v4.3.0: 256-µStep Interpolation, v4.3.1: Hybrid-Chopper Mode. FreqSweep v3 spezifiziert. [Bug-Log](v4/docs/project_perlin_bugs.md)
+
+### Lessons aus Phase 8+ (v4.1.4 → v4.3.1)
+
+- **Calib-Skip Self-Consistency (v4.1.4):** Die mechanische Hysterese (Scan-Richtung) verhinderte den Skip gegen Präzisions-Werte. Lösung: Speichern der *schnell gemessenen* Breite (`fastWidthSteps`) als Skip-Referenz.
+- **Hardware-Aktivierung (v4.1.6):** Lüfter (PWM GPIO 13) und Lampe (binär GPIO 2) in HAL integriert und in Synthesis-Tick reaktiv geschaltet.
+- **Synthesis-Performance (v4.1.7):** `edgeC` (Edge Contrast) auf Motoren aktiviert. Wellenformen (Square/Saw) nutzen nun die im Test ermittelte `maxAccel` (capped 500k) für rasanten Look.
+- **Persistence (v4.1.9+):** Slider-Werte, Presets und WiFi-Credentials in NVS migriert. Wear-Out-Schutz durch 5s-Throttling beim Speichern der Slider.
+- **Reaktive Hardware-Caps (v4.2.1):** Mismatch zwischen Modus-Wechsel und Beschleunigung gefixt. `tick()` erkennt Modus-Wechsel und aktualisiert Motor-Parameter live.
+- **Reversal-Cap (v4.2.3):** Physikalische Amplituden-Limitierung für Wellenformen basierend auf FreqSweep-Daten. Verhindert "Eiern" bei zu hoher Frequenz/Amplitude.
+- **High-Res Movement (v4.3.0):** `intpol(true)` aktiviert. TMC2209 interpoliert FAS-Steps auf 256 µSteps intern → ultra-glatt bei niedrigen RPM.
+- **Hybrid-Chopper (v4.3.1):** Square-Mode läuft in SpreadCycle (Power), Sinus/Noise in StealthChop (Silent). Automatisches Umschalten bei 500 RPM für Saw/Step.
+
+### Nächste Schritte (v4.3.2+)
+- **FreqSweep v3:** Implementierung der Tacho-Cutoff-Diagnostik und StallGuard4-Fusion basierend auf [`v4/docs/spec_freqsweep_v3.md`](v4/docs/spec_freqsweep_v3.md).
 - **Phase:** v4 Phase 1–7 abgeschlossen ✅ — GUI vollständig reaktiviert (Bounds, /set-Echo, /preview, Canvas auf 10 Hz Polling). NVS-Schema 4001 → **4002** (FreqSweep-Lernfelder ergänzt, alte Cal-Daten invalidiert → Re-Calib beim ersten Boot nach Update).
 - **Vorgänger v4_iteration1/** liegt zur Seite (3 Commits, baubar via env `fysetc_e4_v4_iter1`)
 - **v3 wurde überschrieben** durch v4 (gleiches Board). v3-Quellcode + 35 v3-Bin-Snapshots in Git gesichert. Re-Flash auf v3.7.32 jederzeit möglich via `v3/firmware_v3_3.7.32_20260328_1230.bin`.
