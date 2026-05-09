@@ -784,6 +784,14 @@ void begin() {
             Op::pending.test = m;
             r->send(200, "text/plain", "OK"); return;
         }
+        // FreqSweep v3 Phase A — Tacho-Cutoff Diagnostik (testProg=6).
+        // Spec: v4/docs/spec_freqsweep_v3.md.
+        if (a == "tachoCutoff") {
+            if (!HalPins::hasSensor(m)) { r->send(400, "text/plain", "no sensor"); return; }
+            Op::pending.testProg = 6;
+            Op::pending.test = m;
+            r->send(200, "text/plain", "OK"); return;
+        }
         if (a == "show") { Op::pending.show = m; r->send(200, "text/plain", "OK"); return; }
         if (a == "resetTele") { Telemetry::resetBuffer(); r->send(200, "text/plain", "OK"); return; }
         if (a == "synth") { Synthesis::start(); r->send(200, "text/plain", "OK"); return; }

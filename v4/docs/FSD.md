@@ -449,6 +449,28 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 - **Latenz-Optimierung (ID 30):** Um 100 Hz NVS-Zugriffe zu vermeiden, werden die Kalibrierungsdaten nun in `calCache[4]` gehalten.
 - **Noise-Speed Logic:** Der Noise-Modus wird nun korrekt auf `DEFAULT_SPS_NOISE` (8000) begrenzt, auch wenn der Motor 80000 sps könnte. Die Hardware-Grenze dient nur als Deckel nach unten (Schutz), nicht als Ziel-Geschwindigkeit.
 
+### Phase 4.3.2 Lessons Learned (2026-05-09)
+
+- **Phase-A-Hardware-Test Z-Motor (fcutoff=11 Hz):** Tacho-Pulses pro f bei amp=ampPhysMax(f) — 5..8 Hz: 4/4 sauber, 9 Hz: 2/4, 10 Hz: 3/5, **11 Hz: 2/5 (last alive, 40%)**, 12+ Hz: 0. Korreliert exakt mit FS2-v2-Daten (v4.2.2): Hysterese-Schwelle des LJ12A3-Tachos in Steps ist zwischen 220 und 310 Steps. Frequenz-Grenze ergibt sich daraus über das physikalische amp-Modell ($\text{amp}\propto 1/f^2$).
+- **Konstantes 45°-amp ist physikalisch unmöglich** für $f > 14$ Hz auf Z-Motor (4·1037·14 = 58k sps + Beschleunigung übersteigt cal.maxRpm). Spec wurde während C.1 angepasst: $\text{amp}(f) = \min(45°, \text{ampPhysMax}(f))$ mit $\text{ampPhysMax} = \text{FREQ\_ACCEL\_MAX}/(16 f^2)$, identisches Modell zu FS2.
+- **SG_RESULT bei Oszillation = 0 (final bestätigt):** TCO-Lauf 2026-05-09 mit feinstem 1-Hz-Raster zeigte sg=0 in jeder einzelnen Zeile — auf v4.3.1-Stand mit `TCOOLTHRS=0`. Bug 33 wird damit zu Hardware-Befund: SG4 auf TMC2209 ist für Reversal-Bewegungen prinzipiell ungeeignet, nicht parameter-tunbar. Konsequenz: Phase B (SG-Fusion) ist verworfen, Phase C wird vorgezogen.
+- **Drift-Indikator schwächer als gehofft:** drift = pos_end − edge_pos zeigte sich überall als ±amp (Motor blieb am letzten Halbschwingungs-Endpunkt stehen, Vorzeichen je nach swings-Parität). Echter Step-Loss würde |drift| > amp + sprQuarter zeigen — nirgends getriggert. Für künftige Iterationen: `effDrift = drift mod (2·amp)` wäre der ehrliche Step-Loss-Indikator. Für Phase A funktional ausreichend, weil pulses bereits die primäre Klassifizierung trägt.
+- **NVS-Schema 4003 → 4004** (`Types.h` + `Storage_Calib.cpp`): Feld `uint16_t tachoCutoffHz` ergänzt. Alte 4003-Daten beim Update verworfen (size+version mismatch) → automatischer Re-Calib beim ersten Boot. Hardware-bestätigt: nach Flash startete Calib im 3-Touch-Pfad (`no fastW`), `fastWidth=190 (initial)` gespeichert.
+- **Test-Trigger-Pattern:** TCO als `testProg=6` ans bestehende Op::pending.test-Dispatch gehängt + `/cmd?a=tachoCutoff&m=N`-Alias. Saubere Trennung von Action und Modul.
+
+### Phase 9 Plan (TMC-Tuning + High-Freq-Sweep) — laufend
+
+| Schritt | Inhalt | Status |
+|---|---|---|
+| **A** | `intpol(true)` in `Tmc::applyDefaults()` — TMC2209 interpoliert FAS-Steps intern auf 256 µSteps | ✅ v4.3.0 |
+| **B** | TPWMTHRS-Hybrid pro Wave-Mode (StealthChop ↔ SpreadCycle), L3-API `Tmc::setTPWMTHRS()` | ✅ v4.3.1 |
+| **C** | FreqSweep v3 — Spec in [`spec_freqsweep_v3.md`](spec_freqsweep_v3.md), Aufteilung wegen Bug 33 (SG_RESULT bei Oszillation = 0) und 10-Hz-Drift-Befund: | ⚪ |
+| **C.1** | Phase A: `runTachoCutoffDiagnostic()` — 5–50 Hz, 1-Hz-Step, amp=$\min(45°,\text{ampPhysMax}(f))$, log `f \| amp \| pulses \| swings \| drift \| sg`. Kein TMC-Eingriff. NVS-Bump 4003→4004 (`tachoCutoffHz`). | ✅ v4.3.2 — Z-Motor: $f_c=11$ Hz |
+| **C.2** | ~~Phase B: `Tmc::getSGResult()` + Fusion-Decision-Tree~~ **VERWORFEN nach C.1-Befund** — SG-Spalte in v4.3.2 durchgehend 0, bestätigt Bug 33 final. SG-Pfad ist auf TMC2209+oszillierender Bewegung tot. | ❌ verworfen |
+| **C.3** | Phase C (vorgezogen): $1/f^2$-Extrapolation aus C.1-Datenpunkten direkt in Synthesis-Wave-Cap einbauen. Synthesis-Player nutzt `cal.tachoCutoffHz` als physikalische Schwelle für Reversal-Caps. | ⚪ v4.3.3 |
+
+**Entscheidung nach C.1 (2026-05-09 Hardware-Test):** SG_RESULT-Spalte war durchgehend 0 — bestätigt Bug 33 final auf v4.3.2-Hardware. Drift-Indikator zeigt sich nur als Schwingungs-Endpunkt-Asymmetrie (drift = ±amp je nach swings-Parität), kein echter Step-Loss. Phase B (SG-Fusion) ist damit konzeptionell tot. Phase C wird als v4.3.3 vorgezogen.
+
 ---
 
 ## 10. Revisionshistorie
@@ -476,4 +498,5 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 | 4.2.4 | 2026-05-06 | Claude | Sinus silent (Bug-ID 34). `applyEngineCap` differenziert pro Wave-Mode: Sinus → DEFAULT_ACC_NOISE (4 k), Saw → 50 k, Square → cal.maxAccel (volle Härte). Vorher pauschal 475 k → Sinus klackerte. Hardware-bestätigt: Sinus jetzt deutlich leiser. |
 | 4.3.0 | 2026-05-06 | Claude | Phase 9 startet: `intpol(true)` in `Tmc::applyDefaults()`. Hardware-Interpolation auf intern 256 µSteps. Externe FAS-Steps (microsteps=64) werden vom TMC2209 intern auf 256 µSteps interpoliert. Glatte Bewegung bei langsamen Drehzahlen ohne CPU-Last. Hardware-Smoke-Test: Boot sauber, Calib-Skip funktioniert (Δ=43 ‰), Synth läuft. |
 | 4.3.1 | 2026-05-06 | Claude | TPWMTHRS-Hybrid pro Wave-Mode für Chopper-Selection. Neue L3-API `Tmc::setTPWMTHRS()`. Synthesis::applyChopperMode() wird in start() und Mode-Switch im tick() aufgerufen. Sinus/Noise/Linear/Circle/Figure8 → StealthChop immer (TPWMTHRS=0xFFFFF). Saw/Step → Übergang bei 500 RPM (`Units::rpmToTpwmthrs`). Square → SpreadCycle immer (TPWMTHRS=0). Akustische Verifikation steht beim User aus. |
-| 4.3.2 | 2026-05-06 | Gemini | FreqSweep v3 spezifiziert (Bug-ID 22/29). Integration von Tacho-Cutoff-Diagnostik und StallGuard4-Fusion für optische Vibrationen bis 500 Hz. |
+| 4.3.2-spec | 2026-05-06 | Gemini | FreqSweep v3 spezifiziert (Bug-ID 22/29). Integration von Tacho-Cutoff-Diagnostik und StallGuard4-Fusion für optische Vibrationen bis 500 Hz. |
+| 4.3.2 | 2026-05-09 | Claude | FreqSweep v3 Phase A umgesetzt — `runTachoCutoffDiagnostic()` mit $1/f^2$-amp-Cap (konstantes 45° war ab f≈14 Hz physikalisch unmöglich). Hardware-Test Z-Motor: $f_c = 11$ Hz, in NVS gespeichert. NVS-Schema 4003→4004 (neues Feld `tachoCutoffHz`). Bug 33 final bestätigt: SG_RESULT bei Oszillation = 0 in 100 % der Datenpunkte → Phase B (SG-Fusion) verworfen, Phase C wird als v4.3.3 vorgezogen. |

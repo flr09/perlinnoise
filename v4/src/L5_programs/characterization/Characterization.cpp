@@ -527,6 +527,122 @@ void runFreqSweep(uint8_t i) {
     resetMotorState(i, anyStall);
 }
 
+// --- 6b) Tacho-Cutoff Diagnostik (FreqSweep v3 Phase A) ---
+//
+// Mißt die mechanische Hysterese-Grenze des induktiven Tachos: bei welcher
+// Frequenz fallen die Pulse trotz physikalisch maximaler Amplitude auf 0.
+// Spezifikation: v4/docs/spec_freqsweep_v3.md.
+//
+// Vorgehen pro Frequenz f∈[5..50 Hz, 1 Hz Step]:
+//   1. amp = min(45° in Steps, ampPhysMax(f)) mit ampPhysMax = FREQ_ACCEL_MAX/(16·f²)
+//      — das ist die größte Schwingweite, die der Motor bei f noch sauber
+//      schafft (1/f²-Cap, identisch zum FS2-Modell). Konstantes 45° ist ab
+//      f≈14 Hz physikalisch unmöglich (4·1037·14 = 58k sps + Beschleunigung).
+//   2. posStart = getCurrentPosition()
+//   3. fs2TestPoint schwingt um edgePos
+//   4. posEnd = getCurrentPosition()
+//   5. drift = posEnd - edgePos
+//   6. log: f | amp | pulses | swings | drift | sg
+//
+// fc = höchste Frequenz mit pulses >= swings/2 (Tacho liefert noch).
+// Drift wird mitgeschrieben, um „Hysterese-blind aber lebendig" (kleiner Drift)
+// von „echter Total-Aussteiger" (großer Drift) zu unterscheiden — siehe
+// AGENT_COORDINATION.md „Drift-Observation 10 Hz" und Bug 32.
+//
+// KEIN TMC-Eingriff: TCOOLTHRS bleibt 0, SG_RESULT-Spalte ist nur Mitschnitt
+// (Bug 33 dokumentiert SG=0 bei Oszillation, nicht aussagekräftig in Phase A).
+//
+// Erwarteter Z-Motor-Befund (extrapoliert aus FS2-Hardware-Test 2026-05-09):
+// fc≈10 Hz (bei f=10 noch p=3/5, bei f=12 schon p=0/6 in FS2). Phase A liefert
+// dasselbe Ergebnis aber als eigenständiger Test mit feinem 1-Hz-Raster.
+constexpr float    TCO_AMP_DEG_MAX = 45.0f;
+constexpr uint8_t  TCO_F_START_HZ  = 5;
+constexpr uint8_t  TCO_F_END_HZ    = 50;
+constexpr uint8_t  TCO_NO_PULSE_RUNS = 3;  // 3× pulses==0 in Folge → Sweep stop
+
+void runTachoCutoffDiagnostic(uint8_t i) {
+    if (i >= 4) return;
+    v4::CalibrationData cal; StorageCalib::load(i, cal);
+    if (!cal.valid) { Logger::addLog("TCO: nicht kalibriert"); return; }
+    if (!HalPins::hasSensor(i)) { Logger::addLog("TCO: kein Sensor"); return; }
+    Tmc::setPower(i, true);
+    Stepper::setMicrosteps(i, 64);
+    auto* s = Stepper::get(i);
+    if (!s) { resetMotorState(i, false); return; }
+    Logger::addLog(String("TCO Start: ampMax=") + (int)TCO_AMP_DEG_MAX
+        + " deg (1/f²-cap), " + TCO_F_START_HZ + ".." + TCO_F_END_HZ + " Hz");
+
+    float edgeDeg = cal.triggerStartDeg;
+    s->setSpeedInHz(8000); s->setAcceleration(20000);
+    Motion::moveToDeg(i, edgeDeg);
+    if (!waitOrStop(i, 5000)) { resetMotorState(i, false); return; }
+    long edgePos = s->getCurrentPosition();
+    int dir = 1;
+
+    long ampDeg45Steps = Units::degToSteps(i, TCO_AMP_DEG_MAX);
+    long sprQuarter = (long)Stepper::stepsPerRev(i) / 4;
+
+    uint16_t fcutoff = 0;            // höchste f mit pulses >= swings/2
+    uint8_t  noPulseStreak = 0;      // Anzahl aufeinanderfolgender pulses==0
+    bool stalled = false;
+
+    for (uint8_t f = TCO_F_START_HZ; f <= TCO_F_END_HZ && !Op::pendingStop; f++) {
+        // Physikalisches amp-Maximum bei dieser Frequenz (1/f²-Modell aus FS2).
+        long ampPhysMax = (long)((float)FREQ_ACCEL_MAX / (16.0f * (float)f * (float)f));
+        long amp = min(ampDeg45Steps, min(sprQuarter, max((long)1, ampPhysMax)));
+
+        long posStart = s->getCurrentPosition();
+        int  swings = 0, pulses = 0; uint16_t sgMax = 0;
+        fs2TestPoint(i, (float)f, amp, edgePos, dir,
+                     swings, pulses, sgMax);
+        long posEnd = s->getCurrentPosition();
+        long drift  = posEnd - edgePos;
+
+        Logger::addLog(String("[TCO] f=") + f
+            + " amp=" + amp
+            + " p=" + pulses + "/" + swings
+            + " drift=" + drift
+            + " sg=" + sgMax);
+        Telemetry::recordDataPoint(i, "TCO", (float)f);
+
+        if (pulses >= swings / 2 && swings > 0) {
+            fcutoff = f;            // letzte „lebende" Frequenz
+            noPulseStreak = 0;
+        } else if (pulses == 0) {
+            noPulseStreak++;
+            if (noPulseStreak >= TCO_NO_PULSE_RUNS) {
+                Logger::addLog(String("TCO: ") + TCO_NO_PULSE_RUNS
+                    + "x p=0 in Folge → Sweep-Ende bei f=" + f);
+                break;
+            }
+        }
+
+        // Großer Drift = Motor läuft mechanisch weg (Step-Verlust oder
+        // physischer Stall). Test sicherheitshalber abbrechen, Re-Homing.
+        if (labs(drift) > sprQuarter) {
+            Logger::addLog(String("TCO: Drift zu groß (")
+                + drift + " > " + sprQuarter + ") → Stall, Abbruch");
+            stalled = true;
+            break;
+        }
+
+        // Zwischen Frequenzen kurz an die Sensor-Kante zurück, falls der
+        // Motor durch Hysterese-Drift driftete. Kein Re-Home — nur Position
+        // korrigieren, damit nächste Frequenz wieder um edgePos schwingt.
+        if (labs(posEnd - edgePos) > 4) {
+            Motion::moveToDeg(i, edgeDeg);
+            if (!waitOrStop(i, 3000)) break;
+        }
+        (void)posStart;
+    }
+
+    cal.tachoCutoffHz = fcutoff;
+    StorageCalib::save(i, cal);
+    Logger::addLog(String("TCO fertig: fcutoff=") + fcutoff + " Hz "
+        + "(in NVS gespeichert)");
+    resetMotorState(i, stalled);
+}
+
 // --- 7) CurrentSweepHiRPM: B-EMF Sweet-Spot bei hoher RPM ---
 // Strom-Sweep mit Tacho-Stall-Detection. Strom-Limit harter Cap (Datasheet).
 void runCurrentSweepHiRPM(uint8_t i) {

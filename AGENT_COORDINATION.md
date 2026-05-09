@@ -1,11 +1,11 @@
 # 📌 AGENT COORDINATION HUB
 
 ## 🕒 Aktueller Status (LIVE)
-- **Stand:** 2026-05-06
+- **Stand:** 2026-05-09
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.3.1** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — Phase 9 läuft. v4.3.0: 256-µStep Interpolation, v4.3.1: Hybrid-Chopper Mode. FreqSweep v3 spezifiziert. [Bug-Log](v4/docs/project_perlin_bugs.md)
+- **Firmware:** **v4.3.2** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — Phase 9 läuft. v4.3.2: FreqSweep v3 Phase A (Tacho-Cutoff Diagnostik), Z-Motor $f_c=11$ Hz in NVS. SG-Fusion verworfen (Bug 33 final), Phase C wird vorgezogen. [Bug-Log](v4/docs/project_perlin_bugs.md)
 
-### Lessons aus Phase 8+ (v4.1.4 → v4.3.1)
+### Lessons aus Phase 8+ (v4.1.4 → v4.3.2-prep)
 
 - **Calib-Skip Self-Consistency (v4.1.4):** Die mechanische Hysterese (Scan-Richtung) verhinderte den Skip gegen Präzisions-Werte. Lösung: Speichern der *schnell gemessenen* Breite (`fastWidthSteps`) als Skip-Referenz.
 - **Hardware-Aktivierung (v4.1.6):** Lüfter (PWM GPIO 13) und Lampe (binär GPIO 2) in HAL integriert und in Synthesis-Tick reaktiv geschaltet.
@@ -15,6 +15,12 @@
 - **Reversal-Cap (v4.2.3):** Physikalische Amplituden-Limitierung für Wellenformen basierend auf FreqSweep-Daten. Verhindert "Eiern" bei zu hoher Frequenz/Amplitude.
 - **High-Res Movement (v4.3.0):** `intpol(true)` aktiviert. TMC2209 interpoliert FAS-Steps auf 256 µSteps intern → ultra-glatt bei niedrigen RPM.
 - **Hybrid-Chopper (v4.3.1):** Square-Mode läuft in SpreadCycle (Power), Sinus/Noise in StealthChop (Silent). Automatisches Umschalten bei 500 RPM für Saw/Step.
+- **Tacho-StallGuard-Fusion (Strategie v4.3.2):** Tacho (Pin 15) und StallGuard (UART) dienen als gegenseitige Validatoren. 
+    1. Tacho liefert Pulse -> Motor lebt (ignoriere SG-Fehler durch Bug 33).
+    2. Tacho blind (f > fc) -> Nutze SG_RESULT via UART als Lebenszeichen.
+    3. Beide 0 -> Echter Stall.
+- **Drift-Observation (10 Hz):** Bei Schwingungen um 10 Hz wurde beobachtet, dass der Motor asymmetrisch driftet, bis er das Sensor-Sichtfeld verlässt. Drift wird als primärer Stall-Indikator gewertet.
+- **UART-Timing-Kritikalität:** SG_RESULT-Abfragen via UART brauchen ~1.5ms. Ab 100 Hz verschmiert das Sample über die Wellenform. Lösung: "Panik-Polling" nur wenn Tacho Pulse verliert.
 
 ### Nächste Schritte (v4.3.2+)
 - **FreqSweep v3:** Implementierung der Tacho-Cutoff-Diagnostik und StallGuard4-Fusion basierend auf [`v4/docs/spec_freqsweep_v3.md`](v4/docs/spec_freqsweep_v3.md).

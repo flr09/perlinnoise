@@ -90,6 +90,7 @@ static void MovementTask(void*) {
                     case 3: Characterization::runKatapult(m);    break;
                     case 4: Characterization::runFreqSweep(m);   break;
                     case 5: Characterization::runCurrentSweepHiRPM(m); break;
+                    case 6: Characterization::runTachoCutoffDiagnostic(m); break;
                     default: Characterization::runSpeedTest(m);  break;
                 }
                 Watchdog::enable(m, false);

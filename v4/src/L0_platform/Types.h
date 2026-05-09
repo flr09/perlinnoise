@@ -48,6 +48,12 @@ struct MotorState {
 // gegen diesen Wert verglichen — Apples-vs-Apples, daher self-consistent
 // trotz Sensor-Hysterese und Drehrichtungs-Bias der 3-Touch-Methode.
 // 0 = noch unbekannt → kein Skip möglich, fällt auf 3-Touch zurück.
+//
+// FreqSweep-v3-Felder (v4004): tachoCutoffHz speichert pro Motor die in
+// `runTachoCutoffDiagnostic()` ermittelte Frequenz, ab der der induktive
+// Tacho keine verlässlichen Pulse mehr liefert (Sensor-Hysterese-Limit).
+// 0 = noch nicht gemessen. Phase B (v4.3.3) nutzt diesen Wert als Schwelle,
+// ab der SG_RESULT als Fallback-Lebenszeichen herangezogen wird.
 struct CalibrationData {
     float    triggerStartDeg  = 0.0f;   // CW edge offset from center [deg]
     float    triggerEndDeg    = 0.0f;   // CCW edge offset [deg]
@@ -62,7 +68,9 @@ struct CalibrationData {
     uint8_t  freqRunCount     = 0;       // (Reserve)
     uint8_t  _pad[1]          = {0};     // explizites Padding für stable layout
     uint16_t fastWidthSteps   = 0;       // P1+P2-Zungenbreite (16 MS), 0=unbekannt
-    uint32_t nvsVersion       = 4003;    // v4003 Schema (Calib-Skip self-consistency)
+    uint16_t tachoCutoffHz    = 0;       // v4004: f_c [Hz], 0=noch nicht gemessen
+    uint16_t _pad2            = 0;       // Alignment für nvsVersion
+    uint32_t nvsVersion       = 4004;    // v4004 Schema (FreqSweep-v3 Phase A)
 };
 
 } // namespace v4

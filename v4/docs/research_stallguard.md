@@ -24,14 +24,19 @@ Die Trinamic-Dokumentation (AN-002) unterscheidet primär nach dem Modus:
 
 ---
 
-## 3. Integration in die Bewegungslogik (L5b)
+### 3. Integration in die Bewegungslogik (L5b)
 
 Unsere aktuelle Logik (`Synthesis.cpp`) berechnet Zielpositionen im 100Hz-Takt. StallGuard4 könnte dies zu einem **Closed-Loop-System ohne Encoder** erweitern:
 
-### A. Dynamische Last-Erkennung (Haptik)
-Der `SG_RESULT` Register liefert einen Wert von 0..510 (0 = Stall, 510 = Leerlauf).
-- **Anwendung:** Wenn der Perlin-Flug gegen ein physisches Hindernis stößt, sinkt `SG_RESULT`.
-- **Feedback:** Die Synthese könnte den `contrast` oder `speed` verringern, wenn mechanischer Widerstand erkannt wird ("Haptischer Player").
+#### A. Die StealthChop-Exklusivität (KRITISCH)
+- **Befund:** StallGuard4 funktioniert **nur** im StealthChop-Modus. Sobald die Geschwindigkeit `TPWMTHRS` überschreitet und der Treiber auf SpreadCycle umschaltet, wird SG4 deaktiviert.
+- **Problem:** In v4.3.1 läuft der Square-Mode fest in SpreadCycle — wir haben dort also **kein Stall-Feedback**.
+- **Lösung für v4.3.2:** Um SG4 zu nutzen, müssen wir in StealthChop bleiben. Wir sollten `TPWMTHRS` so hoch wie möglich setzen oder ganz auf 0xFFFFF (immer StealthChop), solange das Drehmoment reicht.
+
+#### B. Das "Jerk"-Phänomen (Umschalt-Ruck)
+- **Befund:** Das Umschalten zwischen StealthChop und SpreadCycle bei hoher Geschwindigkeit verursacht einen mechanischen Ruck (Jerk), da sich die Regelung von Spannung auf Strom ändert.
+- **Empfehlung:** Umschaltpunkte (`TPWMTHRS`) sollten idealerweise unter **30-50 RPM** liegen, um die Mechanik zu schonen. Für Perlin-Installationen ist es oft besser, dauerhaft in einem Modus zu bleiben.
+
 
 ### B. Die "Tacho-Fusion" (Evidenzbasiert)
 Einzigartig an unserem Setup ist der induktive Tacho.

@@ -11,6 +11,7 @@ void runInertiaTest(uint8_t motorIdx);
 void runCoastTest(uint8_t motorIdx);
 void runKatapult(uint8_t motorIdx);
 void runFreqSweep(uint8_t motorIdx);
+void runTachoCutoffDiagnostic(uint8_t motorIdx);
 void runPerformanceShow(uint8_t motorIdx);
 void runCurrentSweepHiRPM(uint8_t motorIdx);
 
