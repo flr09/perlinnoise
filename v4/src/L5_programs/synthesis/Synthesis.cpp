@@ -82,6 +82,12 @@ static long maxAmpAtFreq(const v4::CalibrationData& cal, float f) {
 // f_capped = f * sqrt(maxAtFreq(f) / demanded). Pro Motor das
 // restriktivste Limit gewinnt.
 static unsigned long lastCapLogMs = 0;
+// Sicherheitsfaktor für tachoCutoffHz-basierten Hard-Cap. Phase-A-Lauf 2026-05-09
+// zeigte: bei f=fc noch 40 % Pulse, bei f=fc+1 schon 0 % — die Schwelle ist
+// scharf. 0.9 lässt den Player knapp unter fc operieren, im verifizierten
+// Tacho-Bereich.
+static constexpr float WAVE_CAP_TCO_SAFETY = 0.9f;
+
 static float capWaveSpeedFromFreqStallAmp(float effSpeed, float effRangeDeg) {
     float effSpeedCapped = effSpeed;
     int   restrictedMotor = -1;
@@ -92,6 +98,23 @@ static float capWaveSpeedFromFreqStallAmp(float effSpeed, float effRangeDeg) {
         const auto& cal = calCache[i];
         if (!cal.valid) continue;
         long demandedHalfAmp = (long)(effRangeDeg * (float)Stepper::stepsPerRev(i) / 360.0f);
+
+        // v4.3.3: Hard-Cap auf tachoCutoffHz aus FreqSweep v3 Phase A.
+        // Oberhalb der Hysterese-Schwelle ist der Sensor blind und der
+        // Player kann sich nicht mehr per Tacho selbst-validieren.
+        // Phase A (linearer 1-Hz-Sweep) ist präziser als FS2-Bisektion (10
+        // log-spaced Bänder), daher als zusätzlicher konservativer Cap.
+        if (cal.tachoCutoffHz > 0) {
+            float fTcoMax = (float)cal.tachoCutoffHz * WAVE_CAP_TCO_SAFETY;
+            if (f > fTcoMax) {
+                float effSpeedTco = fTcoMax * 2.0f * (float)M_PI;
+                if (effSpeedTco < effSpeedCapped) {
+                    effSpeedCapped = effSpeedTco;
+                    restrictedMotor = i;
+                }
+            }
+        }
+
         long ampMaxSafe      = maxAmpAtFreq(cal, f);
         if (ampMaxSafe <= 0) continue;
         if (demandedHalfAmp > ampMaxSafe) {

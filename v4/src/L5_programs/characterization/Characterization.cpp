@@ -9,6 +9,7 @@
 #include "../../L3_driver/Motion.h"
 #include "../../L3_driver/Units.h"
 #include "../../L4_mechanics/Calibration.h"
+#include "../../L4_mechanics/EdgeTouch.h"
 #include "../../L4_mechanics/Homing.h"
 #include "../../L6_telemetry_safety/OpState.h"
 #include "../../L6_telemetry_safety/Telemetry.h"
@@ -417,6 +418,50 @@ static void fs2TestPoint(uint8_t i, float f, long amp, long edgePos, int& dir,
     outSgMax  = sgMax;
 }
 
+// Re-Sync zur physischen Sensor-Kante zwischen FS-Bändern.
+//
+// Hintergrund: Bei oszillierenden Tests mit Hysterese-Floor-Bändern (amp <
+// Sensor-Hysterese) verliert der Motor pro Schwingung kumulativ Steps in
+// eine Bevorzugungsrichtung (asymmetrische Beschleunigung + Stall-Verluste),
+// auch wenn der Step-Counter logisch korrekt zählt. Über mehrere Bänder läuft
+// der Motor mechanisch aus der Sensor-Zone raus (User-Befund 2026-05-09:
+// „läuft im sweep nach links raus"). Der Step-Counter glaubt edgePos, physisch
+// ist der Motor woanders → folgende Bänder schwingen um eine falsche Position.
+//
+// Lösung: Nach jedem Band Step-Counter physisch synchronisieren via Sensor.
+// EdgeTouch zuerst (leicht, ~1 s), Homing::run als Fallback bei Miss (robust
+// dank Bug-28-Fix, 3 rev Coverage). Setzt edgePos auf die physische Kante,
+// canonicalisiert dir=+1.
+//
+// Returnt false nur bei Stop-Anforderung oder Total-Fehler — Caller bricht ab.
+static bool fsResyncToEdge(uint8_t i, float edgeDeg, long& edgePos, int& dir) {
+    // EdgeTouch: anfahren in CW-Richtung an die Sensor-EINTRITTSKANTE (LOW
+    // = HIGH→LOW-Übergang, entspricht cal.triggerStartDeg). FS2/TCO schwingen
+    // genau um diese Kante. backOff (0.15 rev = 54°) zuerst CCW raus aus
+    // Sensor (falls drin), dann CW rein → erstes LOW = edgePos. 1 Sample,
+    // weil mehr Samples den Drift erneut akkumulieren würden.
+    long e = EdgeTouch::touch(i, LOW, +1, 3000, 1);
+    if (e != LONG_MIN) {
+        edgePos = e;
+        dir = +1;
+        return true;
+    }
+    // EdgeTouch miss → Motor weit gedriftet. Fallback auf Homing (CW+CCW
+    // je 1.5 rev seit v4.1.8, deckt 3 rev ab).
+    Logger::addLog("FS reSync: EdgeTouch miss → Homing fallback");
+    if (Op::pendingStop) return false;
+    Homing::run(i);
+    auto* s = Stepper::get(i);
+    if (!s) return false;
+    Stepper::setMicrosteps(i, 64);
+    s->setSpeedInHz(8000); s->setAcceleration(20000);
+    Motion::moveToDeg(i, edgeDeg);
+    if (!Motion::waitWhileRunning(i, &Op::pendingStop, 5000)) return false;
+    edgePos = s->getCurrentPosition();
+    dir = +1;
+    return true;
+}
+
 // Tacho-Bisektion: sucht die größte amp im Bereich [FS2_AMP_MIN, ampMax]
 // bei der `pulses >= swings/2` bleibt (= Sensor crossed regelmäßig). Wenn
 // das oberste amp keine Pulse erzeugt → Hysterese hat zugeschlagen (= Sensor
@@ -515,6 +560,13 @@ void runFreqSweep(uint8_t i) {
             + " (ampMax=" + ampMax + ")");
         anyStall = true;
         Telemetry::recordDataPoint(i, "FS_BAND", f);
+
+        // v4.3.3: Re-Sync zur physischen Sensor-Kante zwischen Bändern.
+        // Step-Counter desynchronisiert sich pro Band durch Hysterese-Drift,
+        // ohne Re-Sync läuft der Motor kumulativ aus der Sensor-Zone raus.
+        if (b + 1 < FREQ_BANDS_V2 && !Op::pendingStop) {
+            if (!fsResyncToEdge(i, edgeDeg, edgePos, dir)) break;
+        }
     }
     if (firstHysteresisBand >= 0) {
         Logger::addLog(String("FS2 Sensor-Limit: erstmal Hysterese ab Band ")
@@ -626,12 +678,12 @@ void runTachoCutoffDiagnostic(uint8_t i) {
             break;
         }
 
-        // Zwischen Frequenzen kurz an die Sensor-Kante zurück, falls der
-        // Motor durch Hysterese-Drift driftete. Kein Re-Home — nur Position
-        // korrigieren, damit nächste Frequenz wieder um edgePos schwingt.
-        if (labs(posEnd - edgePos) > 4) {
-            Motion::moveToDeg(i, edgeDeg);
-            if (!waitOrStop(i, 3000)) break;
+        // v4.3.3: Re-Sync zur physischen Sensor-Kante zwischen Frequenzen
+        // (analog FS2). Step-Counter-basierter Vergleich (alter Code) reicht
+        // nicht gegen kumulative Hysterese-Drift, weil der Counter den Drift
+        // nicht sieht. Re-Sync nur wenn nicht letzte Frequenz.
+        if (f < TCO_F_END_HZ && !Op::pendingStop) {
+            if (!fsResyncToEdge(i, edgeDeg, edgePos, dir)) break;
         }
         (void)posStart;
     }

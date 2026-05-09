@@ -1,6 +1,6 @@
 # PerlinNoise v4 — Modulare Motorsteuerung
 
-**Stand:** 2026-05-09 — Firmware **v4.3.2** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22). Phasen 1–8 abgeschlossen. **Phase 9** (Dynamics under the hood) läuft, 3 von 5 Schritten fertig (v4.3.0 + v4.3.1 + v4.3.2).
+**Stand:** 2026-05-09 — Firmware **v4.3.3** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22). Phasen 1–8 abgeschlossen. **Phase 9** (Dynamics under the hood) läuft, 4 von 5 Schritten fertig (v4.3.0–v4.3.3).
 **Branch:** `v4-modular`
 
 ## Was ist v4?
@@ -50,8 +50,8 @@ Vollständige Spezifikation: [`docs/FSD.md`](docs/FSD.md).
 - **Phase 9** Dynamics under the hood — TMC-Tuning, 256 µSteps, SG4 (5-Tag-Plan, läuft):
   - **v4.3.0** ✅ `intpol(true)` für 256 µStep-Hardware-Interpolation (Lichtinstallation, glattere Sinus). Eine Zeile in `Tmc::applyDefaults()` — externe FAS-Steps werden vom TMC2209 intern auf 256 µSteps interpoliert.
   - **v4.3.1** ✅ TPWMTHRS-Hybrid pro Mode (`Synthesis::applyChopperMode()`): Sinus/Noise/Linear/Circle/Figure8 → StealthChop immer (silent). Saw/Step → Schwelle bei **500 RPM** (`Units::rpmToTpwmthrs`). Square → SpreadCycle immer (Power für harte Sprünge). Aufruf in `start()` und beim Mode-Switch im `tick()`.
-  - **v4.3.2** ✅ FreqSweep v3 Phase A — `runTachoCutoffDiagnostic()` mit 1/f²-amp-Cap. Z-Motor: $f_c = 11$ Hz (in NVS, `tachoCutoffHz`). NVS-Schema 4003→4004. Befund: SG-Spalte durchgehend 0 (bestätigt Bug 33 final — SG bei Oszillation tot). Drift-Indikator zeigt nur Schwingungs-Endpunkt-Asymmetrie, nicht echten Step-Loss. [Spezifikation](docs/spec_freqsweep_v3.md).
-  - **v4.3.3** ⚪ Phase B war als SG-Fusion geplant, ist nach Phase-A-Befund verworfen (SG-Pfad tot). Stattdessen: $1/f^2$-Extrapolation aus Phase-A-Datenpunkten direkt in Synthesis-Wave-Cap einbauen (Phase C der Spec, vorgezogen).
+  - **v4.3.2** ✅ FreqSweep v3 Phase A — `runTachoCutoffDiagnostic()` mit 1/f²-amp-Cap. NVS-Schema 4003→4004 (`tachoCutoffHz`). Befund: SG-Spalte durchgehend 0 → Phase B (SG-Fusion) verworfen. [Spezifikation](docs/spec_freqsweep_v3.md).
+  - **v4.3.3** ✅ FS-Drift-Fix + Wave-Cap-Refactor (Bug 37, 38). Re-Sync zur Sensor-Kante zwischen jedem Sweep-Band — Hardware-Verifikation: fcutoff Z-Motor **11→31 Hz**, kumulative Drift hatte fcutoff ~3× nach unten verzerrt. `Synthesis::capWaveSpeedFromFreqStallAmp` nutzt jetzt zusätzlich `cal.tachoCutoffHz × 0.9` als Hard-Cap.
   - **v4.3.4** ⚪ Player-Watchdog: Synthesis-Selbstheilung. Berechne pro Mode erwartete Tacho-Pulse-Rate (Wave: 2·f wenn Schwingungs-Amplitude > Sensor-Distanz; Noise: speed·range/sensor_width; Step: 1 pro Sprung). Vergleich gegen tatsächliche Pulse über 3 s gemittelt. Bei Drift > 50 % → `Logger::addLog("PLAYER WD: …")` + neues Pause-State (5 s) + `Homing::run(motorIdx)` (robust dank ID 28) + `Synthesis::resume()` mit gleichen `v4::rt`-Werten. Nur für Player aktiv, nicht für Tests.
 
 Detailliert in [`../AGENT_COORDINATION.md`](../AGENT_COORDINATION.md).
