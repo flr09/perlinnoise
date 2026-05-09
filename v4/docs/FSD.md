@@ -466,6 +466,13 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 - **Bug 38 (Sensor-Kanten-Verwechslung):** rc1-Implementation nutzte fälschlich `EdgeTouch::touch(target=HIGH)` → CW-Austrittskante (`triggerEndDeg`) statt Eintrittskante. Folge: edgePos um Zungenbreite (~30°) versetzt, Hardware-Test zeigte fcutoff = 7 Hz statt 31 Hz. Fix: `target=LOW` für HIGH→LOW-Übergang.
 - **Wave-Cap-Refactor:** `Synthesis::capWaveSpeedFromFreqStallAmp` nutzt zusätzlich `cal.tachoCutoffHz × 0.9` als Hard-Frequenz-Cap. Ergänzt die per-Band-Extrapolation um den präziseren 1-Hz-Phase-A-Befund. Aktiv nur wenn `tachoCutoffHz > 0` (= Phase A schon gelaufen). FS2-Extrapolation bleibt erhalten als Fallback.
 
+### Phase 4.3.4 Lessons Learned (2026-05-09)
+
+- **Bisektion-internal Re-Home miss-fired bei kleinen Amplituden** (Bug 39). Im `else`-Branch von `fs2BisectStallTacho` (pulses < swings/2) wurde der alte `Homing::run() + EdgeTouch(150 sps, 1 Sample)` Pfad genutzt — bei f=26..50 nach mehreren Bisektions-Stufen (amp 23, 12, 6, 3) miss-fired das EdgeTouch und die Bisektion lief auf `stallAmp=1` (Floor=`FS2_AMP_MIN`). Folge: f=36, 50 wurden fälschlich als „Motor stallt bei amp=1" klassifiziert statt als Hysterese-Floor.
+- **Fix:** `fs2BisectStallTacho` nutzt jetzt `fsResyncToEdge` (3000 sps EdgeTouch + Homing-Fallback) statt der alten Sequenz. Identische API zwischen Band-zu-Band-Re-Sync und Bisektion-Re-Sync.
+- **Hardware-Befund:** Mit Bisektion-Re-Sync werden f=36 + f=50 jetzt korrekt als NO-PULSES/Hysterese-Floor erkannt (stallAmp=0). Vorher v4.3.3: stallAmp=1 in beiden Bändern (Bisektions-Schein-Stall). Wave-Cap-Daten dadurch ehrlicher.
+- **Verbleibender Edge-Case (Bug 40):** f=26 zeigt bei amp=46 noch 5/12, ab amp=23 nur 1/12, danach 0/12. Bisektion läuft auf stallAmp=1. Theorie: zwischen sehr engen Bisektions-Stufen kumuliert Drift schneller als der Re-Sync sie auflösen kann. Workaround-Idee: Bisektion mit Floor-Abbruch nach 2× pulses=0 in Folge. Backlog.
+
 ### Phase 9 Plan (TMC-Tuning + High-Freq-Sweep) — laufend
 
 | Schritt | Inhalt | Status |
@@ -509,3 +516,4 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 | 4.3.2-spec | 2026-05-06 | Gemini | FreqSweep v3 spezifiziert (Bug-ID 22/29). Integration von Tacho-Cutoff-Diagnostik und StallGuard4-Fusion für optische Vibrationen bis 500 Hz. |
 | 4.3.2 | 2026-05-09 | Claude | FreqSweep v3 Phase A umgesetzt — `runTachoCutoffDiagnostic()` mit $1/f^2$-amp-Cap (konstantes 45° war ab f≈14 Hz physikalisch unmöglich). Hardware-Test Z-Motor: $f_c = 11$ Hz, in NVS gespeichert. NVS-Schema 4003→4004 (neues Feld `tachoCutoffHz`). Bug 33 final bestätigt: SG_RESULT bei Oszillation = 0 in 100 % der Datenpunkte → Phase B (SG-Fusion) verworfen, Phase C wird als v4.3.3 vorgezogen. |
 | 4.3.3 | 2026-05-09 | Claude | FS-Drift-Fix + Wave-Cap-Refactor (Bug 37, 38). `fsResyncToEdge` Helper: zwischen jedem Sweep-Band EdgeTouch zur CW-Eintrittskante (target=LOW), Homing-Fallback bei Miss. Bisher fehlender Re-Sync verursachte kumulative Hysterese-Drift („Motor läuft nach links raus"). Hardware-Verifikation Z-Motor: $f_c$ 11 Hz → **31 Hz** mit Re-Sync — Drift hatte fcutoff ~3× nach unten verzerrt. Wave-Cap im Synthesis nutzt jetzt `cal.tachoCutoffHz × 0.9` als Hard-Cap zusätzlich zur FS2-Extrapolation. |
+| 4.3.4 | 2026-05-09 | Claude | FS2-Bisektion-internal Re-Sync (Bug 39). `fs2BisectStallTacho` else-Branch nutzt jetzt `fsResyncToEdge` statt `Homing::run + Motion::moveToDeg + 150-sps-EdgeTouch`. Hardware-Verifikation Z-Motor: f=36, 50 jetzt sauber als Hysterese-Floor (stallAmp=0) klassifiziert statt fälschlich als Stall=1 (Floor) — keine EdgeTouch-Misses mehr in der Bisektion. Bug 40 (f=26 Edge-Case Bisektion in Floor) als Backlog dokumentiert. |

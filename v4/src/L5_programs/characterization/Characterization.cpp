@@ -509,14 +509,12 @@ static long fs2BisectStallTacho(uint8_t i, float f, long ampMax,
             lo = mid;
         } else {
             hi = mid;
-            // Re-Home wegen möglichem Stall (Motor verlor Steps)
-            Homing::run(i);
-            auto* s = Stepper::get(i);
-            Stepper::setMicrosteps(i, 64);
-            s->setSpeedInHz(8000); s->setAcceleration(20000);
-            Motion::moveToDeg(i, edgeDeg);
-            Motion::waitWhileRunning(i, &Op::pendingStop, 5000);
-            edgePosOut = s->getCurrentPosition();
+            // v4.3.4: Re-Sync zur Sensor-Eintrittskante via fsResyncToEdge
+            // (EdgeTouch CW→LOW, 3000 sps, Homing-Fallback bei Miss). Ersetzt
+            // das alte Homing+moveToDeg-Pattern, das auf Hardware-Tests v4.3.3
+            // f=26..50 mit 150-sps-EdgeTouch in der Bisektion miss-fired und
+            // Bisektion in Floor=1 laufen ließ (Bug 22 reaktiviert).
+            if (!fsResyncToEdge(i, edgeDeg, edgePosOut, dir)) break;
         }
         iter++;
     }
