@@ -972,8 +972,13 @@ void begin() {
     Telemetry::registerHandlers(server);
 
     // /log — gibt den aktuellen Log-Puffer als Plain Text zurück.
+    // Bug-ID 36: Zwischenspeichern in lokaler String-Variable (analog zu /status, Z. 716–722),
+    // damit die Lifetime über den Async-Send hinaus garantiert ist. Vorher: Temporary aus
+    // Logger::getBuffer() direkt an beginResponse → sporadisch HTTP 500.
     server.on("/log", HTTP_GET, [](AsyncWebServerRequest* r) {
-        AsyncWebServerResponse* res = r->beginResponse(200, "text/plain", Logger::getBuffer());
+        String log = Logger::getBuffer();
+        if (log.length() == 0) log = "(empty)\n";
+        AsyncWebServerResponse* res = r->beginResponse(200, "text/plain", log);
         res->addHeader("Access-Control-Allow-Origin", "*");
         r->send(res);
     });

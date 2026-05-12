@@ -493,6 +493,41 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 
 **Entscheidung nach C.1 (2026-05-09 Hardware-Test):** SG_RESULT-Spalte war durchgehend 0 — bestätigt Bug 33 final auf v4.3.2-Hardware. Drift-Indikator zeigt sich nur als Schwingungs-Endpunkt-Asymmetrie (drift = ±amp je nach swings-Parität), kein echter Step-Loss. Phase B (SG-Fusion) ist damit konzeptionell tot. Phase C wird als v4.3.3 vorgezogen.
 
+### Phase 10 Plan — GUI v4.4.0 „Performance Instrument" (2026-05-12 spezifiziert)
+
+**Ziel:** Transformation der Web-UI vom Config-Editor zum intuitiven Instrument. Kontextsensitive Regler, räumliches Motor-Modell, Visualisierung + Recorder. Kein Sequencer (= Phase 11/v4.5.0).
+
+**Designentscheidungen (2026-05-12):**
+
+1. **`rt.speed`-Feld bleibt schlank (0–1 normiert).** Die UI rechnet pro `moveType` kontextsensitiv:
+   - Wave (3..5): Anzeige `speed × cal[m].tachoCutoffHz` in Hz.
+   - Noise (0..2): direkte Slider-Position als „Flug-Tempo".
+   Kein zweites Backend-Feld, keine doppelte State-Synchronisation.
+2. **`moveType 8` (Coordinate) = statisches Posing.** Jeder Motor hält seinen `posDeg`, +/- Buttons justieren in 0.5°-Schritten. Snapshot landet im **bestehenden** NVS-Preset-Slot-System (v4.1.10, 8 Slots). Interpolation zwischen Waypoints (Chase/Sequencer) = Phase 11.
+3. **Recorder = RAM-Ringbuffer.** 10 Hz × `posDeg[4]` + `flightX/Y` + Timestamp ≈ 32 Byte/Sample → 60 s ≈ 19 KB. Endpoints `/telemetry/start|stop|download` (CSV). LittleFS-Persistenz = Folgeprojekt.
+4. **Per-Motor `cal[m].tachoCutoffHz` mit Z-Fallback.** Wenn `cal[m].tachoCutoffHz == 0` (uncharakterisiert), erbt der Motor den Z-Wert (31 Hz). Architektur bleibt per-Motor sauber, UI zeigt für gleich behandelte Motoren gleiches Verhalten.
+5. **Kein LocalStorage-Layer.** Die 8 NVS-Slots (v4.1.10) bleiben die einzige Preset-Quelle — Reboot-fest, ein Lebenszyklus.
+
+**Aufteilung:**
+
+| Schritt | Inhalt | Ziel-Version | Status |
+|---|---|---|---|
+| **A** | NVS-Schema 4004→4005: `Point offsets[4] {float x, y}` in `CalibrationData`, Migration | v4.4.0-rc1 | ⚪ |
+| **B** | L7-API: `/bounds` liefert per-Motor `tachoCutoffHz` (mit Z-Fallback) + `offsets`. `/set` für `offsets[m].x/y` und `posDeg[m]` (Coordinate-Mode) | v4.4.1 | ⚪ |
+| **C** | L5b: `moveType 8` Coordinate (statisches Posing, `posDeg`-gehalten). Wave-Modi sampeln Noise an `(flightX+offsetX, flightY+offsetY)` | v4.4.2 | ⚪ |
+| **D** | L7 GUI-Split: `/player` + `/lab`. Lab erbt aktuelles Layout (Engineering, fc-Diagramme, NVS, Bug-Log). Player wird neu | v4.4.3 | ⚪ |
+| **E** | Player-UI Kern: kontextsensitive Slider-Labels (Hz/°/%/cm) pro `moveType`. Canvas-Dots M1–M4 an räumlichen (x,y)-Positionen mit posDeg-Helligkeit | v4.4.4 | ⚪ |
+| **F** | 2D-Kompass-SVG pro Motor für (x,y)-Offset-Edit + 0.5°-Feinjustage-Buttons (Coordinate-Mode) | v4.4.5 | ⚪ |
+| **G** | Recorder: Canvas-Pfad-History (grüne Spur Vergangenheit, rote Vorschau), REC-Button → `/telemetry/*` Endpoints | v4.4.6 | ⚪ |
+| **H** | NVS-Preset-System aus v4.1.10 in Player-UI verdrahten (Load/Save 8 Slots, Coordinate-Snapshots inklusive) | v4.4.7 | ⚪ |
+| **I** | Chart.js als lokale eingebettete Quelle (kein CDN, Offline-Betrieb) für Lab-Diagramme | v4.4.8 | ⚪ |
+| **J** | Integrationstest am Board, Bug-Sweep, Tag `v4.4.0` | v4.4.0 final | ⚪ |
+
+**Parallel als Voraussetzung (nicht Teil von Phase 10):**
+- Bug 36 `/log` HTTP 500 fixen — blockiert sonst Hardware-Debugging während 10.x.
+
+**Code-Basis für Player-UI:** `perlinnoise/webdesign/variant-a-strict.html` (Bauhaus-System), `perlin_visualizer.html` (Pfad-Logik + Motor-Offsets, Simplex-JS Z.150–180). Compass = Vanilla SVG.
+
 ---
 
 ## 10. Revisionshistorie
@@ -525,3 +560,5 @@ Diese FSD wird gepflegt während der Implementierung. Verworfene Ansätze werden
 | 4.3.3 | 2026-05-09 | Claude | FS-Drift-Fix + Wave-Cap-Refactor (Bug 37, 38). `fsResyncToEdge` Helper: zwischen jedem Sweep-Band EdgeTouch zur CW-Eintrittskante (target=LOW), Homing-Fallback bei Miss. Bisher fehlender Re-Sync verursachte kumulative Hysterese-Drift („Motor läuft nach links raus"). Hardware-Verifikation Z-Motor: $f_c$ 11 Hz → **31 Hz** mit Re-Sync — Drift hatte fcutoff ~3× nach unten verzerrt. Wave-Cap im Synthesis nutzt jetzt `cal.tachoCutoffHz × 0.9` als Hard-Cap zusätzlich zur FS2-Extrapolation. |
 | 4.3.4 | 2026-05-09 | Claude | FS2-Bisektion-internal Re-Sync (Bug 39). `fs2BisectStallTacho` else-Branch nutzt jetzt `fsResyncToEdge` statt `Homing::run + Motion::moveToDeg + 150-sps-EdgeTouch`. Hardware-Verifikation Z-Motor: f=36, 50 jetzt sauber als Hysterese-Floor (stallAmp=0) klassifiziert statt fälschlich als Stall=1 (Floor) — keine EdgeTouch-Misses mehr in der Bisektion. Bug 40 (f=26 Edge-Case Bisektion in Floor) als Backlog dokumentiert. |
 | 4.3.5 | 2026-05-09 | Claude | Player-Watchdog v1 (Bug 41) — `Synthesis::tickWatchdog`. 3-s-Fenster, vergleicht reale Tacho-Pulse-Rate gegen erwartete (2·f Hz) im Wave-Mode. Trigger-Threshold ratio < 0.5 → Synthesis::stop + Log. Aktiv nur wenn demanded Halb-Amp > 250 Steps (über Sensor-Hysterese) und 0.3 Hz < f < tachoCutoffHz (im verifizierten Tacho-Bereich). v1 ohne Auto-Recovery — User reagiert manuell auf Stop. Smoke-Test 15 s Sinus + 12 s Square rasant: kein false-positive. **Phase 9 abgeschlossen** (6/6). |
+| 4.4.0-spec | 2026-05-12 | Claude | Phase 10 spezifiziert: GUI v4.4.0 „Performance Instrument" — kontextsensitive Slider-Labels (Hz/°/%/cm pro `moveType`), 2D-Spatial-Modell mit `Point offsets[4]` (NVS 4004→4005), `moveType 8` Coordinate (statisches Posing, Snapshot in bestehende v4.1.10-Preset-Slots), RAM-Ringbuffer-Recorder (10 Hz, 60 s, CSV-Download), L7 Split in `/player` + `/lab`. Designentscheidungen: `rt.speed` bleibt 0–1 normiert (UI rechnet), per-Motor `tachoCutoffHz` mit Z-Fallback, kein LocalStorage-Layer, Sequencer/Chase → Phase 11. |
+| 4.3.6 | 2026-05-12 | Claude | Bug 36 (`/log` HTTP 500) gefixt — Vorbereitung für Phase 10. Ursache: Temporary aus `Logger::getBuffer()` direkt an `AsyncWebServerRequest::beginResponse` übergeben → Lifetime endet vor Async-Send, sporadisch HTTP 500. Fix: lokale `String log` in `WebServer.cpp:/log`-Handler analog zu `/status`-Pattern (Z. 716–722), Empty-Edge-Case mit `"(empty)\n"` abgefangen. Hardware-Verifikation auf perlin-v4: `curl /log` liefert HTTP 200, 434 B, 40 ms. Keine funktionale Änderung sonst. |

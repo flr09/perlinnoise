@@ -3,7 +3,7 @@
 ## 🕒 Aktueller Status (LIVE)
 - **Stand:** 2026-05-09
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.3.5** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 abgeschlossen ✅**.
+- **Firmware:** **v4.3.6** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 abgeschlossen ✅**, Bug 36 (`/log` HTTP 500) gefixt 2026-05-12 als Vorbereitung für Phase 10.
 - **NVS-Schema:** 4004 (cal.tachoCutoffHz=31, freqStallAmp[7] valid).
 - **Watchdog:** v1 aktiv (3s Fenster, ratio<0.5).
 
@@ -15,7 +15,7 @@
 - **Player-Watchdog v1 (v4.3.5):** Cross-Check zwischen Tacho-Pulsen und Bewegungserwartung (Synthesis-Rate). 27s Smoke-Test erfolgreich.
 
 ### Nächste Schritte (Post-Phase 9)
-- **Bug 36:** /log-Endpoint fixen (HTTP 500).
+- **Bug 36:** /log-Endpoint fixen (HTTP 500) — ✅ **v4.3.6** (2026-05-12, Hardware-verifiziert). Gemini-Commit `58b5463` (Tag `v4.4.0-rc1`) hatte den Endpoint zwar angelegt + `getBuffer()` eingeführt, aber das Lifetime-Problem (Temporary an `beginResponse`) blieb → Bug bestand weiter. v4.3.6 löst das mit lokaler String-Kopie analog `/status`-Pattern.
 - **Bug 40:** Bisektions-Edge-Case bei f=26 Hz untersuchen.
 - **Watchdog v2:** Auto-Recovery via `Op::pending.home` implementieren.
 - **Stall-Verifikation:** Manueller Last-Test am Motor zur Validierung der SG-Fusion.
@@ -57,9 +57,32 @@ L0 Plattform                  (Boot, Tasks, Sync, Log)
 
 ## 🎹 Phase 10 — GUI v4.4.0 "Performance Instrument"
 
-Ziel: Transformation vom reinen Config-Editor zum intuitiven Instrument. Weg vom "Einheits-Label", hin zu kontextsensitiven, physikalisch korrekten Einheiten.
+**Ziel:** Transformation vom reinen Config-Editor zum intuitiven Instrument. Kontextsensitive Regler, räumliches Motor-Modell, Visualisierung + Recorder.
+
+**Designentscheidungen (2026-05-12):**
+1. **`rt.speed` (0–1):** Die UI rechnet kontextsensitiv (Wave: speed × cutoff Hz, Noise: Direkt-Slider).
+2. **`moveType 8` (Coordinate):** Statisches Posing mit +/- Buttons (0.5°-Schritte). Snapshots in 8 NVS-Slots.
+3. **Recorder:** RAM-Ringbuffer (60s ≈ 19 KB). Endpoints `/telemetry/start|stop|download`.
+4. **Z-Fallback:** `tachoCutoffHz == 0` erbt Z-Wert (31 Hz).
+5. **NVS-Only:** 8 Slots (v4.1.10) als einzige Preset-Quelle.
+
+**Fahrplan (Implementierung durch Claude):**
+
+| Schritt | Inhalt | Ziel | Status |
+|---|---|---|---|
+| **A** | NVS-Schema 4004→4005: `Point offsets[4]` in `CalibrationData`, Migration | v4.4.0-rc1 | ⏳ laufend |
+| **B** | L7-API: `/bounds` liefert `tachoCutoffHz` (Z-Fallback) + `offsets`. `/set` für Offsets + posDeg | v4.4.1 | ⚪ |
+| **C** | L5b: `moveType 8` Coordinate. Wave sampelt Noise an `(flightX+offsetX, flightY+offsetY)` | v4.4.2 | ⚪ |
+| **D** | L7 GUI-Split: `/player` + `/lab`. Lab erbt Engineering-Layout. | v4.4.3 | ⚪ |
+| **E** | Player-UI Kern: kontextsensitive Slider. Canvas-Dots an (x,y) mit posDeg-Helligkeit | v4.4.4 | ⚪ |
+| **F** | 2D-Kompass-SVG für Offset-Edit + 0.5°-Buttons | v4.4.5 | ⚪ |
+| **G** | Recorder: Canvas-Pfad-History + REC-Button | v4.4.6 | ⚪ |
+| **H** | NVS-Preset-System in Player-UI verdrahten | v4.4.7 | ⚪ |
+| **I** | Chart.js lokal einbetten (Offline-Betrieb) für Lab-Diagramme | v4.4.8 | ⚪ |
+| **J** | Integrationstest, Bug-Sweep, Tag `v4.4.0` | v4.4.0 | ⚪ |
 
 ### 1. Kontextsensitive Regler (Labels & Units)
+... (Rest der Details bleibt erhalten, wird aber durch Claude umgesetzt)
 Basierend auf `moveType` müssen Fader ihre Beschriftung und Einheit ändern:
 - **Wellenform (Sine/Square/Saw):**
     - `speed` → **Frequenz [Hz]** (Slider-Max dynamisch aus `cal.tachoCutoffHz`).
