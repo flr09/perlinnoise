@@ -3,30 +3,22 @@
 ## 🕒 Aktueller Status (LIVE)
 - **Stand:** 2026-05-09
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.3.5** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 abgeschlossen (6/6)**. v4.3.5: Player-Watchdog (Bug 41) — Synthesis::tickWatchdog vergleicht reale vs. erwartete Tacho-Rate, stoppt bei Drift > 50 %. Smoke-Test ohne false-positive, echter Stall-Test offen für User. [Bug-Log](v4/docs/project_perlin_bugs.md)
+- **Firmware:** **v4.3.5** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 abgeschlossen ✅**.
+- **NVS-Schema:** 4004 (cal.tachoCutoffHz=31, freqStallAmp[7] valid).
+- **Watchdog:** v1 aktiv (3s Fenster, ratio<0.5).
 
-### Lessons aus Phase 8+ (v4.1.4 → v4.3.2-prep)
+### Lessons aus Phase 9 (v4.3.0 → v4.3.5)
 
-- **Calib-Skip Self-Consistency (v4.1.4):** Die mechanische Hysterese (Scan-Richtung) verhinderte den Skip gegen Präzisions-Werte. Lösung: Speichern der *schnell gemessenen* Breite (`fastWidthSteps`) als Skip-Referenz.
-- **Hardware-Aktivierung (v4.1.6):** Lüfter (PWM GPIO 13) und Lampe (binär GPIO 2) in HAL integriert und in Synthesis-Tick reaktiv geschaltet.
-- **Synthesis-Performance (v4.1.7):** `edgeC` (Edge Contrast) auf Motoren aktiviert. Wellenformen (Square/Saw) nutzen nun die im Test ermittelte `maxAccel` (capped 500k) für rasanten Look.
-- **Persistence (v4.1.9+):** Slider-Werte, Presets und WiFi-Credentials in NVS migriert. Wear-Out-Schutz durch 5s-Throttling beim Speichern der Slider.
-- **Reaktive Hardware-Caps (v4.2.1):** Mismatch zwischen Modus-Wechsel und Beschleunigung gefixt. `tick()` erkennt Modus-Wechsel und aktualisiert Motor-Parameter live.
-- **Reversal-Cap (v4.2.3):** Physikalische Amplituden-Limitierung für Wellenformen basierend auf FreqSweep-Daten. Verhindert "Eiern" bei zu hoher Frequenz/Amplitude.
-- **High-Res Movement (v4.3.0):** `intpol(true)` aktiviert. TMC2209 interpoliert FAS-Steps auf 256 µSteps intern → ultra-glatt bei niedrigen RPM.
-- **Hybrid-Chopper (v4.3.1):** Square-Mode läuft in SpreadCycle (Power), Sinus/Noise in StealthChop (Silent). Automatisches Umschalten bei 500 RPM für Saw/Step.
-- **Tacho-StallGuard-Fusion (Strategie v4.3.2):** Tacho (Pin 15) und StallGuard (UART) dienen als gegenseitige Validatoren. 
-    1. Tacho liefert Pulse -> Motor lebt (ignoriere SG-Fehler durch Bug 33).
-    2. Tacho blind (f > fc) -> Nutze SG_RESULT via UART als Lebenszeichen.
-    3. Beide 0 -> Echter Stall.
-- **Drift-Observation (10 Hz):** Bei Schwingungen um 10 Hz wurde beobachtet, dass der Motor asymmetrisch driftet, bis er das Sensor-Sichtfeld verlässt. Drift wird als primärer Stall-Indikator gewertet.
-- **UART-Timing-Kritikalität:** SG_RESULT-Abfragen via UART brauchen ~1.5ms. Ab 100 Hz verschmiert das Sample über die Wellenform. Lösung: "Panik-Polling" nur wenn Tacho Pulse verliert.
+- **Der 11-Hz-Drift-Trugschluss (v4.3.2):** Initial wurde ein Cutoff von fc=11 Hz gemessen. Die Analyse ergab, dass asymmetrischer Drift während des Sweeps den Motor aus dem Sensor-Sichtfeld schob.
+- **FS-Drift-Fix & 31 Hz Breakthrough (v4.3.3):** Einführung von `fsResyncToEdge` zwischen den Frequenzbändern. Ergebnis: Der Z-Tacho ist mechanisch bis **31 Hz** (Hysterese-Floor) verlässlich. Der Drift hatte das Ergebnis zuvor um Faktor 3 verzerrt.
+- **Bisektion-Resync (v4.3.4):** Frequenzen bis 50 Hz werden nun sauber als Hysterese-Floor (Blindflug) klassifiziert, ohne false-positive Stalls.
+- **Player-Watchdog v1 (v4.3.5):** Cross-Check zwischen Tacho-Pulsen und Bewegungserwartung (Synthesis-Rate). 27s Smoke-Test erfolgreich.
 
-### Nächste Schritte (v4.3.2+)
-- **FreqSweep v3:** Implementierung der Tacho-Cutoff-Diagnostik und StallGuard4-Fusion basierend auf [`v4/docs/spec_freqsweep_v3.md`](v4/docs/spec_freqsweep_v3.md).
-- **Phase:** v4 Phase 1–7 abgeschlossen ✅ — GUI vollständig reaktiviert (Bounds, /set-Echo, /preview, Canvas auf 10 Hz Polling). NVS-Schema 4001 → **4002** (FreqSweep-Lernfelder ergänzt, alte Cal-Daten invalidiert → Re-Calib beim ersten Boot nach Update).
-- **Vorgänger v4_iteration1/** liegt zur Seite (3 Commits, baubar via env `fysetc_e4_v4_iter1`)
-- **v3 wurde überschrieben** durch v4 (gleiches Board). v3-Quellcode + 35 v3-Bin-Snapshots in Git gesichert. Re-Flash auf v3.7.32 jederzeit möglich via `v3/firmware_v3_3.7.32_20260328_1230.bin`.
+### Nächste Schritte (Post-Phase 9)
+- **Bug 36:** /log-Endpoint fixen (HTTP 500).
+- **Bug 40:** Bisektions-Edge-Case bei f=26 Hz untersuchen.
+- **Watchdog v2:** Auto-Recovery via `Op::pending.home` implementieren.
+- **Stall-Verifikation:** Manueller Last-Test am Motor zur Validierung der SG-Fusion.
 
 ## 🎯 Auftrag v4
 
@@ -59,7 +51,54 @@ L0 Plattform                  (Boot, Tasks, Sync, Log)
 | 5 | L6 Watchdog + Profile (aus v4_iteration1 integrieren) | ✅ |
 | 6 | L7 Voll-UI (Lab + Performance + Telemetry-Viewer) | ✅ Layout, **GUI-Bindung kaputt** ⚠️ |
 | 7 | L7 GUI-Reaktivierung (Bounds, /set-Echo, /preview, Canvas) | ✅ v4.1.0–4.1.3 |
-| Backlog | Calib-Skip via Zungenbreite + FreqSweep v2 (10 Bänder, Bisektion, Learning) | ✅ in v4.1.3 mitgenommen |
+| 8 | Calib-Skip via Zungenbreite + FreqSweep v2 | ✅ |
+| 9 | TCO-Diagnostik + Watchdog v1 (31 Hz Breakthrough) | ✅ v4.3.0–v4.3.5 |
+| 10 | GUI v4.4.0 "Performance Instrument" (2D-Spatial) | ⏳ geplant |
+
+## 🎹 Phase 10 — GUI v4.4.0 "Performance Instrument"
+
+Ziel: Transformation vom reinen Config-Editor zum intuitiven Instrument. Weg vom "Einheits-Label", hin zu kontextsensitiven, physikalisch korrekten Einheiten.
+
+### 1. Kontextsensitive Regler (Labels & Units)
+Basierend auf `moveType` müssen Fader ihre Beschriftung und Einheit ändern:
+- **Wellenform (Sine/Square/Saw):**
+    - `speed` → **Frequenz [Hz]** (Slider-Max dynamisch aus `cal.tachoCutoffHz`).
+    - `contrast` → **Amplitude [°]** (0 bis `cal.rangeDeg`).
+    - `mspace` → **Phasenversatz [°/Motor]** (0–360°).
+    - `zShape` → **Duty Cycle [%]** (Square) oder **Steigung** (Saw).
+- **Noise (Linear/Figure8):**
+    - `speed` → **Flug-Tempo**.
+    - `contrast` → **Kontrast / Intensität**.
+    - `mspace` → **Motor-Abstand [cm]**.
+
+### 2. Räumliches Modell & Waypoints (2D-Kompass)
+Die Motoren sitzen nicht mehr auf einer Linie.
+- **Daten:** `RuntimeConfig` bekommt `Point offsets[4] {float x, y}` (NVS Schema 4005).
+- **Coordinate Mode (`moveType 8`):** 
+    - Ermöglicht das Anfahren starrer Winkel pro Motor ("Bild" oder "Waypoint").
+    - **Fine-Tuning:** Jedes der 4 Motor-Displays bekommt kleine **+/- Buttons**, um den Winkel (posDeg) präzise zu justieren (z.B. 0.5° Schritte).
+    - Diese "Skulptur-Haltung" kann als Step in einen Chase/Preset gespeichert werden.
+- **UI:** Ein kleiner **2D-Kompass/Grid** pro Motor für (x,y) Offsets.
+- **Logik:** `Synthesis.cpp` sampelt den Noise an diesen (x,y) Offsets relativ zum Kamerapfad (`flightX/Y`).
+
+### 3. Visualisierung & Recorder (Parity mit "Record"-Version)
+Wiederherstellung der visuellen Intelligenz aus `perlin_visualizer.html`:
+- **Dots (M1–M4):** Farbige Punkte auf dem Canvas, die an ihren räumlichen (x,y) Koordinaten tanzen.
+- **Hub-Feedback:** Helligkeit/Größe der Dots zeigt die aktuelle Auslenkung (`posDeg`) in Echtzeit.
+- **Path History (Recorder):** 
+    - Die "grüne Linie" (vergangener Flugpfad) und "rote Linie" (Vorschau) muss zurück.
+    - **Session-Recording:** Ein "REC"-Button, der die Telemetrie-Aufzeichnung auf dem ESP32 startet/stoppt (via `/telemetry`).
+    - **Local History:** Speichern von Slider-Snapshots in den 8 Slots (LocalStorage).
+
+### 4. Code-Reuse & Bibliotheken
+- **Basis:** `perlin_visualizer.html` (Pfad-Logik & Motor-Offsets).
+- **Chart.js (v4.x):** Für die Echtzeit-Graphen im "Lab"-Bereich (muss als lokale Datei/String eingebettet sein für Offline-Betrieb).
+- **Simplex JS:** Vorhanden in `perlin_visualizer.html` (Zeilen 150–180).
+- **Compass-UI:** Nutze **Vanilla SVG** für das 2D-Grid der Motor-Positionen (keine externen Libs nötig).
+
+### 5. Architektur-Split
+- **Player Page:** "Performance Instrument" (Fokus auf Flow, ästhetische Visualisierung, Recorder).
+- **Lab Page:** Engineering, fc-Diagnose-Diagramme, NVS-Details, Bug-Log.
 
 ## 🛠️ Wichtige Erkenntnisse (Shared Knowledge)
 
@@ -69,43 +108,3 @@ L0 Plattform                  (Boot, Tasks, Sync, Log)
 - **GPIO 15** möglicherweise vorbeschädigt durch PNP-Vorfall am 2026-03-24 — bei Sensor-Problemen im Hinterkopf behalten.
 - **Field Weakening** bei TMC2209 nicht direkt möglich (kein FOC). Drei verwandte Test-Programme in L5a geplant: `Prog_FullstepSwitch`, `Prog_PhaseLead`, `Prog_CurrentSweepHiRPM`.
 - **WiFi-PW** war in v3 als Klartext in `wifi_settings.h` — in v4 wird das in NVS via `Storage_Wifi` migriert.
-
-### Lessons aus Phase 6+ → v4.0.2 (April–Mai 2026)
-
-- **Tacho-Präzision µs statt ms** (`Hal_Tacho`, `MotorProfile`): bei hohen RPM (>1000) waren ms-Auflösung und ms-basierte Watchdog-Math zu grob → spurious Stall-Trigger. Migration auf `micros()` + `periodUs`/`lastLowUs`/`NOISE_FILTER_US=5000`. NVS-Profile-Schema von 4001 → **4002** (bricht alte Profile, automatischer Re-Calib beim ersten Boot).
-- **Decoupled SynthesisTask** (`L0/L7`): Synthesis und Movement teilten Core 1 — bei Multi-Motor kollidierte das. Synthesis hat jetzt eigenen Task auf Core 1, Movement bleibt davon getrennt.
-- **Automated Re-Homing nach Stall** (`L5a`): Speed-Test/CurrentSweep verlieren bei Stall die Home-Position → Test-Suite ruft jetzt nach jedem detektierten Stall automatisch `Homing::run()`, dann weiter. Im Log sichtbar als „Stall erkannt -> Re-Homing…".
-- **FreqSweep oszilliert über die Sensorkante** statt linear darüber hinweg: garantiert Tacho-Pulse, auch bei breiten Zungen. `EdgeTouch backOff` 0.05 → 0.15 rev.
-- **Cal-Bug 3-fach gefixt** (`L4_mechanics`): P1+P2 nahtlos (kein Reset zwischen den beiden CW-Phasen), EdgeTouch maxDelta-Guard, `LONG_MIN`-Sentinel statt 0 für „noch nicht gesetzt".
-- **ElegantOTA** als Web-Updater integriert (`/update`, Auth `admin/12345678`) — Flash via Browser, Flashbox bleibt Fallback.
-- **Bounds aus Charakterisierung sind in NVS** (`CalibrationData` in `Types.h:41`): `maxRpm`, `maxAccel`, `learnedCurrentMA`, `sgThrs` — Phase 7 macht diese Werte zu den Slider-Bounds in der GUI (statt hardcoded Maxima).
-- **Stand 2026-05-02 Z-Motor:** `maxRpm=1500`, `maxAccel=500000`, `Sweet-Spot Floor=1000mA`, `SG-Thrs=180`. X/Y/E noch ohne Sensor → keine Bounds.
-
-### Lessons aus Phase 7 + Backlog → v4.1.3 (2026-05-04)
-
-- **Calib-Skip via Step-Counting** (`L4_mechanics/Calibration.cpp`): Wenn NVS-Cal valid ist und die nach P1+P2 gemessene Zungenbreite ±5 % zur gespeicherten passt, entfallen P3+P4 (3-Touch ×2). Mitte = (P1+P2)/2. Erspart 6–10 s pro Calib bei unveränderter Mechanik. **Bugfix rc2:** p2Pos wird sofort in der Trigger-Schleife erfasst (nicht nach stopMove), sonst läge der ~133-Step-Bremsweg als Asymmetrie zu p1Pos in der Messung — SKIP_TOL=5% würde nie greifen. Logic-Check: beide Positionen durchlaufen denselben `checkStable(…, 5)`-Filter, Bias hebt sich bei der Differenz auf. Diagnose-Log `CAL: check d=… exp=… Δ=…` läuft immer.
-- **FreqSweep v2 ZURÜCKGEROLLT in 4.1.3-rc3** (Bug-IDs 21+22): Hardware-Test 2026-05-05 zeigte Re-Home-Race nach Stall + Hysterese-Floor-Detektor — Bisektion lief in Floor (`stallAmp=5` bei 5 von 10 Bändern), Folgetests an Müll-Position. Ersetzt durch den linearen Chirp aus 4.1.2. NVS-Felder `freqStallAmp[10]`/`freqRunCount` bleiben als Reserve in `CalibrationData` (NVS-Schema 4002 unverändert) für späteren v2 mit besserem Stall-Detektor (TMC StallGuard cross-checked + Hysterese-Floor-Erkennung vorab).
-- **NVS-Schema 4001 → 4002** (`Types.h` + `Storage_Calib.cpp`): Felder `freqStallAmp[10]` und `freqRunCount` ergänzt. Alte 4001-Daten werden in `load()` als invalid verworfen (size-mismatch + version-mismatch) → automatischer Re-Calib beim ersten Boot.
-- **ElegantOTA-Reboot-Fix** (`main_v4.cpp`): `ElegantOTA.loop()` fehlte im main-loop → nach Upload wurde `_reboot=true` gesetzt aber nie ausgewertet, Update lag in der Boot-Partition aber das Board startete nicht neu. Workaround damals: Power-Cycle. Ab 4.1.3 ist `ElegantOTA.loop()` in `loop()` neben `ArduinoOTA.handle()`, Browser-Updates rebooten automatisch nach 2 s.
-- **Canvas auf /preview-Polling** (`L7_web/WebServer.cpp`): Lokale Simplex-IIFE entfernt, stattdessen `setInterval(drawPreview, 100)`. Modi: 0–2 Noise-Pixmap (32×32 hochskaliert via temp-Canvas), 3–5 Wave-Plot mit Bit7-Phasen-Marker, sonst Idle-Screen. `visibilityState`-Guard wie beim Status-Polling.
-
-## 🚦 Build-Targets
-
-| Env | Zweck |
-|---|---|
-| `fysetc_e4_v3` | v3 USB-Build (Referenz) |
-| `fysetc_e4_v3_ota` | v3 OTA → `perlin-v3.local` |
-| `fysetc_e4_v4` | v4 USB-Build (aktuelle Entwicklung) |
-| `fysetc_e4_v4_ota` | v4 OTA → `perlin-v4.local` |
-| `fysetc_e4_v4_iter1` | v4_iteration1 — alter Stand vor Modular-Refaktorierung |
-| `fysetc_e4_v2` | v2 Bench |
-| `fysetc_e4_v2_ota` | v2 OTA → `perlin-bench.local` |
-
-## 📝 Nächste Übergabe
-
-**Phase 2 startet:** L4 Mechanik (Calibration, Homing, EdgeTouch, SetZero, CalibVerify) + Multi-Motor-Erweiterung in L1/L3 (X/Y/Z mit Sensorik, E open-loop).
-
-**Vor Phase-2-Tests am echten Board:** Y/Z/E STEP+DIR und Y-MIN/Z-MIN-Pins am FYSETC E4 verifizieren (FSD Q1+Q2). Aktuelle Annahme im Code (`v4/src/L1_hal/Hal_Pins.h`):
-- Y: STEP=33, DIR=32, TACHO=34
-- Z: STEP=14, DIR=12, TACHO=39
-- E: STEP=16, DIR=17, TACHO=0xFF (kein Endstop)
