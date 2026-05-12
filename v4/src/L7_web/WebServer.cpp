@@ -714,7 +714,9 @@ void begin() {
     });
 
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest* r) {
-        String log = Logger::drainBuffer();
+        // Bug-ID 36: Nutze getBuffer statt drainBuffer, damit parallele Zugriffe
+        // (UI + Monitoring) sich nicht gegenseitig die Logs wegnehmen.
+        String log = Logger::getBuffer();
         log.replace("\"", "'");
         log.replace("\n", "\\n");
         log.replace("\r", "");
@@ -968,6 +970,13 @@ void begin() {
     });
 
     Telemetry::registerHandlers(server);
+
+    // /log — gibt den aktuellen Log-Puffer als Plain Text zurück.
+    server.on("/log", HTTP_GET, [](AsyncWebServerRequest* r) {
+        AsyncWebServerResponse* res = r->beginResponse(200, "text/plain", Logger::getBuffer());
+        res->addHeader("Access-Control-Allow-Origin", "*");
+        r->send(res);
+    });
 
     // /sensor — Diagnose: liest alle Tacho-Pins direkt, optional Pull-Mode-Wechsel.
     // Aufruf: /sensor                  → reine Lesung

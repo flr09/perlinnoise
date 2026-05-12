@@ -18,6 +18,14 @@ void addLog(const String& msg) {
     Serial.println(msg);
 }
 
+String getBuffer() {
+    String out;
+    portENTER_CRITICAL(&Sync::motorMux);
+    out = buffer;
+    portEXIT_CRITICAL(&Sync::motorMux);
+    return out;
+}
+
 String drainBuffer() {
     String out;
     portENTER_CRITICAL(&Sync::motorMux);
