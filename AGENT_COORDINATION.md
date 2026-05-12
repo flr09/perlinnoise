@@ -3,7 +3,7 @@
 ## 🕒 Aktueller Status (LIVE)
 - **Stand:** 2026-05-09
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.4.0-rc1** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 ✅**, v4.3.6 (Bug 36 `/log`) gefixt, **Phase 10 Schritt A ✅ (2026-05-12)**: räumliches Modell `RuntimeConfig.offsets[4]`, NVS Schema 4200→4201.
+- **Firmware:** **v4.4.1** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 ✅**, v4.3.6 (Bug 36), **Phase 10 A+B ✅ (2026-05-12)**: räumliches Modell `RuntimeConfig.offsets[4]` (NVS 4200→4201) und L7-API (`/bounds` mit Z-Fallback, `/set?ofx<m>=…&ofy<m>=…`).
 - **NVS-Schemata:** calib 4004 (cal.tachoCutoffHz=31, freqStallAmp[7] valid), rtconf 4201 (Phase 10 A: `offsets[4]`).
 - **Watchdog:** v1 aktiv (3s Fenster, ratio<0.5).
 
@@ -71,7 +71,7 @@ L0 Plattform                  (Boot, Tasks, Sync, Log)
 | Schritt | Inhalt | Ziel | Status |
 |---|---|---|---|
 | **A** | NVS-Schema 4200→4201: `Point` in `Types.h`, `Point offsets[4]` in `RuntimeConfig`, Storage_Runtime erweitert, Defaults 2×2-Grid | v4.4.0-rc1 | ✅ 2026-05-12 |
-| **B** | L7-API: `/bounds` liefert `tachoCutoffHz` (Z-Fallback) + `offsets`. `/set` für Offsets + posDeg | v4.4.1 | ⚪ |
+| **B** | L7-API: `/bounds` liefert `tachoCutoffHz` raw+eff (Z-Fallback) + `offsets`. `/set?ofx0..3=…&ofy0..3=…`. posDeg-Edit folgt mit C. | v4.4.1 | ✅ 2026-05-12 |
 | **C** | L5b: `moveType 8` Coordinate. Wave sampelt Noise an `(flightX+offsetX, flightY+offsetY)` | v4.4.2 | ⚪ |
 | **D** | L7 GUI-Split: `/player` + `/lab`. Lab erbt Engineering-Layout. | v4.4.3 | ⚪ |
 | **E** | Player-UI Kern: kontextsensitive Slider. Canvas-Dots an (x,y) mit posDeg-Helligkeit | v4.4.4 | ⚪ |

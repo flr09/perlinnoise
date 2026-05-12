@@ -853,17 +853,26 @@ void begin() {
     // Helper: serialisiert v4::rt als JSON. Quelle für /config und /set-Echo.
     static auto writeConfigJson = [](char* buf, size_t n) -> int {
         const auto& c = v4::rt;
-        return snprintf(buf, n,
+        int w = snprintf(buf, n,
             "{\"run\":%s,\"type\":%d,\"speed\":%.3f,\"angle\":%.1f,"
             "\"rad\":%.1f,\"range\":%.1f,\"frame\":%.4f,\"cont\":%.2f,"
             "\"shape\":%.2f,\"edgec\":%.2f,\"mspace\":%.1f,\"dyn\":%d,"
             "\"fan\":%d,\"lamp\":%d,"
-            "\"sa\":%.1f,\"so\":%.2f,\"ht\":%.1f,\"am\":%lu}",
+            "\"sa\":%.1f,\"so\":%.2f,\"ht\":%.1f,\"am\":%lu,\"offsets\":[",
             c.running ? "true":"false", c.moveType, c.speed, c.angle,
             c.radius, c.rangeDeg, c.framesize, c.contrast,
             c.zShape, c.edgeC, c.mspace, c.dynamics,
             c.fan, c.lamp,
             c.stepAngle, c.stepOffset, c.holdMs, (unsigned long)c.accelMax);
+        for (uint8_t i = 0; i < 4 && w > 0 && (size_t)w < n; i++) {
+            w += snprintf(buf + w, n - w, "%s{\"x\":%.3f,\"y\":%.3f}",
+                          i == 0 ? "" : ",",
+                          c.offsets[i].x, c.offsets[i].y);
+        }
+        if (w > 0 && (size_t)w < n) {
+            w += snprintf(buf + w, n - w, "]}");
+        }
+        return w;
     };
 
     server.on("/set", HTTP_GET, [](AsyncWebServerRequest* r) {
@@ -896,12 +905,20 @@ void begin() {
         getF("so",     c.stepOffset);  // step offset
         getF("ht",     c.holdMs);      // hold time [ms]
         if (r->hasParam("am")) c.accelMax = (uint32_t)r->getParam("am")->value().toInt();
+        // Phase 10 B: räumliche Motor-Offsets (Compass-UI). 4×2 = 8 Felder.
+        // Format: ofx0..ofx3 / ofy0..ofy3. Werte typischerweise -2..+2 (Noise-Raum).
+        char k[5] = { 'o', 'f', '?', '?', 0 };
+        for (uint8_t i = 0; i < 4; i++) {
+            k[3] = (char)('0' + i);
+            k[2] = 'x'; getF(k, c.offsets[i].x);
+            k[2] = 'y'; getF(k, c.offsets[i].y);
+        }
         // Bug-ID 23a: NVS-Persistence mit Debounce. touch() markiert dirty +
         // setzt Zeitstempel; tickFlush() im main-loop schreibt erst nach 5 s
         // Ruhe. Schutz vor NVS-Wear-Out beim Slider-Drag (ID 27).
         StorageRuntime::touch();
         // Echo: aktuelle State zurück, damit Slider/Anzeige sich synchronisieren.
-        char buf[512]; writeConfigJson(buf, sizeof(buf));
+        char buf[768]; writeConfigJson(buf, sizeof(buf));
         AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
         res->addHeader("Access-Control-Allow-Origin", "*");
         r->send(res);
@@ -939,22 +956,43 @@ void begin() {
     // /bounds — Pro-Motor-Charakterisierungs-Werte aus NVS. Quelle für die in
     // Synthesis::start() / applyEngineCap() angewandten Caps. Slider in der UI
     // dürfen nicht über diese Werte hinaus angeboten werden.
+    //
+    // Phase 10 B: pro Motor `tachoCutoffHz` mit Z-Fallback (Index 2 ist Z) —
+    // uncharakterisierte Motoren (X/Y/E) erben den Z-Wert. `offsets` spiegelt
+    // den aktuellen `v4::rt.offsets[]` (auch in /config / /set-Echo enthalten,
+    // hier nochmal für Bounds-only-Clients).
     server.on("/bounds", HTTP_GET, [](AsyncWebServerRequest* r) {
-        char buf[640];
+        // Z-Cutoff einmal laden für Fallback aller anderen Motoren.
+        v4::CalibrationData calZ;
+        StorageCalib::load(2, calZ);
+        uint16_t zCutoff = calZ.tachoCutoffHz;  // 0 falls Z auch noch ungemessen
+
+        char buf[896];
         int n = snprintf(buf, sizeof(buf), "{\"motors\":[");
         for (uint8_t i = 0; i < 4; i++) {
             v4::CalibrationData cal;
             StorageCalib::load(i, cal);
             uint32_t maxSps = (cal.valid && cal.maxRpm > 0.0f)
                 ? (uint32_t)Units::rpmToSps(i, cal.maxRpm) : 0;
+            uint16_t rawCutoff = cal.tachoCutoffHz;
+            uint16_t effCutoff = rawCutoff > 0 ? rawCutoff : zCutoff;
             n += snprintf(buf + n, sizeof(buf) - n,
                 "%s{\"valid\":%s,\"maxRpm\":%.0f,\"maxAccel\":%.0f,"
-                "\"maxSps\":%lu,\"learnedCurrentMA\":%u,\"sgThrs\":%u}",
+                "\"maxSps\":%lu,\"learnedCurrentMA\":%u,\"sgThrs\":%u,"
+                "\"tachoCutoffHz\":%u,\"tachoCutoffHzEff\":%u}",
                 i == 0 ? "" : ",",
                 cal.valid ? "true" : "false",
                 cal.maxRpm, cal.maxAccel,
                 (unsigned long)maxSps,
-                cal.learnedCurrentMA, cal.sgThrs);
+                cal.learnedCurrentMA, cal.sgThrs,
+                rawCutoff, effCutoff);
+        }
+        n += snprintf(buf + n, sizeof(buf) - n, "],\"offsets\":[");
+        for (uint8_t i = 0; i < 4; i++) {
+            n += snprintf(buf + n, sizeof(buf) - n,
+                "%s{\"x\":%.3f,\"y\":%.3f}",
+                i == 0 ? "" : ",",
+                v4::rt.offsets[i].x, v4::rt.offsets[i].y);
         }
         n += snprintf(buf + n, sizeof(buf) - n, "]}");
         AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
@@ -963,7 +1001,7 @@ void begin() {
     });
 
     server.on("/config", HTTP_GET, [](AsyncWebServerRequest* r) {
-        char buf[512]; writeConfigJson(buf, sizeof(buf));
+        char buf[768]; writeConfigJson(buf, sizeof(buf));
         AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
         res->addHeader("Access-Control-Allow-Origin", "*");
         r->send(res);
