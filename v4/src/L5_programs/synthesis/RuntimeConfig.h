@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "../../L0_platform/Types.h"
 
 // L5b — Live-Parameter für die Bewegungs-Synthese.
 // Werte aus V1 main.cpp übernommen + auf 4 Motoren mit individuellen Offsets.
@@ -26,6 +27,11 @@ struct RuntimeConfig {
     float stepOffset = 0.0f;    // zusätzlicher Winkel-Offset, kumulativ pro Schritt
     float holdMs     = 40.0f;   // Verweildauer pro Position [ms] — bei 40ms Hold + schneller Bewegung ~25/s
     uint32_t accelMax = 100000; // max. Beschleunigung [sps²] — wird bis Cal-Max hochgezogen
+    // --- Phase 10: Räumliches Modell ---
+    // 2x2-Grid um den Ursprung als sinnvolle Startposition für die Compass-UI.
+    // User kann pro Motor via /set?ofx<m>=...&ofy<m>=... (Phase 10 Schritt B) anpassen.
+    Point offsets[4] = { {-1.0f,  1.0f}, { 1.0f,  1.0f},
+                         { 1.0f, -1.0f}, {-1.0f, -1.0f} };
 };
 
 extern RuntimeConfig rt;

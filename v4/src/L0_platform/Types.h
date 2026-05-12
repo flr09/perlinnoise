@@ -8,6 +8,19 @@
 
 namespace v4 {
 
+// --- Räumliche 2D-Position (Phase 10) ---
+//
+// Wird für `RuntimeConfig.offsets[4]` benutzt: pro Motor eine (x,y)-Position
+// im logischen Noise-Raum. Synthesis sampelt den Noise an
+// `(flightX+offset.x, flightY+offset.y)` statt entlang einer geraden Linie.
+// Die Einheit ist „Noise-Raum-Einheiten", typischerweise zwischen -2..+2.
+struct Point {
+    float x;
+    float y;
+    constexpr Point() : x(0.0f), y(0.0f) {}
+    constexpr Point(float x_, float y_) : x(x_), y(y_) {}
+};
+
 // --- Motor-Operations-Zustand (State-Machine-Interlock) ---
 enum class OpState : uint8_t {
     IDLE        = 0,
