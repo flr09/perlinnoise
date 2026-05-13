@@ -16,6 +16,7 @@
 #include "../L5_programs/synthesis/Synthesis.h"
 #include "../L6_telemetry_safety/OpState.h"
 #include "../L6_telemetry_safety/Telemetry.h"
+#include "../L6_telemetry_safety/Recorder.h"
 #include "../L6_telemetry_safety/Watchdog.h"
 #include "../L6_telemetry_safety/MotorProfile.h"
 #include <ElegantOTA.h>
@@ -159,6 +160,11 @@ html,body{background:var(--pa);color:var(--ink);
 .perf .stopstart{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--ink);margin-top:10px}
 .perf .stopstart button{height:44px;background:var(--pa);color:var(--ink);border:0;border-right:1px solid var(--ink);font:inherit;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;cursor:pointer}
 .perf .stopstart button:last-child{border-right:0}
+.perf .rec{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;margin-top:10px;padding:8px 10px;border:1px solid var(--ink)}
+.perf .rec button{appearance:none;background:var(--pa);color:var(--ink);border:1px solid var(--ink);padding:6px 14px;font:inherit;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;cursor:pointer}
+.perf .rec button.live{background:var(--red);color:var(--pa);border-color:var(--red)}
+.perf .rec .rs{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--mute);font-variant-numeric:tabular-nums}
+.perf .rec a{font-size:11px;color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);text-transform:uppercase;letter-spacing:.14em}
 .perf .stopstart button.run{background:var(--red);color:#fff}
 .log{border:1px solid var(--ink);max-height:220px;overflow:auto;background:#1a1a1a}
 .log .row{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:6px 10px;border-bottom:1px solid #2a2a2a;font-size:12px;align-items:baseline}
@@ -250,6 +256,7 @@ html,body{background:var(--pa);color:var(--ink);
           <option value="2">Rasant</option>
         </select></div>
       <div class="stopstart"><button onclick="setP('run',0)">Stop</button><button class="run" onclick="setP('run',1)">Start</button></div>
+      <div class="rec" id="recBar"><button id="recBtn" onclick="toggleRec()">● REC</button><span class="rs" id="recState">idle</span><a id="recDl" href="/rec/csv" target="_blank">CSV</a></div>
       </div>
     </section>
 
@@ -581,9 +588,29 @@ function poll(){
   if(document.visibilityState==='hidden')return;
   fetch('/status').then(function(r){return r.json()}).then(apply).catch(function(){})
 }
+
+// Phase 10 G: Recorder-Control. State alle 2 s aktualisieren.
+var REC={recording:false,samples:0,capacity:600};
+function applyRec(s){
+  if(!s)return;
+  REC.recording=!!s.recording;REC.samples=s.samples|0;REC.capacity=s.capacity|0;
+  var btn=document.getElementById('recBtn');
+  var st=document.getElementById('recState');
+  if(btn)btn.className=REC.recording?'live':'';
+  if(btn)btn.textContent=REC.recording?'■ STOP':'● REC';
+  if(st)st.textContent=REC.recording?('rec · '+REC.samples+'/'+REC.capacity):(REC.samples?(REC.samples+' samples'):'idle');
+}
+function toggleRec(){
+  var ep=REC.recording?'/rec/stop':'/rec/start';
+  fetch(ep).then(function(r){return r.json()}).then(function(j){applyRec({recording:j.recording,samples:j.samples||0,capacity:REC.capacity})}).catch(function(){});
+}
+function pollRec(){fetch('/rec/state').then(function(r){return r.json()}).then(applyRec).catch(function(){})}
+
 loadConfig();
 loadBounds();
+pollRec();
 setInterval(poll,100);poll();   // 10 Hz Status-Polling
+setInterval(pollRec,2000);      // 0.5 Hz Recorder-State
 </script>
 </body>
 </html>
@@ -1185,6 +1212,7 @@ void begin() {
     });
 
     Telemetry::registerHandlers(server);
+    Recorder::registerHandlers(server);
 
     // /log — gibt den aktuellen Log-Puffer als Plain Text zurück.
     // Bug-ID 36: Zwischenspeichern in lokaler String-Variable (analog zu /status, Z. 716–722),

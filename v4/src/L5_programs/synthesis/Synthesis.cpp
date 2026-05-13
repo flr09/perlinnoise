@@ -11,6 +11,8 @@
 #include "../../L3_driver/Tmc2209.h"
 #include "../../L3_driver/Units.h"
 #include "../../L6_telemetry_safety/OpState.h"
+#include "../../L6_telemetry_safety/Recorder.h"
+#include "../../L3_driver/Motion.h"
 #include <math.h>
 
 namespace v4 { RuntimeConfig rt; }
@@ -519,6 +521,13 @@ void tick() {
     // v4.3.5: Player-Watchdog am Ende des Ticks. Misst Tacho-Pulse-Rate
     // gegen erwartete Rate über 3-s-Fenster, stoppt Synthesis bei Drift > 50 %.
     tickWatchdog();
+
+    // Phase 10 G: Recorder-Tick. Eigenes 10 Hz-Throttling intern, hier
+    // einfach jedes Mal aufrufen. Liefert Live-Motor-Positionen + Flight-
+    // Pfad. No-op wenn nicht recording.
+    float posDegLive[4];
+    for (uint8_t i = 0; i < 4; i++) posDegLive[i] = Motion::getPositionDeg(i);
+    Recorder::tick(flightX, flightY, posDegLive);
 }
 
 size_t getPreviewBytes(uint8_t* out, size_t maxBytes) {
