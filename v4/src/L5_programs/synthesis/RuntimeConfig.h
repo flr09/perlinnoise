@@ -32,6 +32,11 @@ struct RuntimeConfig {
     // User kann pro Motor via /set?ofx<m>=...&ofy<m>=... (Phase 10 Schritt B) anpassen.
     Point offsets[4] = { {-1.0f,  1.0f}, { 1.0f,  1.0f},
                          { 1.0f, -1.0f}, {-1.0f, -1.0f} };
+    // --- Phase 10 Schritt C: Coordinate-Mode (moveType=8) — statisches Posing ---
+    // Pro Motor ein Ziel-Winkel in Grad relativ zur Calib-Mitte (Home=0°).
+    // Wird via /set?pd<m>=... (Compass +/- Buttons) gesetzt. In moveType=8 fährt
+    // Synthesis::tick jeden Motor zu posDeg[i] und hält dort.
+    float posDeg[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 };
 
 extern RuntimeConfig rt;

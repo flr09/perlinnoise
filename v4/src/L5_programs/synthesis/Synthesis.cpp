@@ -434,6 +434,22 @@ void tick() {
         timeAcc += effSpeed * dt;
     }
 
+    // COORDINATE-Modus (moveType=8) — Phase 10 C: statisches Posing.
+    // Jeder Motor fährt zu posDeg[i] und hält dort. Kein Sampling, keine
+    // Wellenform, keine Synthese — Snapshot-Pose für die Compass-UI.
+    // applyEngineCap mit waveMode=false → moderate Accel (Noise-Default).
+    if (v4::rt.moveType == 8) {
+        for (uint8_t i = 0; i < 4; i++) {
+            auto* s = Stepper::get(i);
+            if (!s) continue;
+            applyEngineCap(i, false, false);
+            float stepsPerDeg = (float)Stepper::stepsPerRev(i) / 360.0f;
+            long target = (long)(v4::rt.posDeg[i] * stepsPerDeg);
+            s->moveTo(target);
+        }
+        return;
+    }
+
     // STEP-Modus (moveType=6)
     if (v4::rt.moveType == 6) {
         unsigned long nowMs = millis();
@@ -490,9 +506,14 @@ void tick() {
             }
             val *= v4::rt.contrast;
         } else {
-            // NOISE-Modi
-            float n = ne.noise((flightX + (float)i * v4::rt.mspace) * v4::rt.framesize,
-                                flightY * v4::rt.framesize);
+            // NOISE-Modi — Phase 10 C: 2D-Spatial-Sampling. Jeder Motor liest
+            // an seiner eigenen (offsetX, offsetY)-Position relativ zum
+            // Kamerapfad (flightX/Y). `mspace` skaliert die Offsets in den
+            // Noise-Raum (Default-Grid ±1 × mspace ≈ ±25 Einheiten).
+            float ox = v4::rt.offsets[i].x * v4::rt.mspace;
+            float oy = v4::rt.offsets[i].y * v4::rt.mspace;
+            float n = ne.noise((flightX + ox) * v4::rt.framesize,
+                                (flightY + oy) * v4::rt.framesize);
             // KRITISCH (Fix ID 25): applyShape nutzt nun auch edgeC
             val = ne.applyShape(n, v4::rt.zShape, v4::rt.edgeC) * v4::rt.contrast;
         }

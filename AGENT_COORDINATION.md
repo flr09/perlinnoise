@@ -3,8 +3,8 @@
 ## 🕒 Aktueller Status (LIVE)
 - **Stand:** 2026-05-09
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.4.1** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 ✅**, v4.3.6 (Bug 36), **Phase 10 A+B ✅ (2026-05-12)**: räumliches Modell `RuntimeConfig.offsets[4]` (NVS 4200→4201) und L7-API (`/bounds` mit Z-Fallback, `/set?ofx<m>=…&ofy<m>=…`).
-- **NVS-Schemata:** calib 4004 (cal.tachoCutoffHz=31, freqStallAmp[7] valid), rtconf 4201 (Phase 10 A: `offsets[4]`).
+- **Firmware:** **v4.4.2** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 ✅**, v4.3.6 (Bug 36), **Phase 10 A+B+C ✅ (2026-05-13)**: räumliches Modell + L7-API + Coordinate-Mode (`moveType 8`) + Noise-Sampling an Motor-Offsets.
+- **NVS-Schemata:** calib 4004 (cal.tachoCutoffHz=31, freqStallAmp[7] valid), rtconf 4202 (Phase 10 C: `offsets[4]` + `posDeg[4]`).
 - **Watchdog:** v1 aktiv (3s Fenster, ratio<0.5).
 
 ### Lessons aus Phase 9 (v4.3.0 → v4.3.5)
@@ -72,7 +72,7 @@ L0 Plattform                  (Boot, Tasks, Sync, Log)
 |---|---|---|---|
 | **A** | NVS-Schema 4200→4201: `Point` in `Types.h`, `Point offsets[4]` in `RuntimeConfig`, Storage_Runtime erweitert, Defaults 2×2-Grid | v4.4.0-rc1 | ✅ 2026-05-12 |
 | **B** | L7-API: `/bounds` liefert `tachoCutoffHz` raw+eff (Z-Fallback) + `offsets`. `/set?ofx0..3=…&ofy0..3=…`. posDeg-Edit folgt mit C. | v4.4.1 | ✅ 2026-05-12 |
-| **C** | L5b: `moveType 8` Coordinate. Wave sampelt Noise an `(flightX+offsetX, flightY+offsetY)` | v4.4.2 | ⚪ |
+| **C** | L5b: `moveType 8` Coordinate (statisch via `posDeg[4]`). Noise sampelt pro Motor an `(flight + offset·mspace)`. NVS 4201→4202. | v4.4.2 | ✅ 2026-05-13 |
 | **D** | L7 GUI-Split: `/player` + `/lab`. Lab erbt Engineering-Layout. | v4.4.3 | ⚪ |
 | **E** | Player-UI Kern: kontextsensitive Slider. Canvas-Dots an (x,y) mit posDeg-Helligkeit | v4.4.4 | ⚪ |
 | **F** | 2D-Kompass-SVG für Offset-Edit + 0.5°-Buttons | v4.4.5 | ⚪ |

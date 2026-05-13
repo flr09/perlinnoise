@@ -6,8 +6,9 @@ namespace StorageRuntime {
 
 static constexpr const char* NS = "rtconf";
 // v4201 (Phase 10 A, 2026-05-12): + Point offsets[4] für räumliches Modell.
-// Alte v4200-Blobs werden in load() verworfen (Größen-Mismatch).
-static constexpr uint32_t SCHEMA = 4201;
+// v4202 (Phase 10 C, 2026-05-12): + float posDeg[4] für Coordinate-Mode (moveType=8).
+// Alte Blobs werden in load() jeweils per Größen- + Schema-Mismatch verworfen.
+static constexpr uint32_t SCHEMA = 4202;
 static constexpr uint32_t DEBOUNCE_MS = 5000;
 
 // NVS-Blob: explizites Layout, damit Schema-Bumps kontrollierbar sind und
@@ -33,6 +34,7 @@ struct Blob {
     uint32_t accelMax;
     float    offX[4];   // v4201: räumliche Motor-Positionen, Noise-Raum-Einheiten
     float    offY[4];
+    float    posDeg[4]; // v4202: Coordinate-Mode-Ziel pro Motor [°]
     uint8_t  _pad[2] = {0, 0};
 };
 
@@ -66,6 +68,7 @@ void load(v4::RuntimeConfig& cfg) {
             for (uint8_t i = 0; i < 4; i++) {
                 cfg.offsets[i].x = b.offX[i];
                 cfg.offsets[i].y = b.offY[i];
+                cfg.posDeg[i]    = b.posDeg[i];
             }
             Logger::addLog("RT: loaded NVS config");
         } else {
@@ -105,8 +108,9 @@ static void writeNow(const v4::RuntimeConfig& cfg) {
     b.holdMs     = cfg.holdMs;
     b.accelMax   = cfg.accelMax;
     for (uint8_t i = 0; i < 4; i++) {
-        b.offX[i] = cfg.offsets[i].x;
-        b.offY[i] = cfg.offsets[i].y;
+        b.offX[i]   = cfg.offsets[i].x;
+        b.offY[i]   = cfg.offsets[i].y;
+        b.posDeg[i] = cfg.posDeg[i];
     }
     p.putBytes("last", &b, sizeof(Blob));
     p.end();
@@ -156,6 +160,7 @@ struct PresetBlob {
     uint32_t accelMax;
     float    offX[4];   // v4201: Coordinate-Snapshot inkl. Spatial-Modell
     float    offY[4];
+    float    posDeg[4]; // v4202: Coordinate-Mode-Ziele pro Motor
     uint8_t  _pad1[1] = {0};
 };
 
@@ -184,8 +189,9 @@ void savePreset(uint8_t slot, const v4::RuntimeConfig& cfg) {
     b.holdMs     = cfg.holdMs;
     b.accelMax   = cfg.accelMax;
     for (uint8_t i = 0; i < 4; i++) {
-        b.offX[i] = cfg.offsets[i].x;
-        b.offY[i] = cfg.offsets[i].y;
+        b.offX[i]   = cfg.offsets[i].x;
+        b.offY[i]   = cfg.offsets[i].y;
+        b.posDeg[i] = cfg.posDeg[i];
     }
     p.putBytes(pKey(slot).c_str(), &b, sizeof(PresetBlob));
     p.end();
@@ -220,6 +226,7 @@ bool loadPreset(uint8_t slot, v4::RuntimeConfig& cfg) {
             for (uint8_t i = 0; i < 4; i++) {
                 cfg.offsets[i].x = b.offX[i];
                 cfg.offsets[i].y = b.offY[i];
+                cfg.posDeg[i]    = b.posDeg[i];
             }
             // Live-Wert geändert → in normaler Debounce-Save mitnehmen
             touch();

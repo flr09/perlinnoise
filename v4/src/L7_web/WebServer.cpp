@@ -870,6 +870,13 @@ void begin() {
                           c.offsets[i].x, c.offsets[i].y);
         }
         if (w > 0 && (size_t)w < n) {
+            w += snprintf(buf + w, n - w, "],\"posDeg\":[");
+        }
+        for (uint8_t i = 0; i < 4 && w > 0 && (size_t)w < n; i++) {
+            w += snprintf(buf + w, n - w, "%s%.2f",
+                          i == 0 ? "" : ",", c.posDeg[i]);
+        }
+        if (w > 0 && (size_t)w < n) {
             w += snprintf(buf + w, n - w, "]}");
         }
         return w;
@@ -912,6 +919,13 @@ void begin() {
             k[3] = (char)('0' + i);
             k[2] = 'x'; getF(k, c.offsets[i].x);
             k[2] = 'y'; getF(k, c.offsets[i].y);
+        }
+        // Phase 10 C: Coordinate-Mode Ziel-Winkel pro Motor (Compass +/- Buttons).
+        // Format: pd0..pd3. Einheit Grad relativ zu Calib-Mitte.
+        char kp[4] = { 'p', 'd', '?', 0 };
+        for (uint8_t i = 0; i < 4; i++) {
+            kp[2] = (char)('0' + i);
+            getF(kp, c.posDeg[i]);
         }
         // Bug-ID 23a: NVS-Persistence mit Debounce. touch() markiert dirty +
         // setzt Zeitstempel; tickFlush() im main-loop schreibt erst nach 5 s
