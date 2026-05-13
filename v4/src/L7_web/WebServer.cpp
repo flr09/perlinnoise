@@ -123,6 +123,38 @@ html,body{background:var(--pa);color:var(--ink);
   .mc:not(:last-child){border-bottom:1px solid var(--ink)}
   .mc:last-child{border-bottom:0}
 }
+/* Phase 10 D — App-Variante (Handy/<600 px): reduzierte Player-Ansicht.
+   Engineering-Schwere raus, Performance-Kern drin. Spatial-Cards + Log + Motor-
+   Sektion werden hidden, damit Pattern+Slider+Start+Presets ohne Scroll
+   erreichbar bleiben. Sichtbar bleiben: Status-Strip, Noise-Canvas mit Dots,
+   Performance-Sektion, REC + Presets. */
+@media(max-width:599px){
+  .wrap{padding:8px}
+  .hd h1{font-size:18px}
+  .hd .meta{font-size:10px}
+  .strip>div{padding:8px}
+  .strip .v{font-size:14px}
+  .sec .lbl{font-size:10px;margin-bottom:8px}
+  /* Motor-Sektion verstecken (kein Calib/Home/Zero auf Phone) */
+  .sec:has(>.mg){display:none}
+  /* Spatial-Compass-Cards verstecken — zu fummelig auf kleinem Touch */
+  .sec:has(>.cg){display:none}
+  /* Log-Sektion verstecken — Performer braucht den nicht */
+  .sec:has(>.log){display:none}
+  /* Dial-Reihe kompakter */
+  .dials{gap:4px}
+  .dial{flex:0 0 60px}
+  /* Performance-Slider kompakter, mit größeren Touch-Targets */
+  .perf .row{grid-template-columns:1fr 1.7fr 4em;gap:6px;margin-bottom:6px}
+  .perf .row label{font-size:9px}
+  .perf .row input[type=range]{height:32px}
+  .perf .row .val{font-size:10px}
+  /* Stop/Start-Buttons größer */
+  .perf .stopstart button{height:52px;font-size:13px}
+  /* Footer reduzieren */
+  .ft{font-size:10px}
+  .ft span:nth-child(2){display:none}
+}
 .mc .top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
 .dot{width:14px;height:14px;border-radius:50%;background:transparent;border:1.5px solid var(--ink);flex-shrink:0}
 .dot.on{background:var(--red);border-color:var(--red)}
