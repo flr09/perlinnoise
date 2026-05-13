@@ -3,7 +3,7 @@
 ## 🕒 Aktueller Status (LIVE)
 - **Stand:** 2026-05-09
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.4.3** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 ✅**, v4.3.6 (Bug 36), **Phase 10 A+B+C+E ✅ (2026-05-13)**: räumliches Modell, L7-API, Coordinate-Mode, kontextsensitive Player-UI mit Canvas-Dot-Overlay. D (responsive) folgt am Schluss.
+- **Firmware:** **v4.4.4** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 ✅**, v4.3.6 (Bug 36), **Phase 10 A+B+C+E+F ✅ (2026-05-13)**: räumliches Modell, L7-API, Coordinate-Mode, Player-UI mit Canvas-Dots + 2D-Kompass-Cards. D (responsive) folgt am Schluss.
 - **NVS-Schemata:** calib 4004 (cal.tachoCutoffHz=31, freqStallAmp[7] valid), rtconf 4202 (Phase 10 C: `offsets[4]` + `posDeg[4]`).
 - **Watchdog:** v1 aktiv (3s Fenster, ratio<0.5).
 
@@ -75,7 +75,7 @@ L0 Plattform                  (Boot, Tasks, Sync, Log)
 | **C** | L5b: `moveType 8` Coordinate (statisch via `posDeg[4]`). Noise sampelt pro Motor an `(flight + offset·mspace)`. NVS 4201→4202. | v4.4.2 | ✅ 2026-05-13 |
 | **D** | Player **responsive**: Routen-Split existiert (`/` Player + `/test` Tests). Player kriegt Desktop-Full + Mobile-Reduced (<600 px) via Media-Queries. Nach E/F/G durchgeführt. | (n.tbd) | ⚪ |
 | **E** | Player-UI Kern: kontextsensitive Slider-Labels + Live-Werte (Hz/°/%/cm) + Canvas-Dot-Overlay an (x,y) mit posDeg-Helligkeit + Coordinate-Option im Dropdown | v4.4.3 | ✅ 2026-05-13 |
-| **F** | 2D-Kompass-SVG für Offset-Edit + 0.5°-Buttons | v4.4.5 | ⚪ |
+| **F** | 2D-Kompass-SVG pro Motor: Click/Drag → Offsets, ±0.5°-Buttons → posDeg | v4.4.4 | ✅ 2026-05-13 |
 | **G** | Recorder: Canvas-Pfad-History + REC-Button | v4.4.6 | ⚪ |
 | **H** | NVS-Preset-System in Player-UI verdrahten | v4.4.7 | ⚪ |
 | **I** | Chart.js lokal einbetten (Offline-Betrieb) für Lab-Diagramme | v4.4.8 | ⚪ |

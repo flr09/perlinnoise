@@ -98,6 +98,21 @@ html,body{background:var(--pa);color:var(--ink);
 .strip .v{font-size:24px;font-weight:700;line-height:1}
 .strip .v.busy{color:var(--red)}
 .mg{display:grid;grid-template-columns:1fr;gap:0;border:1px solid var(--ink)}
+.cg{display:grid;grid-template-columns:repeat(2,1fr);gap:0;border:1px solid var(--ink)}
+.cc{padding:12px;border-bottom:1px solid var(--ink);border-right:1px solid var(--ink);display:flex;flex-direction:column;gap:8px;align-items:center}
+.cc:nth-child(2n){border-right:0}
+.cc:nth-last-child(-n+2){border-bottom:0}
+.cc .ttl{display:flex;width:100%;align-items:center;gap:8px;font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--mute)}
+.cc .ttl .nm{color:var(--ink);font-weight:800;letter-spacing:.04em}
+.cc .ttl .xy{margin-left:auto;font-size:10px;color:var(--mute);font-variant-numeric:tabular-nums}
+.cc svg.cmp{width:96px;height:96px;border:1px solid var(--ink);background:var(--pa);cursor:crosshair;touch-action:none}
+.cc svg.cmp .grid{stroke:var(--mute);stroke-width:.02;opacity:.35}
+.cc svg.cmp .axis{stroke:var(--mute);stroke-width:.04;opacity:.65}
+.cc svg.cmp .dot{stroke:var(--pa);stroke-width:.08}
+.cc .pose{display:grid;grid-template-columns:1.4em 3.6em 1.4em;gap:6px;align-items:center;width:100%}
+.cc .pose .pd{font-size:12px;text-align:center;font-variant-numeric:tabular-nums;color:var(--ink);border:1px solid var(--ink);padding:4px 0}
+.cc .pose button{appearance:none;background:var(--pa);color:var(--ink);border:1px solid var(--ink);font:inherit;font-size:14px;font-weight:700;padding:2px 0;cursor:pointer}
+.cc .pose button:active{background:var(--ink);color:var(--pa)}
 @media(min-width:640px){.mg{grid-template-columns:1fr 1fr}}
 .mc{padding:14px;border-bottom:1px solid var(--ink);border-right:1px solid var(--ink)}
 .mc:nth-child(2n){border-right:0}
@@ -199,6 +214,11 @@ html,body{background:var(--pa);color:var(--ink);
       <div class="lbl"><span class="n">3</span><span>Motors</span><span class="ln"></span></div>
       <div class="mg" id="mg"></div>
     </section>
+
+    <section class="sec">
+      <div class="lbl"><span class="n">3b</span><span>Spatial · Pose</span><span class="ln"></span></div>
+      <div class="cg" id="cg"></div>
+    </section>
    </div>
 
    <div>
@@ -297,6 +317,7 @@ function applyConfig(c){
   if(c.offsets&&c.offsets.length===4)CFG.offsets=c.offsets.map(function(o){return [+o.x,+o.y]});
   if(c.posDeg&&c.posDeg.length===4)CFG.posDeg=c.posDeg.slice();
   applyLabels();
+  updateCompass();
 }
 function dotCls(e){return e===true?'on':e===false?'off':'na'}
 function stTxt(e){return e===true?'powered':e===false?'off':'—'}
@@ -320,6 +341,73 @@ function updateDials(M){
     dv.textContent=p.toFixed(0)+'°';
     di.className='dial'+(e===true?'':' off');
     dl.style.transform='rotate('+p+'deg)';
+  }
+}
+
+// Phase 10 F: 2D-Kompass pro Motor — (x,y)-Offset-Edit per Klick/Drag,
+// posDeg-Feinjustage per ±0.5°-Button. Wertebereich: ±2 (Noise-Raum).
+function buildCompass(){
+  var g=document.getElementById('cg');if(!g)return;
+  var h='';
+  for(var i=0;i<4;i++){
+    h+='<div class="cc" data-m="'+i+'">'
+      +'<div class="ttl"><span class="nm">'+MNAMES[i]+'</span><span class="xy" id="cxy'+i+'">—</span></div>'
+      +'<svg class="cmp" viewBox="-2.2 -2.2 4.4 4.4" data-m="'+i+'">'
+        +'<line class="grid" x1="-2" y1="-1" x2="2" y2="-1"/>'
+        +'<line class="grid" x1="-2" y1="1"  x2="2" y2="1"/>'
+        +'<line class="grid" x1="-1" y1="-2" x2="-1" y2="2"/>'
+        +'<line class="grid" x1="1"  y1="-2" x2="1"  y2="2"/>'
+        +'<line class="axis" x1="-2" y1="0" x2="2" y2="0"/>'
+        +'<line class="axis" x1="0" y1="-2" x2="0" y2="2"/>'
+        +'<circle class="dot" id="cd'+i+'" cx="0" cy="0" r="0.18" fill="'+MCOLORS[i]+'"/>'
+      +'</svg>'
+      +'<div class="pose">'
+        +'<button data-m="'+i+'" data-d="-1">−</button>'
+        +'<div class="pd" id="cpd'+i+'">0.0°</div>'
+        +'<button data-m="'+i+'" data-d="1">+</button>'
+      +'</div>'
+    +'</div>';
+  }
+  g.innerHTML=h;
+  g.querySelectorAll('svg.cmp').forEach(function(svg){
+    var m=svg.dataset.m|0;
+    var set=function(ev){
+      var pt=svg.createSVGPoint();
+      var t=ev.touches?ev.touches[0]:ev;
+      pt.x=t.clientX;pt.y=t.clientY;
+      var p=pt.matrixTransform(svg.getScreenCTM().inverse());
+      var x=Math.max(-2,Math.min(2,Math.round(p.x*10)/10));
+      var y=Math.max(-2,Math.min(2,Math.round(-p.y*10)/10));
+      CFG.offsets[m]=[x,y];
+      updateCompass();
+      fetch('/set?ofx'+m+'='+x+'&ofy'+m+'='+y).then(function(r){return r.json()}).then(applyConfig).catch(function(){});
+    };
+    var dragging=false;
+    svg.addEventListener('pointerdown',function(ev){dragging=true;svg.setPointerCapture(ev.pointerId);set(ev);ev.preventDefault()});
+    svg.addEventListener('pointermove',function(ev){if(dragging)set(ev)});
+    svg.addEventListener('pointerup',function(){dragging=false});
+    svg.addEventListener('pointercancel',function(){dragging=false});
+  });
+  g.querySelectorAll('.pose button').forEach(function(b){
+    b.addEventListener('click',function(){
+      var m=b.dataset.m|0, dir=+b.dataset.d;
+      var nv=Math.round(((CFG.posDeg[m]||0)+dir*0.5)*10)/10;
+      CFG.posDeg[m]=nv;
+      updateCompass();
+      fetch('/set?pd'+m+'='+nv).then(function(r){return r.json()}).then(applyConfig).catch(function(){});
+    });
+  });
+}
+
+function updateCompass(){
+  for(var i=0;i<4;i++){
+    var o=CFG.offsets[i]||[0,0];
+    var dot=document.getElementById('cd'+i);
+    if(dot){dot.setAttribute('cx',o[0]);dot.setAttribute('cy',-o[1])}
+    var xy=document.getElementById('cxy'+i);
+    if(xy)xy.textContent=o[0].toFixed(1)+', '+o[1].toFixed(1);
+    var pd=document.getElementById('cpd'+i);
+    if(pd)pd.textContent=(CFG.posDeg[i]||0).toFixed(1)+'°';
   }
 }
 
@@ -463,6 +551,7 @@ function apply(d){
   setInterval(drawPreview,100);drawPreview();
 })();
 buildDials();
+buildCompass();
 
 function loadConfig(){
   fetch('/config').then(function(r){return r.json()}).then(applyConfig).catch(function(){})
