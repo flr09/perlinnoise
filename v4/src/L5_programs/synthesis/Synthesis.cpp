@@ -198,25 +198,21 @@ static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
     else               spsCap = DEFAULT_SPS_NOISE;
 
     // accCap pro Modus — feinere Differenzierung für Wave-Modi (Bug-ID 34):
-    //   Sinus    → silent, glatte Sinuskurve = niedrige Acc reicht völlig
-    //   Sawtooth → mittel: linearer Anstieg + Sprung am Periode-Ende
-    //   Square   → hart, Sprünge zwischen ±max → volle cal.maxAccel nötig
-    //   Step     → User-Slider
-    //   Noise    → ruhig, künstlerisch glatt
-    // Das vermeidet das mechanische Klacken bei Sinus, das aus 475k sps²
-    // kommt (User-Beobachtung 2026-05-06: „Sinus zu laut für silent").
+    // Wir nutzen hier die evidenzbasierten Werte aus der Charakterisierung (cal.maxAccel)
+    // als Obergrenze. Die Modi definieren nur ihr gewünschtes 'Feeling'.
     bool isSinus  = (v4::rt.moveType == 3);
     bool isSaw    = (v4::rt.moveType == 4);
     bool isSquare = (v4::rt.moveType == 5);
 
     uint32_t accCap;
     if (stepMode)      accCap = (uint32_t)v4::rt.accelMax;
-    else if (isSquare) accCap = 250000;             // Erhöht von 100k für härtere Sprünge
-    else if (isSaw)    accCap = 80000;              // Erhöht von 50k
-    else if (isSinus)  accCap = 15000;              // Erhöht von 4k für mehr Agilität (weniger 'teigig')
+    else if (isSquare) accCap = 500000;             // Ziel: hart (wird unten durch cal gedeckelt)
+    else if (isSaw)    accCap = 100000;             // Ziel: mittel
+    else if (isSinus)  accCap = 30000;              // Ziel: agil aber glatt
     else               accCap = DEFAULT_ACC_NOISE;  // Noise (4k)
 
     // Hardware-Grenzen aus Charakterisierung (Evidenzbasiert)
+    // Wenn der Test sagt, der Motor kann nur X, dann fahren wir maximal X.
     if (cal.valid && cal.maxRpm > 0.0f) {
         uint32_t boundSps = (uint32_t)(Units::rpmToSps(i, cal.maxRpm) * SAFETY_FACTOR);
         if (boundSps > 0 && boundSps < spsCap) spsCap = boundSps;
@@ -224,15 +220,9 @@ static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
     if (cal.valid && cal.maxAccel > 0.0f) {
         uint32_t boundAcc = (uint32_t)(cal.maxAccel * SAFETY_FACTOR);
         if (boundAcc > HARD_ACCEL_CAP) boundAcc = HARD_ACCEL_CAP;
-
-        if (isSquare) {
-            // Square braucht harte Sprünge → volle Hardware-Kapazität
-            accCap = boundAcc;
-        } else {
-            // Step/Sinus/Saw/Noise: Hardware nur als Decke nach unten —
-            // der konservative Modus-Default bleibt gültig wenn er strenger ist.
-            if (boundAcc > 0 && boundAcc < accCap) accCap = boundAcc;
-        }
+        
+        // Die Hardware-Grenze ist das absolute Limit (Cap nach unten)
+        if (boundAcc > 0 && boundAcc < accCap) accCap = boundAcc;
     }
 
     s->setSpeedInHz(spsCap);
@@ -245,14 +235,14 @@ static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
 // Übergangs-Schwelle bei 500 RPM für Saw/Step (User-Vorgabe 2026-05-06):
 // unter 500 RPM = StealthChop, drüber = SpreadCycle.
 //   Sinus/Noise/Linear/Circle/Figure8: StealthChop immer (TPWMTHRS=0xFFFFF)
-//   Saw/Step:                          Übergang bei 500 RPM
-//   Square:                            SpreadCycle immer (TPWMTHRS=0)
-constexpr float CHOP_SWITCH_RPM = 1000.0f; // Erhöht von 500 für längeren StealthChop (Lärmschutz)
+//   Saw/Step/Square:                   Übergang bei 500 RPM (Hybrid)
+constexpr float CHOP_SWITCH_RPM = 500.0f; 
 
 static void applyChopperMode(uint8_t i, int moveType) {
     uint32_t tpwm;
-    if (moveType == 5 || moveType == 4 || moveType == 6) {
+    if (moveType >= 4 && moveType <= 6) {
         // Square/Saw/Step: hybrid (StealthChop bei Langsamfahrt, SpreadCycle bei Speed)
+        // Wir nutzen hier exakt die 500 RPM Schwelle aus den Projekt-Vorgaben.
         tpwm = Units::rpmToTpwmthrs(i, CHOP_SWITCH_RPM);
     } else {
         // Sinus/Noise/Linear/Circle/Figure8: StealthChop immer (maximal leise)
