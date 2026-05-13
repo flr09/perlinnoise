@@ -135,10 +135,12 @@ html,body{background:var(--pa);color:var(--ink);
 .perf .soon{display:inline-block;background:var(--ink);color:var(--pa);padding:3px 8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;margin-bottom:8px}
 .perf h3{font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;margin-bottom:6px}
 .perf p{font-size:12px;color:var(--mute);max-width:46ch}
-.perf .row{display:grid;grid-template-columns:1fr 2fr;gap:10px;align-items:center;margin-bottom:8px}
+.perf .row{display:grid;grid-template-columns:1fr 2fr 4.5em;gap:10px;align-items:center;margin-bottom:8px}
 .perf .row label{font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:var(--mute)}
 .perf .row input,.perf .row select{appearance:none;background:var(--pa);color:var(--ink);border:1px solid var(--ink);padding:6px 8px;font:inherit;font-size:12px;width:100%}
 .perf .row input[type=range]{padding:0;height:24px}
+.perf .row select{grid-column:2 / span 2}
+.perf .row .val{font-size:11px;color:var(--ink);text-align:right;font-variant-numeric:tabular-nums;letter-spacing:.04em}
 .perf .stopstart{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--ink);margin-top:10px}
 .perf .stopstart button{height:44px;background:var(--pa);color:var(--ink);border:0;border-right:1px solid var(--ink);font:inherit;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;cursor:pointer}
 .perf .stopstart button:last-child{border-right:0}
@@ -213,13 +215,14 @@ html,body{background:var(--pa);color:var(--ink);
           <option value="3">Sinus</option>
           <option value="4">Sawtooth</option>
           <option value="5">Square</option>
+          <option value="8">Coordinate</option>
         </select></div>
-      <div class="row"><label>Speed</label><input type="range" id="psSpeed" min="0" max="2" step="0.01" oninput="setP('speed',this.value)"></div>
-      <div class="row"><label>Range (deg)</label><input type="range" id="psRange" min="30" max="360" step="1" oninput="setP('range',this.value)"></div>
-      <div class="row"><label>Contrast</label><input type="range" id="psCont" min="0" max="2" step="0.01" oninput="setP('cont',this.value)"></div>
-      <div class="row"><label>Frame</label><input type="range" id="psFrame" min="0.001" max="0.5" step="0.001" oninput="setP('frame',this.value)"></div>
-      <div class="row"><label>Shape</label><input type="range" id="psShape" min="-5" max="5" step="0.1" oninput="setP('shape',this.value)"></div>
-      <div class="row"><label>Spacing</label><input type="range" id="psMspace" min="0" max="100" step="1" oninput="setP('mspace',this.value)"></div>
+      <div class="row"><label id="lblSpeed">Speed</label><input type="range" id="psSpeed" min="0" max="2" step="0.01" oninput="setP('speed',this.value)"><span class="val" id="vSpeed">—</span></div>
+      <div class="row"><label>Range (deg)</label><input type="range" id="psRange" min="30" max="360" step="1" oninput="setP('range',this.value)"><span class="val" id="vRange">—</span></div>
+      <div class="row"><label id="lblCont">Contrast</label><input type="range" id="psCont" min="0" max="2" step="0.01" oninput="setP('cont',this.value)"><span class="val" id="vCont">—</span></div>
+      <div class="row"><label>Frame</label><input type="range" id="psFrame" min="0.001" max="0.5" step="0.001" oninput="setP('frame',this.value)"><span class="val" id="vFrame">—</span></div>
+      <div class="row"><label id="lblShape">Shape</label><input type="range" id="psShape" min="-5" max="5" step="0.1" oninput="setP('shape',this.value)"><span class="val" id="vShape">—</span></div>
+      <div class="row"><label id="lblMspace">Spacing</label><input type="range" id="psMspace" min="0" max="100" step="1" oninput="setP('mspace',this.value)"><span class="val" id="vMspace">—</span></div>
       <div class="row"><label>Dynamics</label>
         <select id="psDyn" onchange="setP('dyn',this.value|0)">
           <option value="0">Langsam</option>
@@ -246,15 +249,54 @@ html,body{background:var(--pa);color:var(--ink);
 <script>
 var PHASE=4;
 var MNAMES=['M·X','M·Y','M·Z','M·E'];
+var MCOLORS=['#ff5a4a','#fcbf49','#4caf50','#7fd0ff'];
 var HAS_SENSOR=[1,1,1,0];
+
+// Phase 10 E: gemeinsamer State zwischen /config-Echo, /status-Polling, Canvas-Dot-Overlay.
+var CFG={type:0, offsets:[[-1,1],[1,1],[1,-1],[-1,-1]], posDeg:[0,0,0,0],
+         speed:0, cont:0, range:0, frame:0, shape:0, mspace:0};
+var LIVE={motorP:[0,0,0,0]};
+var TACHO_HZ=[31,31,31,31]; // eff aus /bounds, Z-Fallback
 
 function cmd(a,m){fetch('/cmd?a='+a+(m!=null?'&m='+m:'')).catch(function(){})}
 function setP(k,v){fetch('/set?'+k+'='+v).then(function(r){return r.json()}).then(applyConfig).catch(function(){})}
+
+// Phase 10 E: kontextsensitive Labels + Live-Wert-Anzeigen je nach moveType.
+function applyLabels(){
+  var t=CFG.type|0;
+  var isWave=(t>=3&&t<=5), isNoise=(t<=2), isCoord=(t===8);
+  var L=function(id,txt){var e=document.getElementById(id);if(e)e.textContent=txt};
+  L('lblSpeed', isWave?'Frequenz':(isNoise?'Flug-Tempo':(isCoord?'(inaktiv)':'Speed')));
+  L('lblCont',  isWave?'Amplitude':(isNoise?'Kontrast':(isCoord?'(inaktiv)':'Contrast')));
+  L('lblMspace',isWave?'Phasenversatz':(isNoise?'Motor-Abstand':(isCoord?'(inaktiv)':'Spacing')));
+  L('lblShape', t===5?'Duty Cycle':(t===4?'Steigung':(t===3?'Form':'Shape')));
+  // Werte aufbereiten mit passender Einheit.
+  var s=CFG.speed||0;
+  var hz=(s/(2*Math.PI)).toFixed(2); // Hz aus rt.speed (Wave timeAcc-Math)
+  L('vSpeed',  isWave?(hz+' Hz'):s.toFixed(2));
+  L('vCont',   isWave?((CFG.cont*CFG.range).toFixed(0)+'°'):(CFG.cont||0).toFixed(2));
+  L('vRange',  (CFG.range||0).toFixed(0)+'°');
+  L('vFrame',  (CFG.frame||0).toFixed(3));
+  L('vShape',  t===5?((50+(CFG.shape||0)*8).toFixed(0)+'%'):(CFG.shape||0).toFixed(1));
+  L('vMspace', isWave?((CFG.mspace||0).toFixed(0)+'°/M'):((CFG.mspace||0).toFixed(0)+' cm'));
+}
+
 function applyConfig(c){
   if(!c)return;
   var f=function(id,v){var e=document.getElementById(id);if(e&&v!=null)e.value=v};
   f('psType',c.type);f('psSpeed',c.speed);f('psRange',c.range);f('psCont',c.cont);
   f('psFrame',c.frame);f('psShape',c.shape);f('psMspace',c.mspace);f('psDyn',c.dyn);
+  // CFG-State spiegeln
+  if(c.type!=null)CFG.type=c.type|0;
+  if(c.speed!=null)CFG.speed=+c.speed;
+  if(c.cont!=null)CFG.cont=+c.cont;
+  if(c.range!=null)CFG.range=+c.range;
+  if(c.frame!=null)CFG.frame=+c.frame;
+  if(c.shape!=null)CFG.shape=+c.shape;
+  if(c.mspace!=null)CFG.mspace=+c.mspace;
+  if(c.offsets&&c.offsets.length===4)CFG.offsets=c.offsets.map(function(o){return [+o.x,+o.y]});
+  if(c.posDeg&&c.posDeg.length===4)CFG.posDeg=c.posDeg.slice();
+  applyLabels();
 }
 function dotCls(e){return e===true?'on':e===false?'off':'na'}
 function stTxt(e){return e===true?'powered':e===false?'off':'—'}
@@ -330,6 +372,8 @@ function apply(d){
   var ms=d.m||[];
   renderMotors(ms);
   updateDials(ms);
+  // Phase 10 E: Motor-Positionen für Canvas-Dot-Overlay einspeisen.
+  for(var i=0;i<4;i++){LIVE.motorP[i]=(ms[i]&&ms[i].p!=null)?+ms[i].p:0}
   if(d.log)appendLog(d.log);
 }
 
@@ -379,15 +423,42 @@ function apply(d){
       }
     }
   }
+  // Phase 10 E: räumliche Motor-Dots als Overlay. Position aus CFG.offsets
+  // (-2..+2 typ. → 0..128 Pixel), Helligkeit/Größe aus |posDeg|/range.
+  // Y wird gekippt, damit Compass-Konvention (Y nach oben) zur Canvas-
+  // Konvention (Y nach unten) passt.
+  function drawDots(){
+    if(!CFG.offsets||CFG.offsets.length!==4)return;
+    var rng=CFG.range>0?CFG.range:300;
+    for(var i=0;i<4;i++){
+      var o=CFG.offsets[i]||[0,0];
+      var px=Math.max(2,Math.min(126, (o[0]+2)/4*128));
+      var py=Math.max(2,Math.min(126, (2-o[1])/4*128));
+      var p=Math.abs(LIVE.motorP[i]||0);
+      var bri=Math.min(1, p/(rng*0.5));
+      var rad=2.5+bri*4;
+      ctx.beginPath();
+      ctx.arc(px,py,rad+1.5,0,Math.PI*2);
+      ctx.fillStyle='rgba(14,14,14,0.65)';
+      ctx.fill();
+      ctx.globalAlpha=0.35+0.65*bri;
+      ctx.fillStyle=MCOLORS[i];
+      ctx.beginPath();
+      ctx.arc(px,py,rad,0,Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha=1;
+    }
+  }
   function drawPreview(){
     if(document.visibilityState==='hidden')return;
     fetch('/preview').then(function(r){return r.json()}).then(function(j){
-      if(!j||!j.data||!j.data.length){drawIdle();return}
+      if(!j||!j.data||!j.data.length){drawIdle();drawDots();return}
       var mode=j.mode|0;
       if(mode<=2)drawNoise(j.data);
       else if(mode<=5)drawWave(j.data);
       else drawIdle();
-    }).catch(function(){drawIdle()});
+      drawDots();
+    }).catch(function(){drawIdle();drawDots()});
   }
   setInterval(drawPreview,100);drawPreview();
 })();
@@ -402,13 +473,16 @@ function loadBounds(){
     var rows=[];
     for(var i=0;i<4;i++){
       var m=b.motors[i];
+      if(m.tachoCutoffHzEff)TACHO_HZ[i]=m.tachoCutoffHzEff|0;
       if(m.valid){
-        rows.push(MNAMES[i]+': '+m.maxRpm+' rpm · '+(m.maxAccel/1000).toFixed(0)+'k acc');
+        rows.push(MNAMES[i]+': '+m.maxRpm+' rpm · '+(m.maxAccel/1000).toFixed(0)+'k acc · fc='+TACHO_HZ[i]+'Hz');
       } else {
-        rows.push(MNAMES[i]+': uncalibrated → 8000 sps / 4000 acc default');
+        rows.push(MNAMES[i]+': uncalibrated → 8000 sps / 4000 acc · fc='+TACHO_HZ[i]+'Hz (Z-Fallback)');
       }
     }
     document.getElementById('caps').innerHTML='Engine-Cap (95% margin)<br>'+rows.join('<br>');
+    if(b.offsets&&b.offsets.length===4)CFG.offsets=b.offsets.map(function(o){return [+o.x,+o.y]});
+    applyLabels();
   }).catch(function(){
     document.getElementById('caps').textContent='Engine-Cap: /bounds nicht erreichbar';
   })
