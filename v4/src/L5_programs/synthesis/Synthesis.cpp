@@ -211,10 +211,10 @@ static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
 
     uint32_t accCap;
     if (stepMode)      accCap = (uint32_t)v4::rt.accelMax;
-    else if (isSquare) accCap = 100000;             // wird unten via cal.maxAccel hochgezogen
-    else if (isSaw)    accCap = 50000;              // moderater Sprung am Periodenende
-    else if (isSinus)  accCap = DEFAULT_ACC_NOISE;  // 4000 — silent wie Noise
-    else               accCap = DEFAULT_ACC_NOISE;  // Noise
+    else if (isSquare) accCap = 250000;             // Erhöht von 100k für härtere Sprünge
+    else if (isSaw)    accCap = 80000;              // Erhöht von 50k
+    else if (isSinus)  accCap = 15000;              // Erhöht von 4k für mehr Agilität (weniger 'teigig')
+    else               accCap = DEFAULT_ACC_NOISE;  // Noise (4k)
 
     // Hardware-Grenzen aus Charakterisierung (Evidenzbasiert)
     if (cal.valid && cal.maxRpm > 0.0f) {
@@ -247,16 +247,16 @@ static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
 //   Sinus/Noise/Linear/Circle/Figure8: StealthChop immer (TPWMTHRS=0xFFFFF)
 //   Saw/Step:                          Übergang bei 500 RPM
 //   Square:                            SpreadCycle immer (TPWMTHRS=0)
-constexpr float CHOP_SWITCH_RPM = 500.0f;
+constexpr float CHOP_SWITCH_RPM = 1000.0f; // Erhöht von 500 für längeren StealthChop (Lärmschutz)
 
 static void applyChopperMode(uint8_t i, int moveType) {
     uint32_t tpwm;
-    if (moveType == 5) {
-        tpwm = 0;            // Square: SpreadCycle immer (volles Drehmoment)
-    } else if (moveType == 4 || moveType == 6) {
-        tpwm = Units::rpmToTpwmthrs(i, CHOP_SWITCH_RPM);  // Saw/Step: hybrid
+    if (moveType == 5 || moveType == 4 || moveType == 6) {
+        // Square/Saw/Step: hybrid (StealthChop bei Langsamfahrt, SpreadCycle bei Speed)
+        tpwm = Units::rpmToTpwmthrs(i, CHOP_SWITCH_RPM);
     } else {
-        tpwm = 0xFFFFF;      // Sinus/Noise/Linear/Circle/Figure8: StealthChop immer
+        // Sinus/Noise/Linear/Circle/Figure8: StealthChop immer (maximal leise)
+        tpwm = 0xFFFFF;
     }
     Tmc::setTPWMTHRS(i, tpwm);
 }

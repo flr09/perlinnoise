@@ -54,54 +54,69 @@ static void MovementTask(void*) {
 
         // Op-Aktionen nur im Idle (Interlock)
         if (Op::state == v4::OpState::IDLE) {
+            bool blockedBySynth = v4::rt.running;
+            
             if (Op::pending.setzero >= 0) {
                 int m = Op::pending.setzero; Op::pending.setzero = -1;
-                SetZero::apply(m);
+                if (blockedBySynth) { Logger::addLog("ERR: SetZero blockiert — Synth läuft"); }
+                else { SetZero::apply(m); }
             }
             else if (Op::pending.home >= 0) {
                 int m = Op::pending.home; Op::pending.home = -1;
-                Op::state = v4::OpState::HOMING;
-                Homing::run(m);
-                Op::state = v4::OpState::IDLE;
+                if (blockedBySynth) { Logger::addLog("ERR: Homing blockiert — Synth läuft"); }
+                else {
+                    Op::state = v4::OpState::HOMING;
+                    Homing::run(m);
+                    Op::state = v4::OpState::IDLE;
+                }
             }
             else if (Op::pending.calib >= 0) {
                 int m = Op::pending.calib; Op::pending.calib = -1;
-                Op::state = v4::OpState::CALIBRATING;
-                Calibration::run(m);
-                Op::state = v4::OpState::IDLE;
+                if (blockedBySynth) { Logger::addLog("ERR: Calib blockiert — Synth läuft"); }
+                else {
+                    Op::state = v4::OpState::CALIBRATING;
+                    Calibration::run(m);
+                    Op::state = v4::OpState::IDLE;
+                }
             }
             else if (Op::pending.learn >= 0) {
                 int m = Op::pending.learn; Op::pending.learn = -1;
-                Op::state = v4::OpState::LEARNING;
-                Characterization::runSgLearn(m);
-                Op::state = v4::OpState::IDLE;
+                if (blockedBySynth) { Logger::addLog("ERR: SG-Learn blockiert — Synth läuft"); }
+                else {
+                    Op::state = v4::OpState::LEARNING;
+                    Characterization::runSgLearn(m);
+                    Op::state = v4::OpState::IDLE;
+                }
             }
             else if (Op::pending.test >= 0) {
                 int m = Op::pending.test; Op::pending.test = -1;
-                Op::state = v4::OpState::TESTING;
-                // Buffer NICHT pro Test reseten — sonst geht Telemetrie aus
-                // vorherigen Tests verloren wenn man Einzeltests sequenziell
-                // laufen lässt. Reset nur bei Show oder via /cmd?a=resetTele.
-                Watchdog::enable(m, true);
-                switch (Op::pending.testProg) {
-                    case 0: Characterization::runSpeedTest(m);   break;
-                    case 1: Characterization::runInertiaTest(m); break;
-                    case 2: Characterization::runCoastTest(m);   break;
-                    case 3: Characterization::runKatapult(m);    break;
-                    case 4: Characterization::runFreqSweep(m);   break;
-                    case 5: Characterization::runCurrentSweepHiRPM(m); break;
-                    case 6: Characterization::runTachoCutoffDiagnostic(m); break;
-                    default: Characterization::runSpeedTest(m);  break;
+                if (blockedBySynth) { Logger::addLog("ERR: Test blockiert — Synth läuft"); }
+                else {
+                    Op::state = v4::OpState::TESTING;
+                    Watchdog::enable(m, true);
+                    switch (Op::pending.testProg) {
+                        case 0: Characterization::runSpeedTest(m);   break;
+                        case 1: Characterization::runInertiaTest(m); break;
+                        case 2: Characterization::runCoastTest(m);   break;
+                        case 3: Characterization::runKatapult(m);    break;
+                        case 4: Characterization::runFreqSweep(m);   break;
+                        case 5: Characterization::runCurrentSweepHiRPM(m); break;
+                        case 6: Characterization::runTachoCutoffDiagnostic(m); break;
+                        default: Characterization::runSpeedTest(m);  break;
+                    }
+                    Watchdog::enable(m, false);
+                    Op::state = v4::OpState::IDLE;
                 }
-                Watchdog::enable(m, false);
-                Op::state = v4::OpState::IDLE;
             }
             else if (Op::pending.show >= 0) {
                 int m = Op::pending.show; Op::pending.show = -1;
-                Op::state = v4::OpState::SHOWING;
-                Telemetry::resetBuffer();
-                Characterization::runPerformanceShow(m);
-                Op::state = v4::OpState::IDLE;
+                if (blockedBySynth) { Logger::addLog("ERR: Show blockiert — Synth läuft"); }
+                else {
+                    Op::state = v4::OpState::SHOWING;
+                    Telemetry::resetBuffer();
+                    Characterization::runPerformanceShow(m);
+                    Op::state = v4::OpState::IDLE;
+                }
             }
         }
 
