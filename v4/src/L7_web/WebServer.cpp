@@ -165,6 +165,14 @@ html,body{background:var(--pa);color:var(--ink);
 .perf .rec button.live{background:var(--red);color:var(--pa);border-color:var(--red)}
 .perf .rec .rs{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--mute);font-variant-numeric:tabular-nums}
 .perf .rec a{font-size:11px;color:var(--ink);text-decoration:none;border-bottom:1px solid var(--ink);text-transform:uppercase;letter-spacing:.14em}
+.perf .presets{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;margin-top:10px;padding:8px 10px;border:1px solid var(--ink)}
+.perf .presets .ph{font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:var(--mute)}
+.perf .presets .ps{display:grid;grid-template-columns:repeat(8,1fr);gap:4px}
+.perf .presets .ps button{appearance:none;background:var(--pa);color:var(--mute);border:1px solid var(--ink);padding:6px 0;font:inherit;font-size:11px;font-weight:700;cursor:pointer;font-variant-numeric:tabular-nums}
+.perf .presets .ps button.filled{color:var(--ink)}
+.perf .presets .ps button.empty{opacity:.55}
+.perf .presets > button{appearance:none;background:var(--pa);color:var(--ink);border:1px solid var(--ink);padding:6px 14px;font:inherit;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.14em;cursor:pointer}
+.perf .presets > button.live{background:var(--yel);color:var(--pa);border-color:var(--yel)}
 .perf .stopstart button.run{background:var(--red);color:#fff}
 .log{border:1px solid var(--ink);max-height:220px;overflow:auto;background:#1a1a1a}
 .log .row{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:6px 10px;border-bottom:1px solid #2a2a2a;font-size:12px;align-items:baseline}
@@ -257,6 +265,11 @@ html,body{background:var(--pa);color:var(--ink);
         </select></div>
       <div class="stopstart"><button onclick="setP('run',0)">Stop</button><button class="run" onclick="setP('run',1)">Start</button></div>
       <div class="rec" id="recBar"><button id="recBtn" onclick="toggleRec()">● REC</button><span class="rs" id="recState">idle</span><a id="recDl" href="/rec/csv" target="_blank">CSV</a></div>
+      <div class="presets" id="presetBar">
+        <div class="ph">Presets</div>
+        <div class="ps" id="presetSlots"></div>
+        <button id="presetSaveMode" onclick="togglePresetSave()">Save</button>
+      </div>
       </div>
     </section>
 
@@ -300,9 +313,14 @@ function applyLabels(){
   // Werte aufbereiten mit passender Einheit.
   var s=CFG.speed||0;
   var hz=(s/(2*Math.PI)).toFixed(2); // Hz aus rt.speed (Wave timeAcc-Math)
+  var cont=CFG.cont||0, rng=CFG.range||0;
+  // Wave: Motor schwingt zwischen -peak und +peak; peak = min(|cont|,1) * range.
+  // User-Wunsch 2026-05-13: Wie weit fährt der Motor wirklich?
+  var peak=Math.min(Math.abs(cont),1)*rng;
+  var pp=peak*2;
   L('vSpeed',  isWave?(hz+' Hz'):s.toFixed(2));
-  L('vCont',   isWave?((CFG.cont*CFG.range).toFixed(0)+'°'):(CFG.cont||0).toFixed(2));
-  L('vRange',  (CFG.range||0).toFixed(0)+'°');
+  L('vCont',   isWave?('±'+peak.toFixed(0)+'° ('+pp.toFixed(0)+'° pp)'):cont.toFixed(2));
+  L('vRange',  isWave?(rng.toFixed(0)+'° max'):(rng.toFixed(0)+'°'));
   L('vFrame',  (CFG.frame||0).toFixed(3));
   L('vShape',  t===5?((50+(CFG.shape||0)*8).toFixed(0)+'%'):(CFG.shape||0).toFixed(1));
   L('vMspace', isWave?((CFG.mspace||0).toFixed(0)+'°/M'):((CFG.mspace||0).toFixed(0)+' cm'));
@@ -606,8 +624,40 @@ function toggleRec(){
 }
 function pollRec(){fetch('/rec/state').then(function(r){return r.json()}).then(applyRec).catch(function(){})}
 
+// Phase 10 H: Preset-Slots (8 × NVS via /cmd?a=savep|loadp&slot=N, /presets-State)
+var PRESETS={slots:[false,false,false,false,false,false,false,false], saveMode:false};
+function renderPresets(){
+  var ps=document.getElementById('presetSlots');if(!ps)return;
+  var h='';
+  for(var i=0;i<8;i++){
+    var f=PRESETS.slots[i];
+    h+='<button data-s="'+i+'" class="'+(f?'filled':'empty')+'">'+(i+1)+(f?'':'·')+'</button>';
+  }
+  ps.innerHTML=h;
+  ps.querySelectorAll('button').forEach(function(b){
+    b.addEventListener('click',function(){onPresetClick(b.dataset.s|0)});
+  });
+  var sb=document.getElementById('presetSaveMode');
+  if(sb)sb.className=PRESETS.saveMode?'live':'';
+}
+function loadPresets(){
+  fetch('/presets').then(function(r){return r.json()}).then(function(d){
+    if(d&&d.slots&&d.slots.length===8){PRESETS.slots=d.slots.slice();renderPresets()}
+  }).catch(function(){})
+}
+function togglePresetSave(){PRESETS.saveMode=!PRESETS.saveMode;renderPresets()}
+function onPresetClick(slot){
+  if(PRESETS.saveMode){
+    fetch('/cmd?a=savep&slot='+slot).then(function(){PRESETS.saveMode=false;loadPresets()}).catch(function(){});
+  } else {
+    if(!PRESETS.slots[slot])return; // leerer Slot: nichts laden
+    fetch('/cmd?a=loadp&slot='+slot).then(function(){loadConfig()}).catch(function(){});
+  }
+}
+
 loadConfig();
 loadBounds();
+loadPresets();
 pollRec();
 setInterval(poll,100);poll();   // 10 Hz Status-Polling
 setInterval(pollRec,2000);      // 0.5 Hz Recorder-State
