@@ -58,6 +58,7 @@ void run(uint8_t motorIdx) {
 
     uint8_t pin = HalPins::MOTORS[motorIdx].tachoPin;
     Tmc::setPower(motorIdx, true);
+    Tmc::applyDefaults(motorIdx, 800); // Sicherer Strom (Datenblatt: max 900mA)
     Stepper::setMicrosteps(motorIdx, 16);
     Logger::addLog(String("CAL M") + v4::motorName(motorIdx) + ": v4 calib (fast)"
         + (expectedWidth > 0 ? String(", fastW=") + expectedWidth
@@ -117,10 +118,11 @@ void run(uint8_t motorIdx) {
             if (millis() - ts > 6000) return false;
             if (labs(s->getCurrentPosition() - sp) > maxDelta) return false;
 
-            // Bug 51 (v4.4.15): Stall-Check via Tacho. Wenn Motor physisch
-            // steht (RPM=0) aber laut FAS laufen sollte, liegt ein Stall vor.
-            // Settle-Zeit 300ms für Anlauf beachten.
-            if (millis() - ts > 300 && millis() - lastMoveCheck > 100) {
+            // Bug 51 (v4.4.16): Stall-Check via Tacho. Bei 1-PPR-Sensor und
+            // niedriger Drehzahl (37 RPM) kommt nur alle ~1.6 s ein Puls.
+            // Der Check darf erst greifen, wenn sicher ein Puls hätte kommen
+            // müssen. Wir warten 3.0 s Puffer.
+            if (millis() - ts > 3000 && millis() - lastMoveCheck > 500) {
                 if (HalTacho::getRpm(motorIdx) == 0) {
                     Logger::addLog(String("CAL M") + v4::motorName(motorIdx) + ": physischer Stall erkannt (RPM=0)");
                     return false;

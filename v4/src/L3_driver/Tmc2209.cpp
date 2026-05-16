@@ -8,6 +8,7 @@ namespace Tmc {
 
 static TMC2209Stepper* drivers[4] = { nullptr, nullptr, nullptr, nullptr };
 static bool poweredFlags[4] = { false, false, false, false };
+static uint16_t currentMA[4] = { 0, 0, 0, 0 };
 static bool initOk = false;
 
 void init() {
@@ -53,6 +54,7 @@ void applyDefaults(uint8_t motorIdx, uint16_t runMA, uint16_t ms) {
     float hF = min(0.5f, max(0.22f, 200.0f / (float)runMA));
     d->rms_current(runMA, hF);
     d->microsteps(ms);
+    currentMA[motorIdx] = runMA;
     // v4.3.0: Hardware-Interpolation auf intern 256 µSteps.
     d->intpol(true);
     d->iholddelay(10);
@@ -66,7 +68,12 @@ void setCurrent(uint8_t motorIdx, uint16_t runMA, uint16_t holdMA) {
     if (xSemaphoreTake(Sync::uartMutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
     float hF = (float)holdMA / (float)runMA;
     d->rms_current(runMA, hF);
+    currentMA[motorIdx] = runMA;
     xSemaphoreGive(Sync::uartMutex);
+}
+
+uint16_t getRunCurrent(uint8_t motorIdx) {
+    return motorIdx < 4 ? currentMA[motorIdx] : 0;
 }
 
 void setTPWMTHRS(uint8_t motorIdx, uint32_t threshold) {

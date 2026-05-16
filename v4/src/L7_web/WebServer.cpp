@@ -511,7 +511,7 @@ function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)ret
 function appendLog(chunk){
   if(!chunk)return;
   var box=document.getElementById('log');
-  var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 20;
+  var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 50;
   var lines=chunk.split('\n');
   for(var i=0;i<lines.length;i++){
     var t=lines[i];if(!t)continue;
@@ -1054,6 +1054,10 @@ static String motorJson(uint8_t i) {
         j += String(p, 2);
         j += ",\"s\":";
         j += String(sps);
+        j += ",\"ms\":";
+        j += String(Stepper::microsteps(i));
+        j += ",\"ma\":";
+        j += String(Tmc::getRunCurrent(i));
         if (HalPins::hasSensor(i)) {
             bool hit = digitalRead(HalPins::MOTORS[i].tachoPin) == LOW;
             j += ",\"hit\":";
@@ -1430,20 +1434,24 @@ void begin() {
     });
 
     server.on("/watchdog", HTTP_GET, [](AsyncWebServerRequest* r) {
-        char buf[512];
+        char buf[1024];
         int n = 0;
         n += snprintf(buf+n, sizeof(buf)-n, "{\"motors\":[");
         for (uint8_t i = 0; i < 4; i++) {
             const auto& w = Watchdog::state[i];
+            v4::CalibrationData cal; StorageCalib::load(i, cal);
             n += snprintf(buf+n, sizeof(buf)-n,
                 "%s{\"act\":%s,\"trig\":%s,\"fault\":%u,\"err\":%u,\"settle\":%u,"
-                "\"delta\":%ld,\"period\":%lu,\"profileValid\":%s,\"profilePts\":%u}",
+                "\"delta\":%ld,\"period\":%lu,\"profileValid\":%s,\"profilePts\":%u,"
+                "\"silentMA\":[%u,%u,%u,%u,%u]}",
                 i == 0 ? "" : ",",
                 w.active ? "true":"false", w.triggered ? "true":"false",
                 w.lastFaultCode, w.errorCount, w.settleCount,
                 w.lastDeltaPerPulse, (unsigned long)(w.lastPeriodUs / 1000),
                 MotorProfileNs::profiles[i].valid ? "true":"false",
-                MotorProfileNs::profiles[i].count);
+                MotorProfileNs::profiles[i].count,
+                cal.silentCurrentMA[0], cal.silentCurrentMA[1], cal.silentCurrentMA[2],
+                cal.silentCurrentMA[3], cal.silentCurrentMA[4]);
         }
         n += snprintf(buf+n, sizeof(buf)-n, "]}");
         AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);

@@ -3,6 +3,7 @@
 #include "../../L0_platform/Types.h"
 #include "../../L1_hal/Hal_Pins.h"
 #include "../../L1_hal/Hal_Tacho.h"
+#include "../../L1_hal/Hal_Sensor.h"
 #include "../../L2_storage/Storage_Calib.h"
 #include "../../L3_driver/Stepper.h"
 #include "../../L3_driver/Tmc2209.h"

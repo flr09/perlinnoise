@@ -397,7 +397,7 @@ static void applySilentHardwareSettings(uint8_t i, float f, float rangeDeg) {
     const auto& cal = calCache[i];
     
     float rpmMax = rangeDeg * f * 1.047f; // v_peak [RPM]
-    if (rpmMax < 10.0f) rpmMax = 10.0f;   // Mindest-RPM für Kalkulation
+    if (rpmMax < 5.0f) rpmMax = 5.0f;   // Mindest-RPM für Kalkulation
     
     uint16_t bestMS = 16;
     uint16_t bestMA = cal.learnedCurrentMA > 0 ? cal.learnedCurrentMA : 800;
@@ -418,8 +418,7 @@ static void applySilentHardwareSettings(uint8_t i, float f, float rangeDeg) {
         }
     }
     
-    // Microsteps können nur geändert werden, wenn der Motor steht.
-    // In start() und bei Modus-Wechsel ist das i.d.R. gegeben.
+    // Wende an, wenn Motor steht.
     if (!s->isRunning()) {
         Stepper::setMicrosteps(i, bestMS);
         Tmc::applyDefaults(i, bestMA, bestMS);
