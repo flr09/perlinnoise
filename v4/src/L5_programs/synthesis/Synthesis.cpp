@@ -391,16 +391,17 @@ static void tickWatchdog() {
 // Wählt für die geforderte Wellenform (f, amp) das höchste Microstep-Level,
 // das (a) im Silent-Profile-Test gelernt wurde und (b) die Hardware-SPS-Grenze
 // (200kHz) nicht überschreitet.
+//
+// Hinweis (Bug 73): Dank TMC-Hardware-Interpolation (intpol=true) ist die MS-Wahl
+// primär eine CPU-Last-Optimierung (SPS-Generator), keine Smoothness-Wahl.
 static void applySilentHardwareSettings(uint8_t i, float f, float rangeDeg) {
     auto* s = Stepper::get(i);
     if (!s) return;
     const auto& cal = calCache[i];
     
     // Bug 68: Faktor pi/6 (approx 0.5236) für peak-RPM aus p-p rangeDeg.
-    // v_peak_deg_s = (rangeDeg/2) * 2 * pi * f = rangeDeg * pi * f.
-    // RPM = v_peak_deg_s / 6.
     float rpmMax = rangeDeg * f * 0.5236f; 
-    if (rpmMax < 5.0f) rpmMax = 5.0f;   // Mindest-RPM für Kalkulation
+    if (rpmMax < 5.0f) rpmMax = 5.0f;
     
     uint16_t bestMS = 16;
     uint16_t bestMA = cal.learnedCurrentMA > 0 ? cal.learnedCurrentMA : 800;
@@ -409,11 +410,7 @@ static void applySilentHardwareSettings(uint8_t i, float f, float rangeDeg) {
     for (int k = 4; k >= 0; k--) {
         uint16_t ms = msLevels[k];
         float spsMax = rpmMax * 200.0f / 60.0f * (float)ms;
-        
-        // 1. Hardware-Check: schafft der ESP32-Step-Generator diese Frequenz?
         if (spsMax > 200000.0f) continue;
-        
-        // 2. Matrix-Check: wurde für dieses MS ein sicherer Strom gelernt?
         if (cal.silentCurrentMA[k] > 0) {
             bestMS = ms;
             bestMA = cal.silentCurrentMA[k];
@@ -421,7 +418,14 @@ static void applySilentHardwareSettings(uint8_t i, float f, float rangeDeg) {
         }
     }
     
-    // Wende an, wenn Motor steht.
+    // Bug 72: Frequenz-abhängiges Strom-Scaling.
+    // Bei niedriger f braucht der Motor weniger Halte-Moment.
+    // Heuristik: 100% bei 5 Hz, runter auf 60% bei 0.01 Hz.
+    float fScale = 0.6f + 0.4f * (f / 5.0f);
+    if (fScale > 1.0f) fScale = 1.0f;
+    bestMA = (uint16_t)((float)bestMA * fScale);
+    if (bestMA < 100) bestMA = 100;
+
     if (!s->isRunning()) {
         Stepper::setMicrosteps(i, bestMS);
         Tmc::applyDefaults(i, bestMA, bestMS);

@@ -511,6 +511,7 @@ function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)ret
 function appendLog(chunk){
   if(!chunk)return;
   var box=document.getElementById('log');
+  var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 40;
   var lines=chunk.split('\n');
   for(var i=0;i<lines.length;i++){
     var t=lines[i];if(!t)continue;
@@ -522,18 +523,8 @@ function appendLog(chunk){
   }
   var limit = (box.id==='log' && typeof PRESETS !== 'undefined') ? 120 : 200;
   while(box.children.length > limit) box.removeChild(box.firstChild);
+  if(isAtBottom) box.scrollTop = box.scrollHeight;
 }
-
-// Bug 59: Nuclear Scroll Fix. Auto-scroll only if already at bottom.
-(function(){
-  var box = document.getElementById('log');
-  if(!box) return;
-  var obs = new MutationObserver(function(){
-    var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 100;
-    if(isAtBottom) box.scrollTop = box.scrollHeight;
-  });
-  obs.observe(box, {childList:true});
-})();
 
 function apply(d){
   document.getElementById('fw').textContent=d.fw||'';
