@@ -1359,13 +1359,14 @@ void begin() {
     // den aktuellen `v4::rt.offsets[]` (auch in /config / /set-Echo enthalten,
     // hier nochmal für Bounds-only-Clients).
     server.on("/bounds", HTTP_GET, [](AsyncWebServerRequest* r) {
-        // Z-Cutoff einmal laden für Fallback aller anderen Motoren.
+        AsyncResponseStream *response = r->beginResponseStream("application/json");
+        response->addHeader("Access-Control-Allow-Origin", "*");
+
         v4::CalibrationData calZ;
         StorageCalib::load(2, calZ);
-        uint16_t zCutoff = calZ.tachoCutoffHz;  // 0 falls Z auch noch ungemessen
+        uint16_t zCutoff = calZ.tachoCutoffHz;
 
-        char buf[1280];
-        int n = snprintf(buf, sizeof(buf), "{\"motors\":[");
+        response->print("{\"motors\":[");
         for (uint8_t i = 0; i < 4; i++) {
             v4::CalibrationData cal;
             StorageCalib::load(i, cal);
@@ -1373,31 +1374,26 @@ void begin() {
                 ? (uint32_t)Units::rpmToSps(i, cal.maxRpm) : 0;
             uint16_t rawCutoff = cal.tachoCutoffHz;
             uint16_t effCutoff = rawCutoff > 0 ? rawCutoff : zCutoff;
-            n += snprintf(buf + n, sizeof(buf) - n,
-                "%s{\"valid\":%s,\"maxRpm\":%.0f,\"maxAccel\":%.0f,"
+
+            if (i > 0) response->print(",");
+            response->printf("{\"valid\":%s,\"maxRpm\":%.0f,\"maxAccel\":%.0f,"
                 "\"maxSps\":%lu,\"learnedCurrentMA\":%u,\"sgThrs\":%u,"
                 "\"tachoCutoffHz\":%u,\"tachoCutoffHzEff\":%u,"
                 "\"silentMA\":[%u,%u,%u,%u,%u]}",
-                i == 0 ? "" : ",",
-                cal.valid ? "true" : "false",
-                cal.maxRpm, cal.maxAccel,
-                (unsigned long)maxSps,
-                cal.learnedCurrentMA, cal.sgThrs,
+                cal.valid ? "true" : "false", cal.maxRpm, cal.maxAccel,
+                (unsigned long)maxSps, cal.learnedCurrentMA, cal.sgThrs,
                 rawCutoff, effCutoff,
                 cal.silentCurrentMA[0], cal.silentCurrentMA[1], cal.silentCurrentMA[2],
                 cal.silentCurrentMA[3], cal.silentCurrentMA[4]);
         }
-        n += snprintf(buf + n, sizeof(buf) - n, "],\"offsets\":[");
+        response->print("],\"offsets\":[");
         for (uint8_t i = 0; i < 4; i++) {
-            n += snprintf(buf + n, sizeof(buf) - n,
-                "%s{\"x\":%.3f,\"y\":%.3f}",
-                i == 0 ? "" : ",",
+            if (i > 0) response->print(",");
+            response->printf("{\"x\":%.3f,\"y\":%.3f}",
                 v4::rt.offsets[i].x, v4::rt.offsets[i].y);
         }
-        n += snprintf(buf + n, sizeof(buf) - n, "]}");
-        AsyncWebServerResponse* res = r->beginResponse(200, "application/json", buf);
-        res->addHeader("Access-Control-Allow-Origin", "*");
-        r->send(res);
+        response->print("]}");
+        r->send(response);
     });
 
     server.on("/config", HTTP_GET, [](AsyncWebServerRequest* r) {

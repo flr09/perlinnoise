@@ -95,6 +95,7 @@ void setPower(uint8_t motorIdx, bool on) {
             d->toff(5);
             xSemaphoreGive(Sync::uartMutex);
         }
+        applyDefaults(motorIdx); // Bug 69-rev: Basis-Strom setzen um Freeze zu verhindern
         Logger::addLog(String("M") + v4::motorName(motorIdx) + ": POWER ON");
     } else {
         if (xSemaphoreTake(Sync::uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
