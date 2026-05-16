@@ -27,12 +27,23 @@ void load(uint8_t motorIdx, v4::CalibrationData& out) {
     Preferences p;
     p.begin(NS, true);
     String k = key(motorIdx);
-    if (p.getBytesLength(k.c_str()) == sizeof(v4::CalibrationData)) {
+    size_t len = p.getBytesLength(k.c_str());
+
+    if (len == sizeof(v4::CalibrationData)) {
         p.getBytes(k.c_str(), &out, sizeof(v4::CalibrationData));
         if (out.nvsVersion != SCHEMA) {
             out.valid = false;
             Logger::addLog(String("CAL load M") + v4::motorName(motorIdx) + ": stale schema");
         }
+    } else if (len == 60) {
+        // Bug 66: Migration 4004 (60 bytes) -> 4005 (68 bytes)
+        // Kopiere bis tachoCutoffHz (Offset 54), danach kam in v4004 das Padding + Version.
+        uint8_t buf[80];
+        p.getBytes(k.c_str(), buf, len);
+        memcpy(&out, buf, 54); 
+        memset(out.silentCurrentMA, 0, sizeof(out.silentCurrentMA));
+        out.nvsVersion = SCHEMA;
+        Logger::addLog(String("CAL load M") + v4::motorName(motorIdx) + ": migrated 4004->4005");
     } else {
         out.valid = false;
     }

@@ -396,7 +396,10 @@ static void applySilentHardwareSettings(uint8_t i, float f, float rangeDeg) {
     if (!s) return;
     const auto& cal = calCache[i];
     
-    float rpmMax = rangeDeg * f * 1.047f; // v_peak [RPM]
+    // Bug 68: Faktor pi/6 (approx 0.5236) für peak-RPM aus p-p rangeDeg.
+    // v_peak_deg_s = (rangeDeg/2) * 2 * pi * f = rangeDeg * pi * f.
+    // RPM = v_peak_deg_s / 6.
+    float rpmMax = rangeDeg * f * 0.5236f; 
     if (rpmMax < 5.0f) rpmMax = 5.0f;   // Mindest-RPM für Kalkulation
     
     uint16_t bestMS = 16;

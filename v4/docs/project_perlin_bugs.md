@@ -30,3 +30,15 @@ Quellen: dieser Eintrag · `AGENT_COORDINATION.md` Lessons · `v4/docs/FSD.md` �
 | 63 | 2026-05-16 | 🔴 | **cmd() String Index Bug:** JS-Fehler in INDEX_HTML behandelte Motor-ID als String, was 'XYZE'[m] zu undefined machte. | ✅ v4.4.15 |
 | 60 | 2026-05-15 | 🔴 | **FreqSweep Deadlock:** Bisektion triggert Re-Sync bei winzigen Amps. | ✅ v4.4.15 (Amplitude-Guard > 30 steps) |
 | 61 | 2026-05-15 | 🟡 | **Log-Artefakte (Bug 55):** Pfadnamen im Log statt Zahlen. | ✅ v4.4.8 (verschwunden durch Recorder Heap-Fix) |
+| 55 | 2026-05-16 | 🟣 | **Adaptiver Min-Strom Matrix MS=[16,32,64,128,256]:** Player-Strom dynamisch nach Frequenz/Range/µStep, gegen StealthChop-Pfeifen bei Überstrom. | ✅ v4.4.15 — Schema 4005 (`silentCurrentMA[5]` in CalibrationData), `runSilentProfileTest` (Show 8/9) misst Mindeststrom pro µStep mit 10 % Headroom, `applySilentHardwareSettings` in Synthesis wählt MS/MA aus rpmMax + Matrix-Lookup. `Tmc::applyDefaults(idx, runMA, ms)` neue Signatur + `setCurrent`/`getRunCurrent`. |
+| 64 | 2026-05-16 | 🔴 | **UI signalisiert nicht wenn Synth-Interlock blockiert.** | ✅ v4.4.18 (Synchroner 409-Check im WebServer) |
+| 59 | 2026-05-15 | 🟡 | Log-Scrolling: User-Report „greift in v4.4.15 weiter nicht". | 🔴 re-open, unverifiziert. |
+| 65 | — | — | siehe Bug 64 — gleicher Code-Pfad und Fix | merged into 64 |
+| 66 | 2026-05-16 | 🔴 | **NVS-Schema-Migration 4004→4005 verliert Daten.** | ✅ v4.4.18 (Migration in `load` implementiert) |
+| 67 | 2026-05-16 | 🟡 | **Mode-Switch wendet Silent-Matrix nie an (toter Code).** | 🔴 offen |
+| 68 | 2026-05-16 | 🟡 | **v_peak-Formel: Faktor 1.047 = π/3 statt π/6 = 0.524.** | ✅ v4.4.18 (Faktor korrigiert) |
+| 69 | 2026-05-16 | 🟡 | **Strukturelle Race: setPower→applyDefaults(MS=64) dann applySilentHardwareSettings(MS=16).** | ✅ v4.4.18 (applyDefaults aus setPower entfernt) |
+| 70 | 2026-05-16 | 🟡 | **`silentCurrentMA[]` nur in /watchdog exponiert, nicht in /bounds.** | 🔴 offen |
+| 71 | 2026-05-16 | 🟡 | **Fallback-Strom 800 mA hardcoded.** | 🔴 offen |
+| 72 | 2026-05-16 | 🟣 | **Silent-Matrix ignoriert f-Achse — Strom konstant pro MS, unabhängig von Drehzahl.** | 🟣 Backlog |
+| 73 | 2026-05-16 | 🔵 | **Datasheet-Insight: `intpol(true)` macht externes MS smoothness-irrelevant.** | 🔵 noted |

@@ -511,7 +511,6 @@ function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)ret
 function appendLog(chunk){
   if(!chunk)return;
   var box=document.getElementById('log');
-  var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 50;
   var lines=chunk.split('\n');
   for(var i=0;i<lines.length;i++){
     var t=lines[i];if(!t)continue;
@@ -523,8 +522,18 @@ function appendLog(chunk){
   }
   var limit = (box.id==='log' && typeof PRESETS !== 'undefined') ? 120 : 200;
   while(box.children.length > limit) box.removeChild(box.firstChild);
-  if(isAtBottom) box.scrollTop = box.scrollHeight;
 }
+
+// Bug 59: Nuclear Scroll Fix. Auto-scroll only if already at bottom.
+(function(){
+  var box = document.getElementById('log');
+  if(!box) return;
+  var obs = new MutationObserver(function(){
+    var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 100;
+    if(isAtBottom) box.scrollTop = box.scrollHeight;
+  });
+  obs.observe(box, {childList:true});
+})();
 
 function apply(d){
   document.getElementById('fw').textContent=d.fw||'';
@@ -998,7 +1007,6 @@ function renderWd(W){
 function appendLog(chunk){
   if(!chunk)return;
   var box=document.getElementById('log');
-  var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 20;
   var lines=chunk.split('\n');
   for(var i=0;i<lines.length;i++){
     var t=lines[i];if(!t)continue;
@@ -1009,8 +1017,18 @@ function appendLog(chunk){
     box.appendChild(row);
   }
   while(box.children.length>200)box.removeChild(box.firstChild);
-  if(isAtBottom) box.scrollTop=box.scrollHeight;
 }
+
+// Bug 59: Nuclear Scroll Fix. Auto-scroll only if already at bottom.
+(function(){
+  var box = document.getElementById('log');
+  if(!box) return;
+  var obs = new MutationObserver(function(){
+    var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 100;
+    if(isAtBottom) box.scrollTop = box.scrollHeight;
+  });
+  obs.observe(box, {childList:true});
+})();
 
 function pollStatus(){
   fetch('/status').then(function(r){return r.json()}).then(function(d){
@@ -1140,6 +1158,9 @@ void begin() {
         }
 
         if (Op::isBusy()) { r->send(409, "text/plain", "BUSY"); return; }
+
+        // Bug 64: Synchroner Check auf aktive Synthese.
+        if (v4::rt.running) { r->send(409, "text/plain", "BUSY: Synth läuft"); return; }
 
         if (a == "setzero") { Op::requestSetZero(m); r->send(200, "text/plain", "OK"); return; }
         if (a == "home") {
@@ -1352,7 +1373,7 @@ void begin() {
         StorageCalib::load(2, calZ);
         uint16_t zCutoff = calZ.tachoCutoffHz;  // 0 falls Z auch noch ungemessen
 
-        char buf[896];
+        char buf[1280];
         int n = snprintf(buf, sizeof(buf), "{\"motors\":[");
         for (uint8_t i = 0; i < 4; i++) {
             v4::CalibrationData cal;
@@ -1364,13 +1385,16 @@ void begin() {
             n += snprintf(buf + n, sizeof(buf) - n,
                 "%s{\"valid\":%s,\"maxRpm\":%.0f,\"maxAccel\":%.0f,"
                 "\"maxSps\":%lu,\"learnedCurrentMA\":%u,\"sgThrs\":%u,"
-                "\"tachoCutoffHz\":%u,\"tachoCutoffHzEff\":%u}",
+                "\"tachoCutoffHz\":%u,\"tachoCutoffHzEff\":%u,"
+                "\"silentMA\":[%u,%u,%u,%u,%u]}",
                 i == 0 ? "" : ",",
                 cal.valid ? "true" : "false",
                 cal.maxRpm, cal.maxAccel,
                 (unsigned long)maxSps,
                 cal.learnedCurrentMA, cal.sgThrs,
-                rawCutoff, effCutoff);
+                rawCutoff, effCutoff,
+                cal.silentCurrentMA[0], cal.silentCurrentMA[1], cal.silentCurrentMA[2],
+                cal.silentCurrentMA[3], cal.silentCurrentMA[4]);
         }
         n += snprintf(buf + n, sizeof(buf) - n, "],\"offsets\":[");
         for (uint8_t i = 0; i < 4; i++) {
