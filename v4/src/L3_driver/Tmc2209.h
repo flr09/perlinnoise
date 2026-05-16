@@ -16,7 +16,8 @@ void init();   // alle 4 Treiber + UART-Bus + ENABLE-Pin
 bool ready();  // global init ok?
 TMC2209Stepper* driver(uint8_t motorIdx);  // null wenn nicht init oder out-of-range
 
-void applyDefaults(uint8_t motorIdx, uint16_t runMA = 800);
+void applyDefaults(uint8_t motorIdx, uint16_t runMA = 800, uint16_t ms = 64);
+void setCurrent(uint8_t motorIdx, uint16_t runMA, uint16_t holdMA);
 void setPower(uint8_t motorIdx, bool on);
 bool isPowered(uint8_t motorIdx);
 void setAllPower(bool on);  // gemeinsamer ENABLE-Pin schaltet alle gleichzeitig

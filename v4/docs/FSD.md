@@ -37,5 +37,17 @@
 - T10.1.2 0.5 Hz Square-Wave über 60s ohne WD-Trigger.
 - T10.1.3 Calib nach Player-Stopp (verifiziert µStep-Umschaltung).
 
----
-*(Rest der FSD bleibt unverändert)*
+### Phase 10.2 — Silent Mode Optimization (v4.4.16)
+
+**Ziel:** Maximale Laufruhe und Präzision bei allen Bewegungsgeschwindigkeiten durch dynamische Hardware-Settings.
+
+**Implementierung:**
+1.  **Silent-Matrix:** Neue Datenstruktur `silentCurrentMA[5]` für Microstep-Level [16, 32, 64, 128, 256].
+2.  **Silent-Parcours:** `runSilentProfileTest` ermittelt den Mindeststrom pro MS-Level bei langsamer Fahrt über den Sensor.
+3.  **Dynamisches Scaling:** Die Engine (`Synthesis`) berechnet bei jedem Start/Wechsel die Peak-RPM und wählt das höchste gelernt MS-Level, das das ESP32-SPS-Limit (200kHz) nicht überschreitet.
+
+**Deliverables:**
+- Firmware v4.4.16
+- Automatisches High-Res-Switching (bis 256 MS) bei langsamen Wellen (z.B. 0.01 Hz).
+
+### Phase 11 Plan — Sequencer (v4.5.0) — geplant

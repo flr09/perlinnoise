@@ -387,18 +387,64 @@ static void tickWatchdog() {
     lastWdSnapshotMs = now;
 }
 
+// Phase 10.2: Dynamischer Silent-Mode (Matrix-basiert).
+// Wählt für die geforderte Wellenform (f, amp) das höchste Microstep-Level,
+// das (a) im Silent-Profile-Test gelernt wurde und (b) die Hardware-SPS-Grenze
+// (200kHz) nicht überschreitet.
+static void applySilentHardwareSettings(uint8_t i, float f, float rangeDeg) {
+    auto* s = Stepper::get(i);
+    if (!s) return;
+    const auto& cal = calCache[i];
+    
+    float rpmMax = rangeDeg * f * 1.047f; // v_peak [RPM]
+    if (rpmMax < 10.0f) rpmMax = 10.0f;   // Mindest-RPM für Kalkulation
+    
+    uint16_t bestMS = 16;
+    uint16_t bestMA = cal.learnedCurrentMA > 0 ? cal.learnedCurrentMA : 800;
+    
+    uint16_t msLevels[] = {16, 32, 64, 128, 256};
+    for (int k = 4; k >= 0; k--) {
+        uint16_t ms = msLevels[k];
+        float spsMax = rpmMax * 200.0f / 60.0f * (float)ms;
+        
+        // 1. Hardware-Check: schafft der ESP32-Step-Generator diese Frequenz?
+        if (spsMax > 200000.0f) continue;
+        
+        // 2. Matrix-Check: wurde für dieses MS ein sicherer Strom gelernt?
+        if (cal.silentCurrentMA[k] > 0) {
+            bestMS = ms;
+            bestMA = cal.silentCurrentMA[k];
+            break;
+        }
+    }
+    
+    // Microsteps können nur geändert werden, wenn der Motor steht.
+    // In start() und bei Modus-Wechsel ist das i.d.R. gegeben.
+    if (!s->isRunning()) {
+        Stepper::setMicrosteps(i, bestMS);
+        Tmc::applyDefaults(i, bestMA, bestMS);
+    }
+}
+
 void start() {
     if (v4::rt.running) return;
     unsigned long now = millis();
     bool stepMode = (v4::rt.moveType == 6);
     bool waveMode = (v4::rt.moveType >= 3 && v4::rt.moveType <= 5);
+
+    float effSpeed    = v4::rt.speed * 1.0f; // dynSpeed=1.0 am Anfang
+    float effRangeDeg = v4::rt.rangeDeg * 1.0f;
+    float f = effSpeed / (2.0f * (float)M_PI);
+
     for (uint8_t i = 0; i < 4; i++) {
         Tmc::setPower(i, true);
-        Stepper::setMicrosteps(i, 16);
         // NVS-Grenzen cachen
         StorageCalib::load(i, calCache[i]);
+        
+        applySilentHardwareSettings(i, f, effRangeDeg);
         applyEngineCap(i, stepMode, waveMode);
         applyChopperMode(i, v4::rt.moveType);
+        
         stepState[i] = StepState();
         stepState[i].holdStartMs = now;
     }
@@ -433,7 +479,11 @@ void tick() {
     if (v4::rt.moveType != lastMoveType) {
         bool stepMode = (v4::rt.moveType == 6);
         bool waveMode = (v4::rt.moveType >= 3 && v4::rt.moveType <= 5);
+        float f = (v4::rt.speed * dynSpeed()) / (2.0f * (float)M_PI);
+        float range = v4::rt.rangeDeg * dynRange();
+
         for (uint8_t i = 0; i < 4; i++) {
+            applySilentHardwareSettings(i, f, range);
             applyEngineCap(i, stepMode, waveMode);
             applyChopperMode(i, v4::rt.moveType);
         }

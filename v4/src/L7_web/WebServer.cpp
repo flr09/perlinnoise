@@ -894,6 +894,7 @@ html,body{background:var(--pa);color:var(--ink);font:14px/1.4 -apple-system,Blin
             <option value="5">Current Sweep HiRPM</option>
             <option value="6">Tacho Cutoff</option>
             <option value="7">Profile Learn</option>
+            <option value="8">Silent Profile</option>
           </select></div>
         <div class="runs"><button onclick="runTest()" class="go">Run</button><button onclick="cmd('show',getMotor())">Performance Show</button></div>
       </div>

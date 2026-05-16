@@ -797,43 +797,106 @@ void runProfileTest(uint8_t i) {
     resetMotorState(i, false);
 }
 
+// --- 9) SilentProfile: Mindeststrom pro Microstep-Level lernen ---
+// Matrix-Suche für MS=[16, 32, 64, 128, 256]. Pro Level wird der Strom
+// von 900mA abwärts gesenkt, bis bei einer langsamen Rev-Bewegung Schrittverlust
+// auftritt. Ergebnis + 10% Headroom landet in cal.silentCurrentMA[].
+void runSilentProfileTest(uint8_t i) {
+    if (i >= 4) return;
+    v4::CalibrationData cal; StorageCalib::load(i, cal);
+    if (!cal.valid) { Logger::addLog("Silent: nicht kalibriert"); return; }
+    if (!HalPins::hasSensor(i)) { Logger::addLog("Silent: kein Sensor"); return; }
+    Tmc::setPower(i, true);
+    auto* s = Stepper::get(i);
+    if (!s) return;
+    Logger::addLog(String("M") + v4::motorName(i) + ": Silent Profile Learn");
+
+    uint16_t msLevels[] = {16, 32, 64, 128, 256};
+    for (int k = 0; k < 5 && !Op::pendingStop; k++) {
+        uint16_t ms = msLevels[k];
+        Stepper::setMicrosteps(i, ms);
+        
+        uint16_t lastGoodMA = 0;
+        for (uint16_t mA = 900; mA >= 100 && !Op::pendingStop; mA -= 50) {
+            Tmc::setCurrent(i, mA, mA/2);
+            delay(100);
+
+            // Test-Bewegung: 1 Umdrehung vor und zurück (langsam: 50 RPM)
+            s->setSpeedInHz((uint32_t)Units::rpmToSps(i, 50));
+            s->setAcceleration(1000);
+            Motion::moveToDeg(i, 360.0f);
+            if (!waitOrStop(i, 10000)) break;
+            Motion::moveToDeg(i, 0.0f);
+            if (!waitOrStop(i, 10000)) break;
+
+            // Check ob wir wirklich am Sensor stehen
+            delay(200);
+            if (HalSensor::checkStable(HalPins::MOTORS[i].tachoPin, LOW, 5)) {
+                lastGoodMA = mA;
+                Logger::addLog(String("SILENT MS=") + ms + " mA=" + mA + " OK");
+            } else {
+                Logger::addLog(String("SILENT MS=") + ms + " mA=" + mA + " STALL");
+                break;
+            }
+        }
+        
+        if (lastGoodMA > 0) {
+            cal.silentCurrentMA[k] = (uint16_t)(lastGoodMA * 1.1f);
+            if (cal.silentCurrentMA[k] > MOTOR_CURRENT_HARD_MAX) cal.silentCurrentMA[k] = MOTOR_CURRENT_HARD_MAX;
+        }
+        
+        Homing::run(i);
+        Motion::moveToDeg(i, 0.0f);
+        waitOrStop(i, 5000);
+    }
+    
+    StorageCalib::save(i, cal);
+    Logger::addLog("Silent Profile: saved");
+    resetMotorState(i, false);
+}
+
 // Performance Show: alle Tests in sinnvoller Reihenfolge.
 // 1. SgLearn (Threshold lernen) → 2. SpeedTest (Top-RPM) → 3. InertiaTest
 // (Top-Acc) → 4. ProfileLearn (Watchdog-Antizipation) → 5. Katapult (3 Bursts)
-// → 6. CurrentSweep (Sweet-Spot) → 7. CoastTest (Auslauf) → 8. FreqSweep.
+// → 6. CurrentSweep (Sweet-Spot) → 7. CoastTest (Auslauf) → 8. FreqSweep
+// → 9. SilentProfile.
 void runPerformanceShow(uint8_t i) {
     Logger::addLog("Vorführung Start");
 
-    Logger::addLog("Show 1/8: SG-Learn");
+    Logger::addLog("Show 1/9: SG-Learn");
     runSgLearn(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 2/8: SpeedTest");
+    Logger::addLog("Show 2/9: SpeedTest");
     runSpeedTest(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 3/8: Inertia");
+    Logger::addLog("Show 3/9: Inertia");
     runInertiaTest(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 4/8: ProfileLearn");
+    Logger::addLog("Show 4/9: ProfileLearn");
     runProfileTest(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 5/8: Katapult");
+    Logger::addLog("Show 5/9: Katapult");
     runKatapult(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 6/8: CurrentSweep");
+    Logger::addLog("Show 6/9: CurrentSweep");
     runCurrentSweepHiRPM(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 7/8: Coast");
+    Logger::addLog("Show 7/9: Coast");
     runCoastTest(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 8/8: FreqSweep");
+    Logger::addLog("Show 8/9: FreqSweep");
     runFreqSweep(i);
+    if (Op::pendingStop) return;
+
+    Logger::addLog("Show 9/9: SilentProfile");
+    runSilentProfileTest(i);
 
     Logger::addLog("Vorführung Ende");
 }

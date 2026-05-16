@@ -91,8 +91,8 @@ struct CalibrationData {
     uint8_t  _pad[1]          = {0};     // explizites Padding für stable layout
     uint16_t fastWidthSteps   = 0;       // P1+P2-Zungenbreite (16 MS), 0=unbekannt
     uint16_t tachoCutoffHz    = 0;       // v4004: f_c [Hz], 0=noch nicht gemessen
-    uint16_t _pad2            = 0;       // Alignment für nvsVersion
-    uint32_t nvsVersion       = 4004;    // v4004 Schema (FreqSweep-v3 Phase A)
+    uint16_t silentCurrentMA[5] = {0,0,0,0,0}; // v4005: min Current [mA] für MS=[16,32,64,128,256]
+    uint32_t nvsVersion       = 4005;    // v4005 Schema (Silent Mode Matrix)
 };
 
 } // namespace v4

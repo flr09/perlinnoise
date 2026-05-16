@@ -46,21 +46,26 @@ TMC2209Stepper* driver(uint8_t motorIdx) {
     return drivers[motorIdx];
 }
 
-void applyDefaults(uint8_t motorIdx, uint16_t runMA) {
+void applyDefaults(uint8_t motorIdx, uint16_t runMA, uint16_t ms) {
     auto* d = driver(motorIdx);
     if (!d) return;
     if (xSemaphoreTake(Sync::uartMutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
     float hF = min(0.5f, max(0.22f, 200.0f / (float)runMA));
     d->rms_current(runMA, hF);
-    d->microsteps(64);
-    // v4.3.0: Hardware-Interpolation auf intern 256 µSteps. Externe STEP-Pulse
-    // (vom FastAccelStepper bei microsteps=64) werden vom TMC2209 intern auf
-    // 256 µSteps interpoliert. Vorteil: extrem glatte Bewegung bei langsamen
-    // Drehzahlen (Lichtinstallation, Sinus) ohne CPU-Last für FAS. Bei
-    // schnellen Bewegungen verhalten sich die externen Steps unverändert.
+    d->microsteps(ms);
+    // v4.3.0: Hardware-Interpolation auf intern 256 µSteps.
     d->intpol(true);
     d->iholddelay(10);
     d->pwm_autoscale(true);
+    xSemaphoreGive(Sync::uartMutex);
+}
+
+void setCurrent(uint8_t motorIdx, uint16_t runMA, uint16_t holdMA) {
+    auto* d = driver(motorIdx);
+    if (!d) return;
+    if (xSemaphoreTake(Sync::uartMutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
+    float hF = (float)holdMA / (float)runMA;
+    d->rms_current(runMA, hF);
     xSemaphoreGive(Sync::uartMutex);
 }
 
