@@ -107,19 +107,44 @@ void recordEvent(uint8_t motorIdx, const char* phase, float val) {
     portEXIT_CRITICAL(&Sync::motorMux);
 }
 
-String getCsv() {
+// Bug 56 (v4.4.11): Chunked Streaming statt 52-KB-Single-Alloc-Kopie.
+// Vorher: `String c = csvBuffer;` unter Spinlock — Heap-Alloc + memcpy von
+// bis zu 52 KB im Spinlock-CS (Memory #644, gleiches Pattern wie Bug 46
+// bei Recorder). Jetzt: 256-Byte-Chunks unter kurzer CS, write außerhalb.
+// totalLen wird einmal am Anfang snapshotted — neue Appends während des
+// Streamings landen in der nächsten /telemetry-Anfrage. Append-Pfade
+// (recordDataPoint/recordEvent) bleiben vorerst unverändert — geringere
+// Frequenz (50 ms-Throttle) und kleinere Operationen als der Bulk-Copy.
+void streamCsv(AsyncResponseStream* res) {
+    if (!res) return;
+    size_t totalLen;
     portENTER_CRITICAL(&Sync::motorMux);
-    String c = csvBuffer;
+    totalLen = csvBuffer.length();
     portEXIT_CRITICAL(&Sync::motorMux);
-    return c;
+
+    char chunk[256];
+    size_t offset = 0;
+    while (offset < totalLen) {
+        size_t copyLen;
+        portENTER_CRITICAL(&Sync::motorMux);
+        size_t curLen = csvBuffer.length();
+        if (offset >= curLen) { portEXIT_CRITICAL(&Sync::motorMux); break; }
+        copyLen = (totalLen - offset > sizeof(chunk)) ? sizeof(chunk) : (totalLen - offset);
+        if (offset + copyLen > curLen) copyLen = curLen - offset;
+        memcpy(chunk, csvBuffer.c_str() + offset, copyLen);
+        portEXIT_CRITICAL(&Sync::motorMux);
+        if (copyLen == 0) break;
+        res->write((const uint8_t*)chunk, copyLen);
+        offset += copyLen;
+    }
 }
 
 void registerHandlers(AsyncWebServer& server) {
     server.on("/telemetry", HTTP_GET, [](AsyncWebServerRequest* r){
-        String csv = getCsv();
-        AsyncWebServerResponse* res = r->beginResponse(200, "text/csv", csv);
+        AsyncResponseStream* res = r->beginResponseStream("text/csv");
         res->addHeader("Content-Disposition", "attachment; filename=\"parcour.csv\"");
         res->addHeader("Access-Control-Allow-Origin", "*");
+        streamCsv(res);
         r->send(res);
     });
 }

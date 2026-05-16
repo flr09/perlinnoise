@@ -8,6 +8,15 @@
 
 namespace v4 {
 
+// Bug 48 (v4.4.11): Motor-Name-Helper. Vorher `(char)('X' + idx)` an 20
+// Stellen → für idx=3 (E-Motor) kommt `'['` raus (ASCII X+3). Diese Helper-
+// Funktion gibt den korrekten Namen 'X','Y','Z','E' zurück. NVS-Keys in
+// Storage_Calib.cpp:11 + MotorProfile.cpp:11 sind bewusst NICHT umgestellt
+// (würde `m[`→`mE` umbenennen, alte E-Daten unsichtbar machen).
+inline constexpr char motorName(uint8_t i) {
+    return (i == 0) ? 'X' : (i == 1) ? 'Y' : (i == 2) ? 'Z' : (i == 3) ? 'E' : '?';
+}
+
 // --- Räumliche 2D-Position (Phase 10) ---
 //
 // Wird für `RuntimeConfig.offsets[4]` benutzt: pro Motor eine (x,y)-Position

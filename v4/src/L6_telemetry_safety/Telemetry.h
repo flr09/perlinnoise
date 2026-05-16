@@ -15,7 +15,9 @@ void recordDataPoint(uint8_t motorIdx, const char* phase, float val);
 // recordEvent: wie recordDataPoint, aber OHNE 50ms-Throttle. Für seltene
 // Marker (Cal-Phasen, Test-Stages), die nicht verloren gehen dürfen.
 void recordEvent(uint8_t motorIdx, const char* phase, float val);
-String getCsv();
+// Bug 56 (v4.4.11): Streaming-API statt String-Kopie — kein 52-KB-Single-
+// Alloc-Crash mehr. Spinlock-CS auf 256-Byte-Chunks reduziert.
+void streamCsv(AsyncResponseStream* res);
 void registerHandlers(AsyncWebServer& server);
 
 uint16_t getLatestSg(uint8_t motorIdx);

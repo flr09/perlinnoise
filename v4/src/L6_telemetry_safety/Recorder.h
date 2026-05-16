@@ -32,8 +32,10 @@ uint32_t startedAtMs();  // millis() bei start(), 0 wenn idle
 // schreibt nur alle INTERVAL_MS einen Sample. No-op wenn nicht recording.
 void tick(float flightX, float flightY, const float posDeg[4]);
 
-// CSV-Ausgabe, Reihenfolge älteste→neueste Sample.
-String getCsv();
+// CSV-Ausgabe in einen AsyncResponseStream (Reihenfolge älteste→neueste).
+// Streamt zeilenweise — keine 38-KB-Single-Allocation, kein Spinlock über
+// Heap-Operationen (Bug 46/47, v4.4.8).
+void streamCsv(AsyncResponseStream* res);
 
 void registerHandlers(AsyncWebServer& server);
 

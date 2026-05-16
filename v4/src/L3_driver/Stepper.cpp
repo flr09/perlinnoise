@@ -3,6 +3,7 @@
 #include "../L0_platform/Sync.h"
 #include "../L0_platform/Logger.h"
 #include "../L1_hal/Hal_Pins.h"
+#include "../L0_platform/Types.h"
 
 namespace Stepper {
 
@@ -20,7 +21,7 @@ void init() {
             steppers[i]->setEnablePin(HalPins::ENABLE_PIN, true);
             steppers[i]->setAutoEnable(false);
         } else {
-            Logger::addLog(String("FAS: M") + (char)('X' + i) + " connect failed");
+            Logger::addLog(String("FAS: M") + v4::motorName(i) + " connect failed");
         }
     }
     Logger::addLog("FAS: 4x stepper engines ready");

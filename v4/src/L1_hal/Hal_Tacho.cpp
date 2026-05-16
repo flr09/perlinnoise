@@ -2,6 +2,7 @@
 #include "Hal_Pins.h"
 #include "../L0_platform/Sync.h"
 #include "../L0_platform/Logger.h"
+#include "../L0_platform/Types.h"
 
 namespace HalTacho {
 
@@ -46,7 +47,7 @@ void reattach() {
         } else {
             pinMode(pin, INPUT_PULLUP);
         }
-        Logger::addLog(String("TACHO M") + (char)('X'+i) + ": pin " + pin + " (poll-1kHz)");
+        Logger::addLog(String("TACHO M") + v4::motorName(i) + ": pin " + pin + " (poll-1kHz)");
     }
 }
 

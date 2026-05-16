@@ -42,7 +42,7 @@ static bool searchSensorOneDir(uint8_t motorIdx, uint8_t pin, int dir, float max
 
 void run(uint8_t motorIdx) {
     if (!HalPins::hasSensor(motorIdx)) {
-        Logger::addLog(String("HOME M") + (char)('X' + motorIdx) + ": kein Sensor — bitte SetZero");
+        Logger::addLog(String("HOME M") + v4::motorName(motorIdx) + ": kein Sensor — bitte SetZero");
         return;
     }
     auto* s = Stepper::get(motorIdx);
@@ -51,7 +51,7 @@ void run(uint8_t motorIdx) {
 
     Tmc::setPower(motorIdx, true);
     Stepper::setMicrosteps(motorIdx, 16);
-    Logger::addLog(String("HOME M") + (char)('X' + motorIdx) + ": v4 robust");
+    Logger::addLog(String("HOME M") + v4::motorName(motorIdx) + ": v4 robust");
     s->setAcceleration(2000);
 
     // Bug-ID 28: zwei-Richtungen-Suche. Erst CW max 1.5 rev, bei Miss CCW

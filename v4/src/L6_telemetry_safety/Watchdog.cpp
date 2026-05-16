@@ -108,7 +108,7 @@ static void tickMotor(uint8_t i) {
                 state[i].triggered = true;
                 state[i].active    = false;
                 Op::pendingStop = true;
-                Logger::addLog(String("WD M") + (char)('X'+i) + " FAULT 0b" +
+                Logger::addLog(String("WD M") + v4::motorName(i) + " FAULT 0b" +
                                String(faultCode, BIN) + " d=" + deltaPerPulse + " p=" + (periodUs/1000) + "ms");
             }
         }
@@ -120,7 +120,7 @@ static void tickMotor(uint8_t i) {
             state[i].active = true;
             state[i].triggered = false;
             lastArmedRpm[i] = rpm;
-            Logger::addLog(String("WD M") + (char)('X'+i) + " armed @" + (int)rpm + "rpm");
+            Logger::addLog(String("WD M") + v4::motorName(i) + " armed @" + (int)rpm + "rpm");
         }
     }
 }

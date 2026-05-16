@@ -160,6 +160,7 @@ html,body{background:var(--pa);color:var(--ink);
 .dot.on{background:var(--red);border-color:var(--red)}
 .dot.off{background:transparent;border-color:var(--ink)}
 .dot.na{background:transparent;border:1.5px dashed var(--mute)}
+.dot.hit{background:#4caf50;border-color:#4caf50}
 .mc .name{font-size:18px;font-weight:800;letter-spacing:.04em}
 .mc .st{margin-left:auto;font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:var(--mute)}
 .mc .st.on{color:var(--red)}
@@ -330,8 +331,22 @@ var CFG={type:0, offsets:[[-1,1],[1,1],[1,-1],[-1,-1]], posDeg:[0,0,0,0],
 var LIVE={motorP:[0,0,0,0]};
 var TACHO_HZ=[31,31,31,31]; // eff aus /bounds, Z-Fallback
 
-function cmd(a,m){fetch('/cmd?a='+a+(m!=null?'&m='+m:'')).catch(function(){})}
-function setP(k,v){fetch('/set?'+k+'='+v).then(function(r){return r.json()}).then(applyConfig).catch(function(){})}
+function cmd(a,m){
+  m=m==null?null:m|0;
+  var lbl=a+(m!=null?' M·'+'XYZE'[m]:'');
+  appendLog('→ '+lbl);
+  fetch('/cmd?a='+a+(m!=null?'&m='+m:''))
+    .then(function(r){return r.text().then(function(t){
+      appendLog((r.ok?'✓ ':'✗ HTTP '+r.status+' ')+lbl+(t?': '+t:''));
+    })})
+    .catch(function(){appendLog('✗ '+lbl+': network')});
+}
+function setP(k,v){
+  fetch('/set?'+k+'='+v).then(function(r){return r.json()}).then(function(c){
+    applyConfig(c);
+    if(k==='speed'||k==='range'||k==='type')applyWaveCoupling();
+  }).catch(function(){});
+}
 
 // Phase 10 E: kontextsensitive Labels + Live-Wert-Anzeigen je nach moveType.
 function applyLabels(){
@@ -339,20 +354,20 @@ function applyLabels(){
   var isWave=(t>=3&&t<=5), isNoise=(t<=2), isCoord=(t===8);
   var L=function(id,txt){var e=document.getElementById(id);if(e)e.textContent=txt};
   L('lblSpeed', isWave?'Frequenz':(isNoise?'Flug-Tempo':(isCoord?'(inaktiv)':'Speed')));
-  L('lblCont',  isWave?'Amplitude':(isNoise?'Kontrast':(isCoord?'(inaktiv)':'Contrast')));
+  // Bug 54: Contrast ist in Wave-Modi engine-seitig stumm — Label/Anzeige
+  // spiegeln das. Im Noise weiter „Kontrast" (echte Funktion).
+  L('lblCont',  isWave?'Contrast (stumm)':(isNoise?'Kontrast':(isCoord?'(inaktiv)':'Contrast')));
   L('lblMspace',isWave?'Phasenversatz':(isNoise?'Motor-Abstand':(isCoord?'(inaktiv)':'Spacing')));
   L('lblShape', t===5?'Duty Cycle':(t===4?'Steigung':(t===3?'Form':'Shape')));
   // Werte aufbereiten mit passender Einheit.
   var s=CFG.speed||0;
   var hz=(s/(2*Math.PI)).toFixed(2); // Hz aus rt.speed (Wave timeAcc-Math)
   var cont=CFG.cont||0, rng=CFG.range||0;
-  // Wave: Motor schwingt zwischen -peak und +peak; peak = min(|cont|,1) * range.
-  // User-Wunsch 2026-05-13: Wie weit fährt der Motor wirklich?
-  var peak=Math.min(Math.abs(cont),1)*rng;
-  var pp=peak*2;
+  // Bug 54: Wave-Peak ist range/2 (contrast hat keine Wirkung). Noise-Anzeige
+  // bleibt cont-numerisch wie gewohnt.
   L('vSpeed',  isWave?(hz+' Hz'):s.toFixed(2));
-  L('vCont',   isWave?('±'+peak.toFixed(0)+'° ('+pp.toFixed(0)+'° pp)'):cont.toFixed(2));
-  L('vRange',  isWave?(rng.toFixed(0)+'° max'):(rng.toFixed(0)+'°'));
+  L('vCont',   isWave?'—':cont.toFixed(2));
+  L('vRange',  isWave?('±'+(rng/2).toFixed(0)+'° ('+rng.toFixed(0)+'° pp)'):(rng.toFixed(0)+'°'));
   L('vFrame',  (CFG.frame||0).toFixed(3));
   L('vShape',  t===5?((50+(CFG.shape||0)*8).toFixed(0)+'%'):(CFG.shape||0).toFixed(1));
   L('vMspace', isWave?((CFG.mspace||0).toFixed(0)+'°/M'):((CFG.mspace||0).toFixed(0)+' cm'));
@@ -376,7 +391,10 @@ function applyConfig(c){
   applyLabels();
   updateCompass();
 }
-function dotCls(e){return e===true?'on':e===false?'off':'na'}
+// Bug 50 (v4.4.11): Dot signalisiert hit-State zusätzlich zu Power.
+// Vorher änderte sich Text „HIT" in Sensor-Spalte → Spaltenbreite-Sprung.
+// Jetzt: grüner Dot vor Motor-Namen wenn Sensor LOW, kein Layout-Shift.
+function dotCls(e,hit){if(hit===true)return 'hit';return e===true?'on':e===false?'off':'na'}
 function stTxt(e){return e===true?'powered':e===false?'off':'—'}
 
 /* DIALS --------------------------------------------------------------- */
@@ -474,19 +492,18 @@ function renderMotors(M){
     var m=M[i]||{},e=m.e,p=m.p,s=m.s,puls=m.pulses,hit=m.hit;
     var pos=(p==null?'—':(p.toFixed(1)+'°'));
     var spd=(s==null?'—':s);
-    var aux=(puls!=null?puls+'p':'')+(hit===true?(puls!=null?' · HIT':'HIT'):'');
+    var aux=(puls!=null?puls+'p':'');
     var btns=[];
     btns.push({a:'pwr',l:'Power',cls:e===true?'pri':''});
     btns.push({a:'setzero',l:'Zero'});
     if(PHASE>=2 && HAS_SENSOR[i]){btns.push({a:'cal',l:'Calib'});btns.push({a:'home',l:'Home'})}
     var bcls=btns.length===2?'':btns.length===3?'three':'four';
-    var bh='';for(var j=0;j<btns.length;j++){var b=btns[j];bh+='<button class="btn '+(b.cls||'')+'" data-a="'+b.a+'" data-m="'+i+'">'+b.l+'</button>'}
-    h+='<div class="mc"><div class="top"><span class="dot '+dotCls(e)+'"></span><span class="name">'+MNAMES[i]+'</span><span class="st '+(e===true?'on':'')+'">'+stTxt(e)+'</span></div>'
+    var bh='';for(var j=0;j<btns.length;j++){var b=btns[j];bh+='<button class="btn '+(b.cls||'')+'" onclick="cmd(\''+b.a+'\','+i+')">'+b.l+'</button>'}
+    h+='<div class="mc"><div class="top"><span class="dot '+dotCls(e,hit)+'"></span><span class="name">'+MNAMES[i]+'</span><span class="st '+(e===true?'on':'')+'">'+stTxt(e)+'</span></div>'
       +'<div class="nums"><div class="nm"><div class="k">Pos</div><div class="vv">'+pos+'</div></div><div class="nm"><div class="k">Speed</div><div class="vv">'+spd+'</div></div><div class="nm"><div class="k">Sensor</div><div class="vv">'+(aux||'—')+'</div></div></div>'
       +'<div class="btns '+bcls+'">'+bh+'</div></div>';
   }
   g.innerHTML=h;
-  g.querySelectorAll('.btn').forEach(function(b){b.addEventListener('click',function(){cmd(b.dataset.a,b.dataset.m)})});
 }
 
 function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)return m+'m '+r+'s';var h=Math.floor(m/60);return h+'h '+(m%60)+'m'}
@@ -494,6 +511,7 @@ function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)ret
 function appendLog(chunk){
   if(!chunk)return;
   var box=document.getElementById('log');
+  var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 20;
   var lines=chunk.split('\n');
   for(var i=0;i<lines.length;i++){
     var t=lines[i];if(!t)continue;
@@ -503,8 +521,9 @@ function appendLog(chunk){
     row.lastChild.textContent=t;
     box.appendChild(row);
   }
-  while(box.children.length>120)box.removeChild(box.firstChild);
-  box.scrollTop=box.scrollHeight;
+  var limit = (box.id==='log' && typeof PRESETS !== 'undefined') ? 120 : 200;
+  while(box.children.length > limit) box.removeChild(box.firstChild);
+  if(isAtBottom) box.scrollTop = box.scrollHeight;
 }
 
 function apply(d){
@@ -614,24 +633,77 @@ function loadConfig(){
   fetch('/config').then(function(r){return r.json()}).then(applyConfig).catch(function(){})
 }
 
+// Bug 54 (v4.4.14): Wave-Mode-Kopplung. Peak-Amplitude × f² ≤ K. K wird
+// in loadBounds aus dem restriktivsten valid Motor abgeleitet. Faktor 569
+// spiegelt die Engine-Konstante FREQ_ACCEL_MAX/(16·stepsPerRev/360).
+var WAVE_K = 0;  // 0 = kein valid cal → kein Coupling
 function loadBounds(){
   fetch('/bounds').then(function(r){return r.json()}).then(function(b){
-    var rows=[];
+    var rows=[], kMin=Infinity;
     for(var i=0;i<4;i++){
       var m=b.motors[i];
       if(m.tachoCutoffHzEff)TACHO_HZ[i]=m.tachoCutoffHzEff|0;
       if(m.valid){
         rows.push(MNAMES[i]+': '+m.maxRpm+' rpm · '+(m.maxAccel/1000).toFixed(0)+'k acc · fc='+TACHO_HZ[i]+'Hz');
+        if(m.maxAccel>0){var k=m.maxAccel/569;if(k<kMin)kMin=k}
       } else {
         rows.push(MNAMES[i]+': uncalibrated → 8000 sps / 4000 acc · fc='+TACHO_HZ[i]+'Hz (Z-Fallback)');
       }
     }
+    WAVE_K=isFinite(kMin)?kMin:0;
     document.getElementById('caps').innerHTML='Engine-Cap (95% margin)<br>'+rows.join('<br>');
     if(b.offsets&&b.offsets.length===4)CFG.offsets=b.offsets.map(function(o){return [+o.x,+o.y]});
+    applyWaveCoupling();
     applyLabels();
   }).catch(function(){
     document.getElementById('caps').textContent='Engine-Cap: /bounds nicht erreichbar';
   })
+}
+
+// Bug 54 (v4.4.14): Slider-Maxe dynamisch koppeln. Im Wave-Mode (3/4/5):
+//   range_max(f)  = 2K / f²          [° peak-to-peak]
+//   freq_max(r)   = sqrt(2K / r)     [Hz], zusätzlich gecappt auf TACHO_HZ × 0.9
+// Außerhalb Wave: statische Maxe (range=360, speed=2 rad/s wie hartcoded).
+// Wenn ein Slider durch shrinkenden max-Wert über die Grenze fällt, Wert
+// lokal clampen und fire-and-forget an Server pushen — kein /set-Echo
+// abwarten, vermeidet Loop. Engine-`capWaveRangeByFreqAmp` hat den
+// authoritativen Cap, JS ist nur „ehrliches Schaufenster".
+function applyWaveCoupling(){
+  var rSlider=document.getElementById('psRange');
+  var sSlider=document.getElementById('psSpeed');
+  var isWave=(CFG.type>=3&&CFG.type<=5);
+  if(!isWave||!WAVE_K){
+    if(rSlider)rSlider.max=360;
+    if(sSlider)sSlider.max=2;
+    return;
+  }
+  // Range-Max aus aktuellem Speed (f in Hz)
+  var f=(CFG.speed||0)/(2*Math.PI);
+  if(rSlider){
+    var rMax=360;
+    if(f>0.01){var rCalc=(2*WAVE_K)/(f*f);rMax=Math.min(360,Math.max(1,rCalc))}
+    rSlider.max=rMax.toFixed(0);
+    if(+rSlider.value>rMax){
+      rSlider.value=rMax.toFixed(0);CFG.range=+rSlider.value;
+      fetch('/set?range='+rSlider.value).catch(function(){});
+    }
+  }
+  // Speed-Max aus aktueller Range, zusätzlich harter Cap durch TACHO_HZ
+  var r=CFG.range||0;
+  if(sSlider){
+    var sMax=2;
+    if(r>0.5){
+      var fMaxHz=Math.sqrt((2*WAVE_K)/r);
+      var fcMin=Math.min.apply(null,TACHO_HZ.map(function(h){return h*0.9}));
+      if(isFinite(fcMin)&&fcMin>0&&fcMin<fMaxHz)fMaxHz=fcMin;
+      sMax=fMaxHz*2*Math.PI;
+    }
+    sSlider.max=sMax.toFixed(2);
+    if(+sSlider.value>sMax){
+      sSlider.value=sMax.toFixed(2);CFG.speed=+sSlider.value;
+      fetch('/set?speed='+sSlider.value).catch(function(){});
+    }
+  }
 }
 
 function poll(){
@@ -820,6 +892,8 @@ html,body{background:var(--pa);color:var(--ink);font:14px/1.4 -apple-system,Blin
             <option value="3">Katapult</option>
             <option value="4">Freq Sweep</option>
             <option value="5">Current Sweep HiRPM</option>
+            <option value="6">Tacho Cutoff</option>
+            <option value="7">Profile Learn</option>
           </select></div>
         <div class="runs"><button onclick="runTest()" class="go">Run</button><button onclick="cmd('show',getMotor())">Performance Show</button></div>
       </div>
@@ -853,9 +927,31 @@ html,body{background:var(--pa);color:var(--ink);font:14px/1.4 -apple-system,Blin
 var MNAMES=['M·X','M·Y','M·Z','M·E'];
 var HAS_SENSOR=[1,1,1,0];
 
-function cmd(a,m){fetch('/cmd?a='+a+(m!=null?'&m='+m:'')).catch(function(){})}
+// Bug 58 (v4.4.12): cmd() verschluckte Response. User-Click auf „Calib"
+// produzierte kein sichtbares Feedback — UI sah aus als täte sie nichts.
+// Jetzt: Aktion sofort optimistisch loggen, dann Response (oder Fehler)
+// nachreichen. Die appendLog-Funktion ist sowieso da (Log-Box rechts).
+function cmd(a,m){
+  m=m==null?null:m|0;
+  var lbl=a+(m!=null?' M·'+'XYZE'[m]:'');
+  appendLog('→ '+lbl);
+  fetch('/cmd?a='+a+(m!=null?'&m='+m:''))
+    .then(function(r){return r.text().then(function(t){
+      appendLog((r.ok?'✓ ':'✗ HTTP '+r.status+' ')+lbl+(t?': '+t:''));
+    })})
+    .catch(function(){appendLog('✗ '+lbl+': network')});
+}
 function getMotor(){return document.getElementById('tMotor').value|0}
-function runTest(){var m=getMotor(),p=document.getElementById('tProg').value|0;fetch('/cmd?a=test&m='+m+'&prog='+p).catch(function(){})}
+function runTest(){
+  var m=getMotor(),p=document.getElementById('tProg').value|0;
+  var lbl='test M·'+'XYZE'[m]+' prog='+p;
+  appendLog('→ '+lbl);
+  fetch('/cmd?a=test&m='+m+'&prog='+p)
+    .then(function(r){return r.text().then(function(t){
+      appendLog((r.ok?'✓ ':'✗ HTTP '+r.status+' ')+lbl+(t?': '+t:''));
+    })})
+    .catch(function(){appendLog('✗ '+lbl+': network')});
+}
 
 function dotCls(e,hit){if(hit===true)return 'hit';return e===true?'on':e===false?'off':'na'}
 function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)return m+'m '+r+'s';var h=Math.floor(m/60);return h+'h '+(m%60)+'m'}
@@ -901,6 +997,7 @@ function renderWd(W){
 function appendLog(chunk){
   if(!chunk)return;
   var box=document.getElementById('log');
+  var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 20;
   var lines=chunk.split('\n');
   for(var i=0;i<lines.length;i++){
     var t=lines[i];if(!t)continue;
@@ -911,7 +1008,7 @@ function appendLog(chunk){
     box.appendChild(row);
   }
   while(box.children.length>200)box.removeChild(box.firstChild);
-  box.scrollTop=box.scrollHeight;
+  if(isAtBottom) box.scrollTop=box.scrollHeight;
 }
 
 function pollStatus(){
@@ -986,12 +1083,8 @@ void begin() {
     });
 
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest* r) {
-        // Bug-ID 36: Nutze getBuffer statt drainBuffer, damit parallele Zugriffe
-        // (UI + Monitoring) sich nicht gegenseitig die Logs wegnehmen.
-        String log = Logger::getBuffer();
-        log.replace("\"", "'");
-        log.replace("\n", "\\n");
-        log.replace("\r", "");
+        AsyncResponseStream *response = r->beginResponseStream("application/json");
+        response->addHeader("Access-Control-Allow-Origin", "*");
 
         uint16_t rpm = 0;
         for (uint8_t i = 0; i < 4; i++) {
@@ -1001,30 +1094,31 @@ void begin() {
             }
         }
 
-        String json;
-        json.reserve(640);
-        json += "{\"fw\":\"";
-        json += Platform::FW_VERSION;
-        json += "\",\"uptime_s\":";
-        json += String((unsigned long)(millis() / 1000));
-        json += ",\"ip\":\"";
-        json += Wifi::localIp();
-        json += "\",\"op\":\"";
-        json += Op::stateStr();
-        json += "\",\"rpm\":";
-        json += rpm > 0 ? String(rpm) : "null";
-        json += ",\"log\":\"";
-        json += log;
-        json += "\",\"m\":[";
-        for (uint8_t i = 0; i < 4; i++) {
-            if (i > 0) json += ",";
-            json += motorJson(i);
-        }
-        json += "]}";
+        response->printf("{\"fw\":\"%s\",\"uptime_s\":%lu,\"ip\":\"%s\",\"op\":\"%s\",\"rpm\":%s,\"log\":\"",
+            Platform::FW_VERSION,
+            (unsigned long)(millis() / 1000),
+            Wifi::localIp().c_str(),
+            Op::stateStr(),
+            rpm > 0 ? String(rpm).c_str() : "null");
 
-        AsyncWebServerResponse* res = r->beginResponse(200, "application/json", json);
-        res->addHeader("Access-Control-Allow-Origin", "*");
-        r->send(res);
+        // Bug-ID 36: Stream log with escaping to avoid huge String copies/replacements.
+        String log = Logger::getBuffer();
+        for (size_t i = 0; i < log.length(); i++) {
+            char c = log[i];
+            if (c == '\"') response->print("\\\"");
+            else if (c == '\n') response->print("\\n");
+            else if (c == '\r') ; // skip
+            else if (c == '\\') response->print("\\\\");
+            else response->print(c);
+        }
+
+        response->print("\",\"m\":[");
+        for (uint8_t i = 0; i < 4; i++) {
+            if (i > 0) response->print(",");
+            response->print(motorJson(i));
+        }
+        response->print("]}");
+        r->send(response);
     });
 
     server.on("/cmd", HTTP_GET, [](AsyncWebServerRequest* r) {
@@ -1297,15 +1391,17 @@ void begin() {
     Recorder::registerHandlers(server);
 
     // /log — gibt den aktuellen Log-Puffer als Plain Text zurück.
-    // Bug-ID 36: Zwischenspeichern in lokaler String-Variable (analog zu /status, Z. 716–722),
-    // damit die Lifetime über den Async-Send hinaus garantiert ist. Vorher: Temporary aus
-    // Logger::getBuffer() direkt an beginResponse → sporadisch HTTP 500.
+    // Bug-ID 36: Stream response directly to avoid OOM with large log buffers.
     server.on("/log", HTTP_GET, [](AsyncWebServerRequest* r) {
+        AsyncResponseStream *response = r->beginResponseStream("text/plain");
+        response->addHeader("Access-Control-Allow-Origin", "*");
         String log = Logger::getBuffer();
-        if (log.length() == 0) log = "(empty)\n";
-        AsyncWebServerResponse* res = r->beginResponse(200, "text/plain", log);
-        res->addHeader("Access-Control-Allow-Origin", "*");
-        r->send(res);
+        if (log.length() == 0) {
+            response->print("(empty)\n");
+        } else {
+            response->print(log);
+        }
+        r->send(response);
     });
 
     // /sensor — Diagnose: liest alle Tacho-Pins direkt, optional Pull-Mode-Wechsel.

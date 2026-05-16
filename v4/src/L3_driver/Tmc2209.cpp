@@ -2,6 +2,7 @@
 #include "../L0_platform/Sync.h"
 #include "../L0_platform/Logger.h"
 #include "../L1_hal/Hal_Pins.h"
+#include "../L0_platform/Types.h"
 
 namespace Tmc {
 
@@ -83,7 +84,7 @@ void setPower(uint8_t motorIdx, bool on) {
             xSemaphoreGive(Sync::uartMutex);
         }
         applyDefaults(motorIdx);
-        Logger::addLog(String("M") + (char)('X' + motorIdx) + ": POWER ON");
+        Logger::addLog(String("M") + v4::motorName(motorIdx) + ": POWER ON");
     } else {
         if (xSemaphoreTake(Sync::uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
             d->toff(0);
@@ -93,7 +94,7 @@ void setPower(uint8_t motorIdx, bool on) {
         bool anyOn = false;
         for (uint8_t i = 0; i < 4; i++) if (i != motorIdx && poweredFlags[i]) { anyOn = true; break; }
         if (!anyOn) digitalWrite(HalPins::ENABLE_PIN, HIGH);
-        Logger::addLog(String("M") + (char)('X' + motorIdx) + ": POWER OFF");
+        Logger::addLog(String("M") + v4::motorName(motorIdx) + ": POWER OFF");
     }
     poweredFlags[motorIdx] = on;
 }

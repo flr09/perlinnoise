@@ -5,6 +5,7 @@
 #include "../L0_platform/Types.h"
 #include "../L1_hal/Hal_Pins.h"
 #include "../L1_hal/Hal_Sensor.h"
+#include "../L1_hal/Hal_Tacho.h"
 #include "../L2_storage/Storage_Calib.h"
 #include "../L3_driver/Stepper.h"
 #include "../L3_driver/Tmc2209.h"
@@ -31,11 +32,19 @@ constexpr float SKIP_TOL = 0.05f;
 
 void run(uint8_t motorIdx) {
     if (!HalPins::hasSensor(motorIdx)) {
-        Logger::addLog(String("CAL M") + (char)('X' + motorIdx) + ": kein Sensor — abgelehnt");
+        Logger::addLog(String("CAL M") + v4::motorName(motorIdx) + ": kein Sensor — abgelehnt");
         return;
     }
     auto* s = Stepper::get(motorIdx);
     if (!s) return;
+
+    // Bug 51/53 (v4.4.8): Cleanup-Helper für alle Abort-Pfade. Vorher ließ
+    // jeder vorzeitige `return;` den Motor auf 16 µSteps + Calib-Stromprofil
+    // hängen — Player oder Folge-Calib erbten das. Jetzt zentraler Restore.
+    auto restoreDefaults = [motorIdx]() {
+        Stepper::setMicrosteps(motorIdx, 64);
+        Tmc::applyDefaults(motorIdx);
+    };
 
     // Vorab: vorhandene NVS-Cal laden, um Skip-Pfad vorzubereiten.
     // Skip-Referenz ist `fastWidthSteps` aus dem letzten 3-Touch-Calib —
@@ -50,7 +59,7 @@ void run(uint8_t motorIdx) {
     uint8_t pin = HalPins::MOTORS[motorIdx].tachoPin;
     Tmc::setPower(motorIdx, true);
     Stepper::setMicrosteps(motorIdx, 16);
-    Logger::addLog(String("CAL M") + (char)('X' + motorIdx) + ": v4 calib (fast)"
+    Logger::addLog(String("CAL M") + v4::motorName(motorIdx) + ": v4 calib (fast)"
         + (expectedWidth > 0 ? String(", fastW=") + expectedWidth
                              : String(", no fastW (3-Touch)")));
     s->setAcceleration(15000);
@@ -68,7 +77,7 @@ void run(uint8_t motorIdx) {
         bool exited = false;
         while (true) {
             if (HalSensor::checkStable(pin, HIGH, 5)) { exited = true; break; }
-            if (Op::pendingStop) { s->stopMove(); return; }
+            if (Op::pendingStop) { s->stopMove(); restoreDefaults(); return; }
             if (labs(s->getCurrentPosition() - startPos0) > maxP0) break;
             vTaskDelay(pdMS_TO_TICKS(1));
         }
@@ -76,59 +85,82 @@ void run(uint8_t motorIdx) {
         if (!exited) {
             Logger::addLog(String("ERR: P0 Sensor stuck LOW nach ") + maxP0 + " steps (1 rev)");
             CAL_MARK("CAL_P0_STUCK", s->getCurrentPosition());
+            restoreDefaults();
             return;
         }
     }
-    if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 1500)) { CAL_MARK("CAL_P0_TIMEOUT", 0); return; }
+    if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 1500)) { CAL_MARK("CAL_P0_TIMEOUT", 0); restoreDefaults(); return; }
     delay(80);
     CAL_MARK("CAL_P0_OK", s->getCurrentPosition());
 
-    // Phase 1+2: Grob CW Suche Eintritt (LOW) und dann nahtlos weiter zum
-    // Austritt (HIGH). Zwischen den Detection-Punkten KEIN stopMove —
-    // sonst Decel-Overshoot (~46° bei 3500 sps + 15k Acc), Motor landet
-    // außerhalb der Zunge bevor Phase 2 startet → false-positive HIGH.
-    // Eine durchgehende CW-Bewegung umgeht das.
-    Logger::addLog("CAL: P1+P2 Grob CW (Eintritt → Austritt)...");
-    s->setSpeedInHz(2000);   // moderater, kürzere Decel falls doch nötig
-    s->runForward();
-    long startPos = s->getCurrentPosition();
-    // Hartes Limit: Sensor MUSS innerhalb 1 rev liegen (nur eine Zunge pro
-    // Motor). 1.2 rev als Sicherheits-Margin für Slop und Startposition. Das
-    // alte `* 3` ließ den Motor bis zu 3 Umdrehungen fahren — bei 2000 sps
-    // ~5 s, kabel-wickelnd und langsam ohne Mehrwert.
+    // Bug 51 (v4.4.13): Bidirektionale P1-Suche nach Bug-28-Präzedenz (Homing).
+    // Vorher nur CW: nach einem Stall divergiert der Step-Counter vom
+    // physischen Stand → Zunge kann „hinter" dem Motor liegen → CW läuft
+    // 1.2 rev ins Leere, Calib failed mit „P1 Eintritt nicht gefunden". Jetzt
+    // bei CW-Miss zusätzlich CCW-Suche — analog `Homing::searchSensorOneDir`.
+    // Phase 2 läuft anschließend in derselben Richtung wie P1 erfolgreich war
+    // (`dir = ±1`). Zungenbreite via `labs(p2-p1)` ist richtungsinvariant.
+    Logger::addLog("CAL: P1+P2 Grob (Eintritt → Austritt)...");
+    s->setSpeedInHz(2000);
     long maxDelta = (long)((float)Stepper::stepsPerRev(motorIdx) * 1.2f);
-    unsigned long t0 = millis();
-    bool found = false;
-    while (true) {
-        if (HalSensor::checkStable(pin, LOW, 5)) { found = true; break; }
-        if (Op::pendingStop) break;
-        if (millis() - t0 > 6000) break;   // 1.2 rev @ 2000 sps ≈ 1.9 s, 6 s Margin
-        if (labs(s->getCurrentPosition() - startPos) > maxDelta) break;
-        vTaskDelay(pdMS_TO_TICKS(1));
+    long startPos = s->getCurrentPosition();
+    int dir = 1;
+
+    auto searchEntry = [&](int searchDir) -> bool {
+        if (searchDir > 0) s->runForward(); else s->runBackward();
+        long sp = s->getCurrentPosition();
+        unsigned long ts = millis();
+        unsigned long lastMoveCheck = millis();
+        while (true) {
+            if (HalSensor::checkStable(pin, LOW, 5)) return true;
+            if (Op::pendingStop) return false;
+            if (millis() - ts > 6000) return false;
+            if (labs(s->getCurrentPosition() - sp) > maxDelta) return false;
+
+            // Bug 51 (v4.4.15): Stall-Check via Tacho. Wenn Motor physisch
+            // steht (RPM=0) aber laut FAS laufen sollte, liegt ein Stall vor.
+            // Settle-Zeit 300ms für Anlauf beachten.
+            if (millis() - ts > 300 && millis() - lastMoveCheck > 100) {
+                if (HalTacho::getRpm(motorIdx) == 0) {
+                    Logger::addLog(String("CAL M") + v4::motorName(motorIdx) + ": physischer Stall erkannt (RPM=0)");
+                    return false;
+                }
+                lastMoveCheck = millis();
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+    };
+
+    bool found = searchEntry(+1);
+    if (!found) {
+        s->stopMove();
+        Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 1500);
+        Logger::addLog("CAL: P1 CW miss → CCW retry (Bug-28-Coverage)");
+        dir = -1;
+        found = searchEntry(-1);
     }
     if (!found) {
         s->stopMove();
         long traveled = labs(s->getCurrentPosition() - startPos);
-        Logger::addLog(String("ERR: P1 Eintritt nicht gefunden nach ") + traveled
-            + " steps (max " + maxDelta + ")");
+        Logger::addLog(String("ERR: P1 Eintritt nicht gefunden (CW+CCW je 1.2 rev, traveled=")
+            + traveled + ")");
         CAL_MARK("CAL_P1_FAIL", traveled);
+        restoreDefaults();
         return;
     }
     long p1Pos = s->getCurrentPosition();
     CAL_MARK("CAL_P1_FOUND", p1Pos);
+    if (dir < 0) Logger::addLog(String("CAL: P1 via CCW gefunden bei pos=") + p1Pos);
 
-    // Motor läuft weiter CW — jetzt Austritt suchen (HIGH).
+    // Motor läuft weiter in `dir`-Richtung — jetzt Austritt (HIGH) suchen.
     // KRITISCH (Bug-Fix v4.1.3-rc2): p2Pos muss SOFORT beim Trigger erfasst
-    // werden, vor stopMove + waitWhileRunning. Sonst kommt der Bremsweg
-    // (~133 Steps bei 2000 sps + 15000 acc) als systematische Asymmetrie
-    // zwischen p1Pos und p2Pos in die Zungenbreiten-Messung — gemessene
-    // Breite wäre konstant zu groß, SKIP_TOL=5% würde nie greifen.
-    //
-    // Logic-Check: p1Pos und p2Pos werden beide direkt nach dem Trigger der
-    // gleichen `HalSensor::checkStable(pin, …, 5)`-Funktion erfasst. Der
-    // 5-Sample-Filter hat denselben Latenz-Bias (~5 ms × Geschwindigkeit) auf
-    // beiden Seiten. Bei der Differenz `p2Pos - p1Pos` hebt sich der Bias auf.
+    // werden, vor stopMove. Sonst kommt der Bremsweg als systematische
+    // Asymmetrie in die Zungenbreite — SKIP_TOL=5% würde nie greifen.
+    // Logic-Check: p1Pos und p2Pos werden beide nach `checkStable(pin,…,5)`
+    // erfasst, gleicher Latenz-Bias hebt sich bei der Differenz auf.
     long startPos2 = p1Pos;
+    unsigned long tP2 = millis();
     bool exited = false;
     long p2Pos = 0;
     while (true) {
@@ -138,7 +170,7 @@ void run(uint8_t motorIdx) {
             break;
         }
         if (Op::pendingStop) break;
-        if (millis() - t0 > 18000) break;
+        if (millis() - tP2 > 10000) break;
         if (labs(s->getCurrentPosition() - startPos2) > (long)Stepper::stepsPerRev(motorIdx)) break;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
@@ -147,9 +179,10 @@ void run(uint8_t motorIdx) {
         long zungenBreite = labs(s->getCurrentPosition() - startPos2);
         Logger::addLog(String("ERR: P2 Austritt nach ") + zungenBreite + " steps");
         CAL_MARK("CAL_P2_FAIL", zungenBreite);
+        restoreDefaults();
         return;
     }
-    if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) { CAL_MARK("CAL_P2_TIMEOUT", 0); return; }
+    if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 2000)) { CAL_MARK("CAL_P2_TIMEOUT", 0); restoreDefaults(); return; }
     delay(80);
     CAL_MARK("CAL_P2_OK", p2Pos);
 
@@ -177,11 +210,11 @@ void run(uint8_t motorIdx) {
             // Fallback auf vollen 3-Touch-Pfad.
             Logger::addLog("CAL: P3 rechte Kante (3-Touch)...");
             long a2 = EdgeTouch::touch(motorIdx, LOW, -1, 800, 3);
-            if (a2 == LONG_MIN) { Logger::addLog("ERR: P3 Touch"); CAL_MARK("CAL_P3_FAIL", 0); return; }
+            if (a2 == LONG_MIN) { Logger::addLog("ERR: P3 Touch"); CAL_MARK("CAL_P3_FAIL", 0); restoreDefaults(); return; }
             CAL_MARK("CAL_A2", a2);
             Logger::addLog("CAL: P4 linke Kante (3-Touch)...");
             long a1 = EdgeTouch::touch(motorIdx, LOW, 1, 800, 3);
-            if (a1 == LONG_MIN) { Logger::addLog("ERR: P4 Touch"); CAL_MARK("CAL_P4_FAIL", 0); return; }
+            if (a1 == LONG_MIN) { Logger::addLog("ERR: P4 Touch"); CAL_MARK("CAL_P4_FAIL", 0); restoreDefaults(); return; }
             CAL_MARK("CAL_A1", a1);
             center = (a1 + a2) / 2;
             v4::CalibrationData cal = prevCal;
@@ -200,11 +233,11 @@ void run(uint8_t motorIdx) {
         // Erst-Calib (oder NVS leer/stale/Schema-Bump): voller 3-Touch.
         Logger::addLog("CAL: P3 rechte Kante (3-Touch)...");
         long a2 = EdgeTouch::touch(motorIdx, LOW, -1, 800, 3);
-        if (a2 == LONG_MIN) { Logger::addLog("ERR: P3 Touch"); CAL_MARK("CAL_P3_FAIL", 0); return; }
+        if (a2 == LONG_MIN) { Logger::addLog("ERR: P3 Touch"); CAL_MARK("CAL_P3_FAIL", 0); restoreDefaults(); return; }
         CAL_MARK("CAL_A2", a2);
         Logger::addLog("CAL: P4 linke Kante (3-Touch)...");
         long a1 = EdgeTouch::touch(motorIdx, LOW, 1, 800, 3);
-        if (a1 == LONG_MIN) { Logger::addLog("ERR: P4 Touch"); CAL_MARK("CAL_P4_FAIL", 0); return; }
+        if (a1 == LONG_MIN) { Logger::addLog("ERR: P4 Touch"); CAL_MARK("CAL_P4_FAIL", 0); restoreDefaults(); return; }
         CAL_MARK("CAL_A1", a1);
         center = (a1 + a2) / 2;
         // prevCal als Basis übernehmen (erhält learnedCurrentMA, sgThrs etc.,
@@ -225,6 +258,7 @@ void run(uint8_t motorIdx) {
     s->moveTo(center);
     if (!Motion::waitWhileRunning(motorIdx, &Op::pendingStop, 10000)) {
         CAL_MARK("CAL_MOVE_TIMEOUT", s->getCurrentPosition());
+        restoreDefaults();
         return;
     }
     CAL_MARK("CAL_AT_CENTER", s->getCurrentPosition());

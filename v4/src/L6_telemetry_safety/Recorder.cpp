@@ -55,25 +55,37 @@ void tick(float flightX, float flightY, const float posDeg[4]) {
     portEXIT_CRITICAL(&Sync::motorMux);
 }
 
-String getCsv() {
-    String out;
-    out.reserve(80 + filled * 64);
-    out = "t_ms,pos0,pos1,pos2,pos3,flightX,flightY\n";
+// Bug 46/47 (v4.4.8): Sample-by-Sample-Streaming statt 38-KB-String-Build.
+// Vorher: portENTER_CRITICAL umschloss 600× snprintf + String += → Spinlock
+// über Heap-Allocs (ESP-IDF-Crash-Pfad) plus 38-KB-Single-Alloc auf
+// fragmentiertem Heap. Jetzt: nur das 28-Byte-Struct-Copy pro Sample läuft
+// unter Spinlock (~50 ns), die Formatierung + Senden geschieht außerhalb der
+// CS. Wird über streamCsv() vom /rec/csv-Handler direkt in den
+// AsyncResponseStream gepumpt → kein Big-Block-Allocate mehr.
+void streamCsv(AsyncResponseStream* res) {
+    if (!res) return;
+    res->print("t_ms,pos0,pos1,pos2,pos3,flightX,flightY\n");
+
+    size_t n, pos;
     portENTER_CRITICAL(&Sync::motorMux);
-    size_t n   = filled;
-    size_t pos = (filled < CAPACITY) ? 0 : head;  // ältestes Sample
-    for (size_t k = 0; k < n; k++) {
-        const Sample& s = buf[(pos + k) % CAPACITY];
-        char line[96];
-        snprintf(line, sizeof(line),
-                 "%lu,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f\n",
-                 (unsigned long)s.t_ms,
-                 s.posDeg[0], s.posDeg[1], s.posDeg[2], s.posDeg[3],
-                 s.flightX, s.flightY);
-        out += line;
-    }
+    n   = filled;
+    pos = (filled < CAPACITY) ? 0 : head;  // ältestes Sample
     portEXIT_CRITICAL(&Sync::motorMux);
-    return out;
+
+    for (size_t k = 0; k < n; k++) {
+        Sample s;
+        portENTER_CRITICAL(&Sync::motorMux);
+        s = buf[(pos + k) % CAPACITY];     // 28-Byte-Struct-Copy, atomic CS
+        portEXIT_CRITICAL(&Sync::motorMux);
+
+        char line[96];
+        int len = snprintf(line, sizeof(line),
+                           "%lu,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f\n",
+                           (unsigned long)s.t_ms,
+                           s.posDeg[0], s.posDeg[1], s.posDeg[2], s.posDeg[3],
+                           s.flightX, s.flightY);
+        if (len > 0) res->write((const uint8_t*)line, (size_t)len);
+    }
 }
 
 void registerHandlers(AsyncWebServer& server) {
@@ -96,10 +108,10 @@ void registerHandlers(AsyncWebServer& server) {
         r->send(200, "application/json", buf);
     });
     server.on("/rec/csv", HTTP_GET, [](AsyncWebServerRequest* r) {
-        String csv = getCsv();
-        AsyncWebServerResponse* res = r->beginResponse(200, "text/csv", csv);
+        AsyncResponseStream* res = r->beginResponseStream("text/csv");
         res->addHeader("Content-Disposition", "attachment; filename=\"recorder.csv\"");
         res->addHeader("Access-Control-Allow-Origin", "*");
+        streamCsv(res);
         r->send(res);
     });
 }

@@ -13,6 +13,7 @@
 #include "../../L4_mechanics/Homing.h"
 #include "../../L6_telemetry_safety/OpState.h"
 #include "../../L6_telemetry_safety/Telemetry.h"
+#include "../../L6_telemetry_safety/MotorProfile.h"
 
 namespace Characterization {
 
@@ -100,14 +101,14 @@ static void resetMotorState(uint8_t i, bool wasStalled) {
 void runSgLearn(uint8_t i) {
     if (i >= 4) return;
     if (!HalPins::hasSensor(i)) {
-        Logger::addLog(String("M") + (char)('X'+i) + ": SG-Learn — kein Sensor (kein Tacho-Cross-Check)");
+        Logger::addLog(String("M") + v4::motorName(i) + ": SG-Learn — kein Sensor (kein Tacho-Cross-Check)");
     }
     Tmc::setPower(i, true);
     Stepper::setMicrosteps(i, 16);
     auto* s = Stepper::get(i);
     if (!s) { resetMotorState(i, false); return; }
     s->setAcceleration(30000);
-    Logger::addLog(String("M") + (char)('X'+i) + ": SG-Learn");
+    Logger::addLog(String("M") + v4::motorName(i) + ": SG-Learn");
 
     float testRpms[] = {150, 250, 350, 450};
     float sgSum = 0; int samples = 0;
@@ -167,7 +168,7 @@ void runSpeedTest(uint8_t i) {
     Stepper::setMicrosteps(i, 16);
     auto* s = Stepper::get(i);
     if (!s) { resetMotorState(i, false); return; }
-    Logger::addLog(String("M") + (char)('X'+i) + ": Speed Test (Tacho-referenziert)");
+    Logger::addLog(String("M") + v4::motorName(i) + ": Speed Test (Tacho-referenziert)");
 
     float rpm = 300.0f;
     float lastGood = 0.0f;
@@ -223,7 +224,7 @@ void runInertiaTest(uint8_t i) {
     Stepper::setMicrosteps(i, 16);
     auto* s = Stepper::get(i);
     if (!s) { resetMotorState(i, false); return; }
-    Logger::addLog(String("M") + (char)('X'+i) + ": Inertia Test (sensor-referenziert)");
+    Logger::addLog(String("M") + v4::motorName(i) + ": Inertia Test (sensor-referenziert)");
 
     // Vor Test: Motor auf 0° (Sensor-Mitte) bringen — danach passiert jede
     // Hin-Rück-Bewegung um ±1 rev die Zunge zwingend 2× pro Richtung.
@@ -509,12 +510,16 @@ static long fs2BisectStallTacho(uint8_t i, float f, long ampMax,
             lo = mid;
         } else {
             hi = mid;
-            // v4.3.4: Re-Sync zur Sensor-Eintrittskante via fsResyncToEdge
-            // (EdgeTouch CW→LOW, 3000 sps, Homing-Fallback bei Miss). Ersetzt
-            // das alte Homing+moveToDeg-Pattern, das auf Hardware-Tests v4.3.3
-            // f=26..50 mit 150-sps-EdgeTouch in der Bisektion miss-fired und
-            // Bisektion in Floor=1 laufen ließ (Bug 22 reaktiviert).
-            if (!fsResyncToEdge(i, edgeDeg, edgePosOut, dir)) break;
+            // v4.4.15: Bug 54 (Re-Sync Deadlock). Re-Sync nur wenn amp groß
+            // genug, dass der Motor die Sensor-Zunge physikalisch verlassen
+            // kann (>30 steps auf Z). Bei winzigen Amps steht der Motor
+            // bereits AUF der Kante, fsResyncToEdge meldet „miss" und triggert
+            // einen fatalen Homing-Loop.
+            if (mid > 30) {
+                if (!fsResyncToEdge(i, edgeDeg, edgePosOut, dir)) break;
+            } else {
+                outHysteresis = true; // Klassifiziere als Sensor-Hysterese
+            }
         }
         iter++;
     }
@@ -726,7 +731,10 @@ void runCurrentSweepHiRPM(uint8_t i) {
         float ratio = measureMotorRatio(i, rpm, 600);
         Logger::addLog(String("CS mA=") + mA + " ratio=" + String(ratio,2));
         if (ratio < STALL_RATIO_THR) {
-            Logger::addLog(String("Sweet-Spot Floor: ") + (mA + 100) + "mA");
+            uint16_t learned = mA + 100;
+            Logger::addLog(String("Sweet-Spot Floor: ") + learned + "mA");
+            cal.learnedCurrentMA = learned;
+            StorageCalib::save(i, cal);
             stalled = true;
             break;
         }
@@ -734,40 +742,97 @@ void runCurrentSweepHiRPM(uint8_t i) {
     resetMotorState(i, stalled);
 }
 
+// --- 7) ProfileLearn: Tacho-Perioden-Modell für Watchdog lernen ---
+// Misst bei 10 RPM-Stützpunkten zwischen 300 und maxRpm die mittlere
+// Tacho-Periode und deren Standardabweichung (Sigma). Watchdog nutzt dies
+// zur Antizipation des nächsten Pulses (Evidence A).
+void runProfileTest(uint8_t i) {
+    if (i >= 4) return;
+    v4::CalibrationData cal; StorageCalib::load(i, cal);
+    if (!cal.valid) { Logger::addLog("Profile: nicht kalibriert"); return; }
+    if (!HalPins::hasSensor(i)) { Logger::addLog("Profile: kein Sensor"); return; }
+    Tmc::setPower(i, true);
+    Stepper::setMicrosteps(i, 16);
+    auto* s = Stepper::get(i);
+    if (!s) { resetMotorState(i, false); return; }
+    Logger::addLog(String("M") + v4::motorName(i) + ": Profile Learn");
+    MotorProfileNs::clearProfile(i);
+
+    float startRpm = 300.0f;
+    float endRpm   = cal.maxRpm > 400 ? cal.maxRpm * 0.95f : 1000.0f;
+    float stepRpm  = (endRpm - startRpm) / 9.0f;
+
+    for (int k = 0; k < 10 && !Op::pendingStop; k++) {
+        float rpm = startRpm + k * stepRpm;
+        uint32_t targetSps = (uint32_t)Units::rpmToSps(i, rpm);
+        s->setAcceleration(50000);
+        s->setSpeedInHz(targetSps);
+        s->runForward();
+        delay(800); // Settle
+
+        uint32_t p0 = HalTacho::getPulseCount(i);
+        uint32_t samples[10]; int count = 0;
+        unsigned long tStart = millis();
+        while (count < 10 && millis() - tStart < 3000 && !Op::pendingStop) {
+            uint32_t p1 = HalTacho::getPulseCount(i);
+            if (p1 > p0) {
+                samples[count++] = HalTacho::tacho[i].periodUs;
+                p0 = p1;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+
+        if (count >= 4) {
+            double sum = 0;
+            for (int n = 0; n < count; n++) sum += samples[n];
+            double mean = sum / count;
+            double var = 0;
+            for (int n = 0; n < count; n++) var += pow((double)samples[n] - mean, 2);
+            double sigma = sqrt(var / count);
+            MotorProfileNs::addPoint(i, rpm, (float)mean, (float)sigma, Telemetry::getLatestSg(i), Telemetry::getLatestCs(i));
+        }
+    }
+    MotorProfileNs::saveProfile(i);
+    Logger::addLog("Profile: saved");
+    resetMotorState(i, false);
+}
+
 // Performance Show: alle Tests in sinnvoller Reihenfolge.
 // 1. SgLearn (Threshold lernen) → 2. SpeedTest (Top-RPM) → 3. InertiaTest
-// (Top-Acc) → 4. Katapult (3 Bursts bei Top-RPM) → 5. CurrentSweep (Sweet-
-// Spot) → 6. CoastTest (Auslauf) → 7. FreqSweep (Frequenzgang).
-// Reihenfolge wichtig: SpeedTest+InertiaTest setzen Cal-Werte für die
-// nachfolgenden Tests, die diese als Defaults brauchen.
+// (Top-Acc) → 4. ProfileLearn (Watchdog-Antizipation) → 5. Katapult (3 Bursts)
+// → 6. CurrentSweep (Sweet-Spot) → 7. CoastTest (Auslauf) → 8. FreqSweep.
 void runPerformanceShow(uint8_t i) {
     Logger::addLog("Vorführung Start");
 
-    Logger::addLog("Show 1/7: SG-Learn");
+    Logger::addLog("Show 1/8: SG-Learn");
     runSgLearn(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 2/7: SpeedTest");
+    Logger::addLog("Show 2/8: SpeedTest");
     runSpeedTest(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 3/7: Inertia");
+    Logger::addLog("Show 3/8: Inertia");
     runInertiaTest(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 4/7: Katapult");
+    Logger::addLog("Show 4/8: ProfileLearn");
+    runProfileTest(i);
+    if (Op::pendingStop) return;
+
+    Logger::addLog("Show 5/8: Katapult");
     runKatapult(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 5/7: CurrentSweep");
+    Logger::addLog("Show 6/8: CurrentSweep");
     runCurrentSweepHiRPM(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 6/7: Coast");
+    Logger::addLog("Show 7/8: Coast");
     runCoastTest(i);
     if (Op::pendingStop) return;
 
-    Logger::addLog("Show 7/7: FreqSweep");
+    Logger::addLog("Show 8/8: FreqSweep");
     runFreqSweep(i);
 
     Logger::addLog("Vorführung Ende");

@@ -91,7 +91,19 @@ static unsigned long lastCapLogMs = 0;
 // Tacho-Bereich.
 static constexpr float WAVE_CAP_TCO_SAFETY = 0.9f;
 
-static float capWaveSpeedFromFreqStallAmp(float effSpeed, float effRangeDeg) {
+// Bug 54 (v4.4.13): Cap-Strategie umgekehrt — Speed bleibt User-Wahl, Range
+// wird ehrlich auto-gecappt. Vorher: hohe f + große Range → Speed wurde
+// runter-gecappt (User sah „Hz drop ohne Grund"). Jetzt: User-f bleibt,
+// Range schrumpft auf physikalisch mögliche Amplitude. Match zur User-
+// Vorstellung „max speed wert mit Begrenzung der Amplitude".
+// Zwei getrennte Caps:
+//   (1) `capWaveSpeedByTco`     — Speed nach `tachoCutoffHz` (Sensor-blind).
+//   (2) `capWaveRangeByFreqAmp` — Range nach `freqStallAmp` (Amp-Physik).
+//
+// tachoCutoffHz ist nicht amp-bezogen — Sensor wird oberhalb fc blind egal
+// wie klein die Amplitude. Daher bleibt das ein Speed-Cap.
+
+static float capWaveSpeedByTco(float effSpeed) {
     float effSpeedCapped = effSpeed;
     int   restrictedMotor = -1;
     float f = effSpeed / (2.0f * (float)M_PI);
@@ -100,13 +112,6 @@ static float capWaveSpeedFromFreqStallAmp(float effSpeed, float effRangeDeg) {
         if (!Stepper::get(i)) continue;
         const auto& cal = calCache[i];
         if (!cal.valid) continue;
-        long demandedHalfAmp = (long)(effRangeDeg * (float)Stepper::stepsPerRev(i) / 360.0f);
-
-        // v4.3.3: Hard-Cap auf tachoCutoffHz aus FreqSweep v3 Phase A.
-        // Oberhalb der Hysterese-Schwelle ist der Sensor blind und der
-        // Player kann sich nicht mehr per Tacho selbst-validieren.
-        // Phase A (linearer 1-Hz-Sweep) ist präziser als FS2-Bisektion (10
-        // log-spaced Bänder), daher als zusätzlicher konservativer Cap.
         if (cal.tachoCutoffHz > 0) {
             float fTcoMax = (float)cal.tachoCutoffHz * WAVE_CAP_TCO_SAFETY;
             if (f > fTcoMax) {
@@ -117,17 +122,6 @@ static float capWaveSpeedFromFreqStallAmp(float effSpeed, float effRangeDeg) {
                 }
             }
         }
-
-        long ampMaxSafe      = maxAmpAtFreq(cal, f);
-        if (ampMaxSafe <= 0) continue;
-        if (demandedHalfAmp > ampMaxSafe) {
-            float f_capped = f * sqrtf((float)ampMaxSafe / (float)demandedHalfAmp);
-            float effSpeedThis = f_capped * 2.0f * (float)M_PI;
-            if (effSpeedThis < effSpeedCapped) {
-                effSpeedCapped = effSpeedThis;
-                restrictedMotor = i;
-            }
-        }
     }
     if (effSpeedCapped < effSpeed && restrictedMotor >= 0) {
         unsigned long nowMs = millis();
@@ -135,12 +129,44 @@ static float capWaveSpeedFromFreqStallAmp(float effSpeed, float effRangeDeg) {
             lastCapLogMs = nowMs;
             float fOrig = effSpeed / (2.0f * (float)M_PI);
             float fCap  = effSpeedCapped / (2.0f * (float)M_PI);
-            Logger::addLog(String("Wave-Cap M") + (char)('X' + restrictedMotor)
-                + ": " + String(fOrig, 1) + " Hz → " + String(fCap, 1) + " Hz @ "
-                + (int)effRangeDeg + "°");
+            Logger::addLog(String("Speed-Cap M") + v4::motorName(restrictedMotor)
+                + " (TCO): " + String(fOrig, 1) + " → " + String(fCap, 1) + " Hz");
         }
     }
     return effSpeedCapped;
+}
+
+static unsigned long lastRangeCapLogMs = 0;
+static float capWaveRangeByFreqAmp(float effSpeed, float effRangeDeg) {
+    float f = effSpeed / (2.0f * (float)M_PI);
+    if (f <= 0.001f) return effRangeDeg;
+    float effRangeCapped = effRangeDeg;
+    int   restrictedMotor = -1;
+    for (int i = 0; i < 4; i++) {
+        if (!Stepper::get(i)) continue;
+        const auto& cal = calCache[i];
+        if (!cal.valid) continue;
+        long ampMaxSafe = maxAmpAtFreq(cal, f);
+        if (ampMaxSafe <= 0) continue;
+        long demandedHalfAmp = (long)(effRangeDeg * (float)Stepper::stepsPerRev(i) / 360.0f);
+        if (demandedHalfAmp > ampMaxSafe) {
+            float maxRangeDeg = (float)ampMaxSafe * 360.0f / (float)Stepper::stepsPerRev(i);
+            if (maxRangeDeg < effRangeCapped) {
+                effRangeCapped = maxRangeDeg;
+                restrictedMotor = i;
+            }
+        }
+    }
+    if (effRangeCapped < effRangeDeg && restrictedMotor >= 0) {
+        unsigned long nowMs = millis();
+        if (nowMs - lastRangeCapLogMs > 1000) {
+            lastRangeCapLogMs = nowMs;
+            Logger::addLog(String("Range-Cap M") + v4::motorName(restrictedMotor)
+                + ": " + (int)effRangeDeg + "° → " + (int)effRangeCapped
+                + "° @ " + String(f, 1) + " Hz");
+        }
+    }
+    return effRangeCapped;
 }
 
 // Drive-Dynamics-Skalierungen aus V1 MANUAL.md
@@ -276,7 +302,14 @@ static uint32_t      wdPulsesSnapshot[4] = {0,0,0,0};
 static constexpr uint32_t WD_WINDOW_MS  = 3000;
 static constexpr float    WD_RATIO_THR  = 0.5f;
 static constexpr long     WD_MIN_AMP_STEPS = 250;  // ~Sensor-Hysterese Z
-static constexpr float    WD_MIN_F_HZ      = 0.3f; // unter 0.3 Hz statistisch sinnlos
+// v4.4.8 Hotfix: WD unter 1 Hz deaktivieren. Bei f<1 Hz frisst die
+// Sensor-Hysterese (Bug 32) so viele Pulse, dass das Mathe-Modell
+// `expected = 2·f·W` systematisch zu hoch ist → false-positive STOP, auch
+// mit adaptivem Fenster. Real-Welt-Beispiel im Log: f=0.5 Hz Square,
+// expected=4, real=1, ratio=0.25 → STOP, obwohl Motor mechanisch ok.
+// Bei langsamer Bewegung ist ein echter Stall ohnehin nicht
+// sicherheitskritisch — Watchdog greift wieder ab 1 Hz.
+static constexpr float    WD_MIN_F_HZ      = 1.0f;
 
 static void tickWatchdog() {
     if (!v4::rt.running) {
@@ -290,17 +323,32 @@ static void tickWatchdog() {
     }
 
     unsigned long now = millis();
+
+    // Bug 47 (v4.4.8): f früh berechnen, damit das Fenster adaptiv min.
+    // zwei Perioden umfasst. Vorher festes 3-s-Fenster → bei f≈0.5 Hz nur
+    // 3 erwartete Pulse, eine verpasste Sensorflanke = ratio<0.5 = STOP.
+    float effSpeed    = v4::rt.speed * dynSpeed();
+    float effRangeDeg = v4::rt.rangeDeg * dynRange();
+    effSpeed    = capWaveSpeedByTco(effSpeed);
+    effRangeDeg = capWaveRangeByFreqAmp(effSpeed, effRangeDeg);
+    float f = effSpeed / (2.0f * (float)M_PI);
+
     if (lastWdSnapshotMs == 0) {
         for (int i = 0; i < 4; i++) wdPulsesSnapshot[i] = HalTacho::getPulseCount(i);
         lastWdSnapshotMs = now;
         return;
     }
-    if (now - lastWdSnapshotMs < WD_WINDOW_MS) return;
 
-    float effSpeed    = v4::rt.speed * dynSpeed();
-    float effRangeDeg = v4::rt.rangeDeg * dynRange();
-    effSpeed = capWaveSpeedFromFreqStallAmp(effSpeed, effRangeDeg);
-    float f = effSpeed / (2.0f * (float)M_PI);
+    // Adaptives Fenster: W = max(3 s, 2/f). Garantiert ≥4 erwartete Pulse
+    // selbst bei sehr niedrigen Frequenzen — eine einzelne verpasste Flanke
+    // kann ratio dann nicht mehr unter 0.5 ziehen.
+    uint32_t windowMs = WD_WINDOW_MS;
+    if (f > 0.001f) {
+        uint32_t twoPeriodsMs = (uint32_t)(2000.0f / f);
+        if (twoPeriodsMs > windowMs) windowMs = twoPeriodsMs;
+    }
+    if (now - lastWdSnapshotMs < windowMs) return;
+
     if (f < WD_MIN_F_HZ) {
         // Refresh snapshot; zu langsam für sinnvolle Auswertung
         for (int i = 0; i < 4; i++) wdPulsesSnapshot[i] = HalTacho::getPulseCount(i);
@@ -325,7 +373,7 @@ static void tickWatchdog() {
         float    real   = (float)real32;
         float    ratio  = expected > 0.0f ? (real / expected) : 1.0f;
         if (ratio < WD_RATIO_THR) {
-            Logger::addLog(String("PLAYER WD M") + (char)('X' + i)
+            Logger::addLog(String("PLAYER WD M") + v4::motorName(i)
                 + ": ratio=" + String(ratio, 2)
                 + " (real=" + (int)real + " exp=" + String(expected, 1)
                 + ", f=" + String(f, 1) + " Hz) → STOP");
@@ -396,13 +444,14 @@ void tick() {
     float dt = (float)TICK_MS / 1000.0f;
     float effSpeed = v4::rt.speed * dynSpeed();
 
-    // Bug-ID 29: Wave-Mode-Cap aus FreqSweep-v2-Daten. Cappt effSpeed wenn
-    // die geforderte Reversal-Amplitude bei aktueller Frequenz die Mechanik
-    // überfordern würde. effRange bleibt unverändert — User behält die
-    // volle Amplitude, nur die Wellen-Frequenz wird begrenzt.
+    // Bug 54 (v4.4.13): Cap-Strategie umgekehrt. Vorher cappte
+    // `capWaveSpeedFromFreqStallAmp` die Speed runter, um die User-Range zu
+    // halten — User sah „Hz drop ohne Grund". Jetzt: Speed bleibt (nur durch
+    // tachoCutoffHz begrenzt, Sensor-blind-Bereich), Range wird auf die bei
+    // dieser Frequenz physikalisch tragbare Amplitude geclipped (siehe
+    // `effRangeDeg`-Berechnung unten).
     if (v4::rt.moveType >= 3 && v4::rt.moveType <= 5) {
-        float effRangeDegLocal = v4::rt.rangeDeg * dynRange();
-        effSpeed = capWaveSpeedFromFreqStallAmp(effSpeed, effRangeDegLocal);
+        effSpeed = capWaveSpeedByTco(effSpeed);
     }
 
     // 1) Pfad-Generator
@@ -473,6 +522,11 @@ void tick() {
 
     // 2) Pro Motor Ziel-Position berechnen
     float effRangeDeg = v4::rt.rangeDeg * dynRange();
+    // Bug 54: Range nach FreqAmp-Physik cappen — Wave-Modi nur. Für Noise/
+    // Step/etc. bleibt User-Range unverändert (kein Reversal-Limit).
+    if (v4::rt.moveType >= 3 && v4::rt.moveType <= 5) {
+        effRangeDeg = capWaveRangeByFreqAmp(effSpeed, effRangeDeg);
+    }
 
     for (uint8_t i = 0; i < 4; i++) {
         auto* s = Stepper::get(i);
@@ -480,7 +534,12 @@ void tick() {
         float val = 0.0f;
 
         if (v4::rt.moveType >= 3) {
-            // WAVEFORM
+            // WAVEFORM. Bug 54 (v4.4.14): contrast wird NICHT angewendet
+            // — er ist ein Perlin-Begriff (Hügelgröße im Noise-Raum) und
+            // ergibt für reine Wellenformen keinen Sinn. Vorher
+            // `val *= contrast` war Altlast aus v2 (User-Bestätigung
+            // 2026-05-15: „contrast stumm: der macht hier bei sinus nix").
+            // Amplitude wird allein durch `effRangeDeg` skaliert.
             float phaseSpread = (v4::rt.mspace / 100.0f) * 2.0f * (float)M_PI;
             float phase = timeAcc + (float)i * phaseSpread;
             if (v4::rt.moveType == 3) {            // SINUS
@@ -496,7 +555,6 @@ void tick() {
                 float duty = fmaxf(0.05f, fminf(0.95f, 0.5f + v4::rt.zShape * 0.08f));
                 val = t < duty ? 1.0f : -1.0f;
             }
-            val *= v4::rt.contrast;
         } else {
             // NOISE-Modi — Phase 10 C: 2D-Spatial-Sampling. Jeder Motor liest
             // an seiner eigenen (offsetX, offsetY)-Position relativ zum
@@ -568,7 +626,8 @@ size_t getPreviewBytes(uint8_t* out, size_t maxBytes) {
                 float duty = fmaxf(0.05f, fminf(0.95f, 0.5f + c.zShape * 0.08f));
                 val = t < duty ? 1.0f : -1.0f;
             }
-            val *= c.contrast;
+            // Bug 54: contrast in Wave-Preview ebenfalls deaktiviert (Engine
+            // entspricht, val * range übernimmt die Amplitude allein).
             if (val < -1.0f) val = -1.0f; else if (val > 1.0f) val = 1.0f;
             int b = (int)((val + 1.0f) * 63.5f);
             if (b < 0) b = 0; else if (b > 127) b = 127;

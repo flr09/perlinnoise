@@ -1,6 +1,7 @@
 #include "EdgeTouch.h"
 #include <limits.h>
 #include "../L0_platform/Logger.h"
+#include "../L0_platform/Types.h"
 #include "../L1_hal/Hal_Pins.h"
 #include "../L1_hal/Hal_Sensor.h"
 #include "../L3_driver/Stepper.h"
@@ -48,7 +49,7 @@ long touch(uint8_t motorIdx, int targetSensorState, int dir,
         }
         if (!hit) {
             s->stopMove();
-            Logger::addLog(String("EdgeTouch M") + (char)('X' + motorIdx) + ": miss");
+            Logger::addLog(String("EdgeTouch M") + v4::motorName(motorIdx) + ": miss");
             return LONG_MIN;  // Sentinel für Miss — Position kann legitim negativ sein!
         }
         long pos = s->getCurrentPosition();
