@@ -16,6 +16,11 @@ namespace Sync {
 
 extern portMUX_TYPE motorMux;
 extern SemaphoreHandle_t uartMutex;
+// Bug 77 (v4.4.24): Logger hat eigenen Mutex, sonst Contention mit TMC-UART
+// (Bug-74-Fix migrierte Logger fälschlich auf uartMutex). Logger holdet bis
+// zu 50 ms für Buffer-Copy (6 KB) → blockiert TMC-Operationen. Eigener
+// Mutex koppelt Logger von TMC-UART ab.
+extern SemaphoreHandle_t loggerMutex;
 
 void init();
 

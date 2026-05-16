@@ -58,7 +58,7 @@ void run(uint8_t motorIdx) {
 
     uint8_t pin = HalPins::MOTORS[motorIdx].tachoPin;
     Tmc::setPower(motorIdx, true);
-    Tmc::applyDefaults(motorIdx, 800); // Sicherer Strom (Datenblatt: max 900mA)
+    Tmc::applyDefaults(motorIdx, v4::DEFAULT_SAFE_CURRENT_MA); // Bug 71: zentralisiert in Types.h
     Stepper::setMicrosteps(motorIdx, 16);
     Logger::addLog(String("CAL M") + v4::motorName(motorIdx) + ": v4 calib (fast)"
         + (expectedWidth > 0 ? String(", fastW=") + expectedWidth

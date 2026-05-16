@@ -284,12 +284,12 @@ html,body{background:var(--pa);color:var(--ink);
           <option value="5">Square</option>
           <option value="8">Coordinate</option>
         </select></div>
-      <div class="row"><label id="lblSpeed">Speed</label><input type="range" id="psSpeed" min="0" max="2" step="0.01" oninput="setP('speed',this.value)"><span class="val" id="vSpeed">—</span></div>
-      <div class="row"><label>Range (deg)</label><input type="range" id="psRange" min="30" max="360" step="1" oninput="setP('range',this.value)"><span class="val" id="vRange">—</span></div>
-      <div class="row"><label id="lblCont">Contrast</label><input type="range" id="psCont" min="0" max="2" step="0.01" oninput="setP('cont',this.value)"><span class="val" id="vCont">—</span></div>
-      <div class="row"><label>Frame</label><input type="range" id="psFrame" min="0.001" max="0.5" step="0.001" oninput="setP('frame',this.value)"><span class="val" id="vFrame">—</span></div>
-      <div class="row"><label id="lblShape">Shape</label><input type="range" id="psShape" min="-5" max="5" step="0.1" oninput="setP('shape',this.value)"><span class="val" id="vShape">—</span></div>
-      <div class="row"><label id="lblMspace">Spacing</label><input type="range" id="psMspace" min="0" max="100" step="1" oninput="setP('mspace',this.value)"><span class="val" id="vMspace">—</span></div>
+      <div class="row"><label id="lblSpeed">Speed</label><input type="range" id="psSpeed" min="0" max="2" step="0.01" oninput="setPLocal('speed',this.value)" onchange="setP('speed',this.value)"><span class="val" id="vSpeed">—</span></div>
+      <div class="row"><label>Range (deg)</label><input type="range" id="psRange" min="30" max="360" step="1" oninput="setPLocal('range',this.value)" onchange="setP('range',this.value)"><span class="val" id="vRange">—</span></div>
+      <div class="row"><label id="lblCont">Contrast</label><input type="range" id="psCont" min="0" max="2" step="0.01" oninput="setPLocal('cont',this.value)" onchange="setP('cont',this.value)"><span class="val" id="vCont">—</span></div>
+      <div class="row"><label>Frame</label><input type="range" id="psFrame" min="0.001" max="0.5" step="0.001" oninput="setPLocal('frame',this.value)" onchange="setP('frame',this.value)"><span class="val" id="vFrame">—</span></div>
+      <div class="row"><label id="lblShape">Shape</label><input type="range" id="psShape" min="-5" max="5" step="0.1" oninput="setPLocal('shape',this.value)" onchange="setP('shape',this.value)"><span class="val" id="vShape">—</span></div>
+      <div class="row"><label id="lblMspace">Spacing</label><input type="range" id="psMspace" min="0" max="100" step="1" oninput="setPLocal('mspace',this.value)" onchange="setP('mspace',this.value)"><span class="val" id="vMspace">—</span></div>
       <div class="row"><label>Dynamics</label>
         <select id="psDyn" onchange="setP('dyn',this.value|0)">
           <option value="0">Langsam</option>
@@ -340,6 +340,17 @@ function cmd(a,m){
       appendLog((r.ok?'✓ ':'✗ HTTP '+r.status+' ')+lbl+(t?': '+t:''));
     })})
     .catch(function(){appendLog('✗ '+lbl+': network')});
+}
+// Bug 80 (v4.4.28): Slider-Flood gestoppt. Vorher feuerte `oninput`
+// pro Drag-Pixel `/set?k=v` an den ESP — bei Slider mit 200+ Schritten =
+// 200+ HTTP-Requests pro Drag, AsyncWebServer-Slots saturieren (Memory
+// Bug 526). Jetzt: `oninput` → `setPLocal` (lokales CFG + Coupling + Labels),
+// `onchange` (mouseup) → `setP` (Server). Engine hat authoritative Caps
+// (Bug 54), Status-Polling synct den finalen Wert zurück.
+function setPLocal(k,v){
+  CFG[k]=+v;
+  if(k==='speed'||k==='range'||k==='type')applyWaveCoupling();
+  applyLabels();
 }
 function setP(k,v){
   fetch('/set?'+k+'='+v).then(function(r){return r.json()}).then(function(c){
@@ -486,24 +497,59 @@ function updateCompass(){
   }
 }
 
-function renderMotors(M){
-  var g=document.getElementById('mg'),h='';
+// Bug 78 (v4.4.26): renderMotors war vorher 10 Hz `g.innerHTML = h` — alle
+// 4 Motor-Cards + 8-16 Buttons im DOM neu erzeugen. Click-Events während
+// innerHTML-Rebuild gingen verloren (Bug-58/63-Familie). Jetzt: DOM einmal
+// in buildMotors() aufbauen, renderMotors() nur noch Werte/Klassen
+// updaten via textContent/className — keine DOM-Operationen mehr, Buttons
+// bleiben stabil.
+function buildMotors(){
+  var g=document.getElementById('mg');if(!g)return;
+  var h='';
   for(var i=0;i<4;i++){
-    var m=M[i]||{},e=m.e,p=m.p,s=m.s,puls=m.pulses,hit=m.hit;
-    var pos=(p==null?'—':(p.toFixed(1)+'°'));
-    var spd=(s==null?'—':s);
-    var aux=(puls!=null?puls+'p':'');
     var btns=[];
-    btns.push({a:'pwr',l:'Power',cls:e===true?'pri':''});
+    btns.push({a:'pwr',l:'Power'});
     btns.push({a:'setzero',l:'Zero'});
     if(PHASE>=2 && HAS_SENSOR[i]){btns.push({a:'cal',l:'Calib'});btns.push({a:'home',l:'Home'})}
     var bcls=btns.length===2?'':btns.length===3?'three':'four';
-    var bh='';for(var j=0;j<btns.length;j++){var b=btns[j];bh+='<button class="btn '+(b.cls||'')+'" onclick="cmd(\''+b.a+'\','+i+')">'+b.l+'</button>'}
-    h+='<div class="mc"><div class="top"><span class="dot '+dotCls(e,hit)+'"></span><span class="name">'+MNAMES[i]+'</span><span class="st '+(e===true?'on':'')+'">'+stTxt(e)+'</span></div>'
-      +'<div class="nums"><div class="nm"><div class="k">Pos</div><div class="vv">'+pos+'</div></div><div class="nm"><div class="k">Speed</div><div class="vv">'+spd+'</div></div><div class="nm"><div class="k">Sensor</div><div class="vv">'+(aux||'—')+'</div></div></div>'
-      +'<div class="btns '+bcls+'">'+bh+'</div></div>';
+    var bh='';
+    for(var j=0;j<btns.length;j++){
+      var b=btns[j];
+      bh+='<button class="btn" id="b_'+b.a+'_'+i+'" onclick="cmd(\''+b.a+'\','+i+')">'+b.l+'</button>';
+    }
+    h+='<div class="mc">'
+      +'<div class="top">'
+      +'<span class="dot" id="dot_'+i+'"></span>'
+      +'<span class="name">'+MNAMES[i]+'</span>'
+      +'<span class="st" id="st_'+i+'">—</span>'
+      +'</div>'
+      +'<div class="nums">'
+      +'<div class="nm"><div class="k">Pos</div><div class="vv" id="pos_'+i+'">—</div></div>'
+      +'<div class="nm"><div class="k">Speed</div><div class="vv" id="spd_'+i+'">—</div></div>'
+      +'<div class="nm"><div class="k">Sensor</div><div class="vv" id="aux_'+i+'">—</div></div>'
+      +'</div>'
+      +'<div class="btns '+bcls+'">'+bh+'</div>'
+      +'</div>';
   }
   g.innerHTML=h;
+}
+
+function renderMotors(M){
+  for(var i=0;i<4;i++){
+    var m=M[i]||{},e=m.e,p=m.p,s=m.s,puls=m.pulses,hit=m.hit;
+    var pos=(p==null?'—':(p.toFixed(1)+'°'));
+    var spd=(s==null?'—':String(s));
+    var aux=(puls!=null?puls+'p':'—');
+    var posEl=document.getElementById('pos_'+i);if(posEl)posEl.textContent=pos;
+    var spdEl=document.getElementById('spd_'+i);if(spdEl)spdEl.textContent=spd;
+    var auxEl=document.getElementById('aux_'+i);if(auxEl)auxEl.textContent=aux;
+    var dotEl=document.getElementById('dot_'+i);
+    if(dotEl)dotEl.className='dot '+dotCls(e,hit);
+    var stEl=document.getElementById('st_'+i);
+    if(stEl){stEl.className='st'+(e===true?' on':'');stEl.textContent=stTxt(e)}
+    var pwrBtn=document.getElementById('b_pwr_'+i);
+    if(pwrBtn)pwrBtn.className='btn'+(e===true?' pri':'');
+  }
 }
 
 function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)return m+'m '+r+'s';var h=Math.floor(m/60);return h+'h '+(m%60)+'m'}
@@ -628,6 +674,7 @@ function apply(d){
 })();
 buildDials();
 buildCompass();
+buildMotors();
 
 function loadConfig(){
   fetch('/config').then(function(r){return r.json()}).then(applyConfig).catch(function(){})
@@ -1327,26 +1374,32 @@ void begin() {
     //   Wave  (3..5): {mode, n:128, data:[128 Bytes]}    Bit7 = Phasen-Marker
     //   STEP  (6):    {mode, w:0}
     server.on("/preview", HTTP_GET, [](AsyncWebServerRequest* r) {
+        // Bug 76 (v4.4.24): Streaming statt String-Build. Vorher pro 10 Hz
+        // Poll ~4 KB String + ~4 KB Response-Copy = ~80 KB/s Heap-Churn,
+        // gleiches Pattern wie Bug 46 (Recorder) und 56 (Telemetry). Jetzt
+        // AsyncResponseStream — byte-weise printf, kein voll-String.
+        // `pbuf` static — AsyncWebServer serialisiert Handler-Calls innerhalb
+        // eines Tasks, kein Race zwischen zwei Preview-Requests. (Race mit
+        // Synthesis-Tick auf Core 1 separat — getPreviewBytes liest rt+ne
+        // ohne Lock; bekannt, separate Diskussion.)
         static uint8_t pbuf[1024];
         size_t n = Synthesis::getPreviewBytes(pbuf, sizeof(pbuf));
-        String json;
-        json.reserve(n * 4 + 64);
-        json = "{\"mode\":";
-        json += v4::rt.moveType;
-        if (n == 0) {
-            json += ",\"w\":0,\"data\":[]}";
-        } else {
-            const bool noise = (v4::rt.moveType <= 2);
-            json += noise ? ",\"w\":32,\"h\":32,\"data\":[" : ",\"n\":128,\"data\":[";
-            for (size_t i = 0; i < n; i++) {
-                if (i > 0) json += ',';
-                json += pbuf[i];
-            }
-            json += "]}";
-        }
-        AsyncWebServerResponse* res = r->beginResponse(200, "application/json", json);
+
+        AsyncResponseStream* res = r->beginResponseStream("application/json");
         res->addHeader("Access-Control-Allow-Origin", "*");
         res->addHeader("Cache-Control", "no-store");
+        res->printf("{\"mode\":%d", (int)v4::rt.moveType);
+        if (n == 0) {
+            res->print(",\"w\":0,\"data\":[]}");
+        } else {
+            const bool noise = (v4::rt.moveType <= 2);
+            res->print(noise ? ",\"w\":32,\"h\":32,\"data\":[" : ",\"n\":128,\"data\":[");
+            for (size_t i = 0; i < n; i++) {
+                if (i > 0) res->print(',');
+                res->print((int)pbuf[i]);
+            }
+            res->print("]}");
+        }
         r->send(res);
     });
 

@@ -1,11 +1,20 @@
 # 📌 AGENT COORDINATION HUB
 
 ## 🕒 Aktueller Status (LIVE)
-- **Stand:** 2026-05-09
+- **Stand:** 2026-05-16
 - **Branch:** `v4-modular`
-- **Firmware:** **v4.4.7** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 9 ✅**, v4.3.6 (Bug 36), **Phase 10 A+B+C+D+E+F+G+H ✅ (2026-05-13)**: räumliches Modell, L7-API, Coordinate-Mode, Player-UI (Labels + Canvas-Dots + 2D-Kompass-Cards + REC-Button + Preset-Slots + Wave-Winkel-Anzeige), Performance-Recorder, responsive App-Variante <600 px. **I deferred** (Chart.js zu groß, kein Bedarf). Offen: J (Integration+Final-Tag); Bugfix Spatial-UX; Bug 43 (Calib-Stall).
-- **NVS-Schemata:** calib 4004 (cal.tachoCutoffHz=31, freqStallAmp[7] valid), rtconf 4202 (Phase 10 C: `offsets[4]` + `posDeg[4]`).
-- **Watchdog:** v1 aktiv (3s Fenster, ratio<0.5).
+- **Firmware:** **v4.4.28** auf `perlin-v4.intern.gaengeviertel.de` (192.168.193.22) — **Phase 10.1 ✅** (Stabilität: Bugs 46/47/48/49/50/51/53), **Phase 10.2 ✅** (Silent-Mode: Bug 55 `silentCurrentMA`-Matrix), **Phase 10.3 ✅** (GUI-Härtung: Bugs 67/69/70/71/76/77/78/79/80). Player überlebt jetzt Slider-Drag, /preview-Stress, Mode-Switches; WD MS-invariant.
+- **NVS-Schemata:** calib **4005** (Schema-4004→4005-Migration in `Storage_Calib::load` aktiv, `silentCurrentMA[5]` für MS=[16,32,64,128,256]), rtconf 4202.
+- **Watchdog:** v1 mit adaptivem Fenster `max(3 s, 2/f)`, `WD_MIN_F_HZ=1.0`, MS-invariantem `WD_MIN_AMP_DEG=28°`.
+
+### Lessons aus Phase 10.3 (v4.4.23 → v4.4.28)
+
+- **WD MS-Invarianz (Bug 79):** Silent-Matrix wechselte Player auf MS=128 → `stepsPerRev=25600` → demandedHalfAmp=1849 bei 26°-Range → WD aktiv trotz Bewegung unter Sensor-Hysterese. Fix: Schwellwert in Grad statt Steps.
+- **/preview-Heap-Churn (Bug 76):** Pattern-Familie 46/56 — String-Build + Response-Copy unter 10-Hz-Polling = ~80 KB/s. Streaming via `AsyncResponseStream` löst alle drei Vorkommen einheitlich.
+- **Logger-Mutex-Falle (Bug 77):** Bug-74-Fix migrierte Logger irrtümlich auf `uartMutex`, der eigentlich TMC-Kommandos schützt. Folge: Status-Polling blockierte TMC-Operationen. Eigener `loggerMutex` entkoppelt.
+- **DOM-Stabilität (Bug 78):** `innerHTML`-Rebuild pro 100 ms zerstörte + rebaute Buttons → Click-Race (Bug-58/63-Familie). `buildMotors()` einmal, dann nur `textContent`/`className` — keine Click-Verluste mehr.
+- **setPower-Race-Iteration-3 (Bug 69):** Erst entfernt → Freeze, dann blind reingesetzt → Race, jetzt bedingt (`if currentMA==0`) → Freeze-Schutz für Erst-Power, Race weg bei Re-Power.
+- **Slider-Flood (Bug 80):** `oninput→/set` pro Pixel = ~200 HTTP-Requests pro Drag, saturierte AsyncWebServer. `oninput→lokal, onchange→Server` reduziert auf 1 pro Drag.
 
 ### Lessons aus Phase 9 (v4.3.0 → v4.3.5)
 

@@ -95,7 +95,15 @@ void setPower(uint8_t motorIdx, bool on) {
             d->toff(5);
             xSemaphoreGive(Sync::uartMutex);
         }
-        applyDefaults(motorIdx); // Bug 69-rev: Basis-Strom setzen um Freeze zu verhindern
+        // Bug 69 (v4.4.27): applyDefaults nur beim Erst-Power-On dieser Session.
+        // Vorher unbedingt → Race mit Aufrufern (z.B. Synthesis::start →
+        // applySilentHardwareSettings), die selbst applyDefaults mit
+        // anderem MS/MA setzen → zwei UART-Writes auf microsteps hintereinander.
+        // Wenn currentMA==0 (noch nie applyDefaults seit Boot), Basis-Strom
+        // setzen — sonst hätte der TMC rms_current=0, Motor faktisch unbestromt
+        // („Freeze" der früheren Beobachtung). Bei Re-Power-On mit erhaltenen
+        // Register-Werten skippen — Aufrufer setzt finale Werte selbst.
+        if (currentMA[motorIdx] == 0) applyDefaults(motorIdx);
         Logger::addLog(String("M") + v4::motorName(motorIdx) + ": POWER ON");
     } else {
         if (xSemaphoreTake(Sync::uartMutex, pdMS_TO_TICKS(50)) == pdTRUE) {

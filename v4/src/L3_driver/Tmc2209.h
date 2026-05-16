@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include <TMCStepper.h>
+#include "../L0_platform/Types.h"  // v4::DEFAULT_SAFE_CURRENT_MA
 
 // L3 — TMC2209-Wrapper für 4 Motoren
 //
@@ -16,7 +17,7 @@ void init();   // alle 4 Treiber + UART-Bus + ENABLE-Pin
 bool ready();  // global init ok?
 TMC2209Stepper* driver(uint8_t motorIdx);  // null wenn nicht init oder out-of-range
 
-void applyDefaults(uint8_t motorIdx, uint16_t runMA = 800, uint16_t ms = 64);
+void applyDefaults(uint8_t motorIdx, uint16_t runMA = v4::DEFAULT_SAFE_CURRENT_MA, uint16_t ms = 64);
 void setCurrent(uint8_t motorIdx, uint16_t runMA, uint16_t holdMA);
 uint16_t getRunCurrent(uint8_t motorIdx);
 void setPower(uint8_t motorIdx, bool on);
@@ -31,7 +32,7 @@ void setAllPower(bool on);  // gemeinsamer ENABLE-Pin schaltet alle gleichzeitig
 void setTPWMTHRS(uint8_t motorIdx, uint32_t threshold);
 
 // Backwards-compat aus Phase 1 — werden in Phase 3 entfernt
-void applyDefaultsX(uint16_t runMA = 800);
+void applyDefaultsX(uint16_t runMA = v4::DEFAULT_SAFE_CURRENT_MA);
 void setPowerX(bool on);
 bool isPoweredX();
 

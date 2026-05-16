@@ -17,6 +17,13 @@ inline constexpr char motorName(uint8_t i) {
     return (i == 0) ? 'X' : (i == 1) ? 'Y' : (i == 2) ? 'Z' : (i == 3) ? 'E' : '?';
 }
 
+// Bug 71 (v4.4.28): Safe-Default-Strom zentralisiert. Vorher an 4 Stellen
+// hardcoded 800 mA verteilt (Synthesis.cpp Fallback, Tmc2209.h zwei
+// Default-Args, Calibration.cpp explicit). Memory Bug 5: Z-Sweet-Spot
+// 1000 mA, Pancake-Datenblatt-Soft-Limit 900 mA. 800 ist unter Hard-Cap,
+// konservativ für uncharakterisierte Motoren.
+constexpr uint16_t DEFAULT_SAFE_CURRENT_MA = 800;
+
 // --- Räumliche 2D-Position (Phase 10) ---
 //
 // Wird für `RuntimeConfig.offsets[4]` benutzt: pro Motor eine (x,y)-Position

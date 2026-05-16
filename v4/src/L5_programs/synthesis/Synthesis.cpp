@@ -301,7 +301,14 @@ static unsigned long lastWdSnapshotMs = 0;
 static uint32_t      wdPulsesSnapshot[4] = {0,0,0,0};
 static constexpr uint32_t WD_WINDOW_MS  = 3000;
 static constexpr float    WD_RATIO_THR  = 0.5f;
-static constexpr long     WD_MIN_AMP_STEPS = 250;  // ~Sensor-Hysterese Z
+// Bug 79 (v4.4.23): MS-invarianter Schwellwert in Grad statt Steps. Vorher
+// `WD_MIN_AMP_STEPS = 250` bei MS=16 (= 28.1° peak-to-peak). Mit Silent-
+// Matrix (Bug 55) wechselt der Player auf MS=64/128/256 → stepsPerRev × 4-16
+// → demandedHalfAmp überschreitet 250 auch bei winziger Range, WD aktiviert,
+// findet aber keine Sensor-Crossings (Bewegung unter Hysterese, Memory Bug 32:
+// Z-Hysterese ~8-13° peak) → ratio=0 → false-STOP. Live-Beleg 2026-05-16
+// v4.4.22: MS=128, Range-Cap 26°, demandedHalfAmp=1849, WD-STOP @ f=2 Hz.
+static constexpr float    WD_MIN_AMP_DEG   = 28.0f;
 // v4.4.8 Hotfix: WD unter 1 Hz deaktivieren. Bei f<1 Hz frisst die
 // Sensor-Hysterese (Bug 32) so viele Pulse, dass das Mathe-Modell
 // `expected = 2·f·W` systematisch zu hoch ist → false-positive STOP, auch
@@ -363,8 +370,11 @@ static void tickWatchdog() {
         if (!Stepper::get(i)) continue;
         const auto& cal = calCache[i];
         if (!cal.valid) continue;
-        long demandedHalfAmp = (long)(effRangeDeg * (float)Stepper::stepsPerRev(i) / 360.0f);
-        if (demandedHalfAmp < WD_MIN_AMP_STEPS) continue;
+        // Bug 79: degree-basierter Schwellwert (MS-invariant). effRangeDeg
+        // ist nach `capWaveRangeByFreqAmp` schon physikalisch gecappt; wenn
+        // die effektive Range unter der Sensor-Hysterese liegt, bringt WD
+        // keinen Erkenntnisgewinn — Sensor sieht nichts.
+        if (effRangeDeg < WD_MIN_AMP_DEG) continue;
         // tachoCutoffHz aus Phase A: oberhalb davon erwarten wir keine
         // verlässlichen Pulse mehr (Sensor blind), also kein Drift-Trigger.
         if (cal.tachoCutoffHz > 0 && f > (float)cal.tachoCutoffHz) continue;
@@ -404,7 +414,7 @@ static void applySilentHardwareSettings(uint8_t i, float f, float rangeDeg) {
     if (rpmMax < 5.0f) rpmMax = 5.0f;
     
     uint16_t bestMS = 16;
-    uint16_t bestMA = cal.learnedCurrentMA > 0 ? cal.learnedCurrentMA : 800;
+    uint16_t bestMA = cal.learnedCurrentMA > 0 ? cal.learnedCurrentMA : v4::DEFAULT_SAFE_CURRENT_MA;
     
     uint16_t msLevels[] = {16, 32, 64, 128, 256};
     for (int k = 4; k >= 0; k--) {
@@ -424,7 +434,7 @@ static void applySilentHardwareSettings(uint8_t i, float f, float rangeDeg) {
     float fScale = 0.6f + 0.4f * (f / 5.0f);
     if (fScale > 1.0f) fScale = 1.0f;
     bestMA = (uint16_t)((float)bestMA * fScale);
-    if (bestMA < 100) bestMA = 100;
+    if (bestMA < 200) bestMA = 200; // Bug 75: Höherer Floor für Z-Integrität
 
     if (!s->isRunning()) {
         Stepper::setMicrosteps(i, bestMS);
@@ -482,14 +492,19 @@ void tick() {
     // KRITISCH (Fix ID 24/29): Reaktiv auf Modus-Wechsel reagieren.
     // Wenn der User von Noise auf Square schaltet, müssen Accel/Speed
     // neu berechnet und an die Stepper gepusht werden.
+    //
+    // Bug 67 (v4.4.28): `applySilentHardwareSettings` ist hier *bewusst* tot —
+    // intern guard `if (!s->isRunning())` (Synthesis.cpp:436) blockt im
+    // laufenden Synth-Mode den MS-Wechsel, weil µStep-Wechsel TMC-seitig
+    // nicht atomic ist (Glitch-Risiko mitten in der Bewegung). Silent-Matrix-
+    // Wahl gilt nur ab Player-Start. Wer ein anderes MS/MA möchte: Stop →
+    // Start. `applyEngineCap` (Accel/Speed) und `applyChopperMode` (TPWMTHRS)
+    // sind UART-atomic und damit hier sicher reaktiv.
     if (v4::rt.moveType != lastMoveType) {
         bool stepMode = (v4::rt.moveType == 6);
         bool waveMode = (v4::rt.moveType >= 3 && v4::rt.moveType <= 5);
-        float f = (v4::rt.speed * dynSpeed()) / (2.0f * (float)M_PI);
-        float range = v4::rt.rangeDeg * dynRange();
 
         for (uint8_t i = 0; i < 4; i++) {
-            applySilentHardwareSettings(i, f, range);
             applyEngineCap(i, stepMode, waveMode);
             applyChopperMode(i, v4::rt.moveType);
         }

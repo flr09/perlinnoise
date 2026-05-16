@@ -1,8 +1,8 @@
 # FSD — PerlinNoise v4 (Modular)
 
-**Stand:** 2026-05-14 — Firmware **v4.4.7** auf Hardware. Phase 10 (2D-Spatial) weitgehend abgeschlossen.
+**Stand:** 2026-05-16 — Firmware **v4.4.28** auf Hardware. Phase 10.1 (Stabilität) + 10.2 (Silent Mode) abgeschlossen, Phase 10.3 (GUI-Härtung) begonnen.
 **Branch:** `v4-modular`
-**Status:** Systemstabilität unter Last (Recorder) und WD-Robustheit bei niedrigen Frequenzen sind die nächsten Ziele.
+**Status:** Systemstabilität unter UI-Last (Slider, Polling, Preview) durch Streaming-Endpoints + Slider-Debounce + DOM-Stabilität. Watchdog MS-invariant.
 
 ---
 
@@ -49,5 +49,20 @@
 **Deliverables:**
 - Firmware v4.4.16
 - Automatisches High-Res-Switching (bis 256 MS) bei langsamen Wellen (z.B. 0.01 Hz).
+
+### Phase 10.3 — GUI-Härtung & Crash-Behebung (v4.4.23 → v4.4.28)
+
+**Ziel:** Player-Crashes unter UI-Last beheben, Slider-Verhalten ehrlich machen, Watchdog mit Silent-Matrix kompatibel.
+
+**Bugs behoben:**
+- **Bug 79** (v4.4.23): Watchdog-Schwellwert MS-invariant (Grad statt Steps). Mit Silent-Matrix bei MS=128 hatte der 250-Step-Threshold bei kleinster Range gegriffen → false-STOP. Jetzt 28°-deg-Schwellwert.
+- **Bug 76** (v4.4.24): `/preview` von String-Build (~80 KB/s Heap-Churn bei 10 Hz Noise) auf `AsyncResponseStream`. Live-Stress mit 30 parallelen Requests ohne Reboot.
+- **Bug 77** (v4.4.25): Logger eigener `loggerMutex` statt `uartMutex`-Sharing. Bug-74-Fix hatte TMC-Operationen unter Log-Last blockiert.
+- **Bug 78** (v4.4.26): `renderMotors` Update via `textContent`/`className` statt `innerHTML`-Rebuild. Buttons bleiben stabil, keine Click-Race.
+- **Bug 69** (v4.4.27, 3. Iteration): `setPower` ruft `applyDefaults` nur noch bei Erst-Power-On (`currentMA==0`). Race bei Re-Power weg, Freeze-Schutz bleibt.
+- **Bug 67, 70, 71, 80** (v4.4.28): Polish-Bündel — toten Mode-Switch-Call entfernt, `DEFAULT_SAFE_CURRENT_MA` zentralisiert, `silentMA` in `/bounds`, Slider-Flood gestoppt (`oninput`→lokal, `onchange`→Server).
+
+**Deliverables:**
+- Firmware v4.4.28 (Hardware-läuft, ungetaggt — wartet auf User-Verifikation)
 
 ### Phase 11 Plan — Sequencer (v4.5.0) — geplant
