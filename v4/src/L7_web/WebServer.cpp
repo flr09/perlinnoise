@@ -347,45 +347,60 @@ function cmd(a,m){
 // Bug 526). Jetzt: `oninput` → `setPLocal` (lokales CFG + Coupling + Labels),
 // `onchange` (mouseup) → `setP` (Server). Engine hat authoritative Caps
 // (Bug 54), Status-Polling synct den finalen Wert zurück.
+var DRAG=false;
 function setPLocal(k,v){
+  DRAG=true;
   CFG[k]=+v;
   if(k==='speed'||k==='range'||k==='type')applyWaveCoupling();
   applyLabels();
 }
 function setP(k,v){
+  DRAG=false;
   fetch('/set?'+k+'='+v).then(function(r){return r.json()}).then(function(c){
     applyConfig(c);
     if(k==='speed'||k==='range'||k==='type')applyWaveCoupling();
   }).catch(function(){});
 }
 
-// Phase 10 E: kontextsensitive Labels + Live-Wert-Anzeigen je nach moveType.
-function applyLabels(){
-  var t=CFG.type|0;
-  var isWave=(t>=3&&t<=5), isNoise=(t<=2), isCoord=(t===8);
-  var L=function(id,txt){var e=document.getElementById(id);if(e)e.textContent=txt};
-  L('lblSpeed', isWave?'Frequenz':(isNoise?'Flug-Tempo':(isCoord?'(inaktiv)':'Speed')));
-  // Bug 54: Contrast ist in Wave-Modi engine-seitig stumm — Label/Anzeige
-  // spiegeln das. Im Noise weiter „Kontrast" (echte Funktion).
-  L('lblCont',  isWave?'Contrast (stumm)':(isNoise?'Kontrast':(isCoord?'(inaktiv)':'Contrast')));
-  L('lblMspace',isWave?'Phasenversatz':(isNoise?'Motor-Abstand':(isCoord?'(inaktiv)':'Spacing')));
-  L('lblShape', t===5?'Duty Cycle':(t===4?'Steigung':(t===3?'Form':'Shape')));
-  // Werte aufbereiten mit passender Einheit.
-  var s=CFG.speed||0;
-  var hz=(s/(2*Math.PI)).toFixed(2); // Hz aus rt.speed (Wave timeAcc-Math)
-  var cont=CFG.cont||0, rng=CFG.range||0;
-  // Bug 54: Wave-Peak ist range/2 (contrast hat keine Wirkung). Noise-Anzeige
-  // bleibt cont-numerisch wie gewohnt.
-  L('vSpeed',  isWave?(hz+' Hz'):s.toFixed(2));
-  L('vCont',   isWave?'—':cont.toFixed(2));
-  L('vRange',  isWave?('±'+(rng/2).toFixed(0)+'° ('+rng.toFixed(0)+'° pp)'):(rng.toFixed(0)+'°'));
-  L('vFrame',  (CFG.frame||0).toFixed(3));
-  L('vShape',  t===5?((50+(CFG.shape||0)*8).toFixed(0)+'%'):(CFG.shape||0).toFixed(1));
-  L('vMspace', isWave?((CFG.mspace||0).toFixed(0)+'°/M'):((CFG.mspace||0).toFixed(0)+' cm'));
+function applyWaveCoupling(){
+  var rSlider=document.getElementById('psRange');
+  var sSlider=document.getElementById('psSpeed');
+  var isWave=(CFG.type>=3&&CFG.type<=5);
+  if(!isWave||!WAVE_K){
+    if(rSlider)rSlider.max=360;
+    if(sSlider)sSlider.max=2;
+    return;
+  }
+  // Bug 83 (v4.4.32): Passiver Limiter. Nur .max updaten.
+  var f=(CFG.speed||0)/(2*Math.PI);
+  if(rSlider){
+    var rMax=360;
+    if(f>0.01){var rCalc=(2*WAVE_K)/(f*f);rMax=Math.min(360,Math.max(1,rCalc))}
+    rSlider.max=rMax.toFixed(0);
+    if(+rSlider.value>rMax){
+      rSlider.value=rMax.toFixed(0);CFG.range=+rSlider.value;
+      if(!DRAG) fetch('/set?range='+rSlider.value).catch(function(){});
+    }
+  }
+  var r=CFG.range||0;
+  if(sSlider){
+    var sMax=2;
+    if(r>0.5){
+      var fMaxHz=Math.sqrt((2*WAVE_K)/r);
+      var fcMin=Math.min.apply(null,TACHO_HZ.map(function(h){return h*0.9}));
+      if(isFinite(fcMin)&&fcMin>0&&fcMin<fMaxHz)fMaxHz=fcMin;
+      sMax=fMaxHz*2*Math.PI;
+    }
+    sSlider.max=sMax.toFixed(2);
+    if(+sSlider.value>sMax){
+      sSlider.value=sMax.toFixed(2);CFG.speed=+sSlider.value;
+      if(!DRAG) fetch('/set?speed='+sSlider.value).catch(function(){});
+    }
+  }
 }
 
 function applyConfig(c){
-  if(!c)return;
+  if(!c||DRAG)return;
   var f=function(id,v){var e=document.getElementById(id);if(e&&v!=null)e.value=v};
   f('psType',c.type);f('psSpeed',c.speed);f('psRange',c.range);f('psCont',c.cont);
   f('psFrame',c.frame);f('psShape',c.shape);f('psMspace',c.mspace);f('psDyn',c.dyn);
@@ -591,6 +606,8 @@ function apply(d){
   var ms=d.m||[];
   renderMotors(ms);
   updateDials(ms);
+  // Bug 89: Sliders synchronisieren wenn nicht im DRAG
+  applyConfig(d);
   // Phase 10 E: Motor-Positionen für Canvas-Dot-Overlay einspeisen.
   for(var i=0;i<4;i++){LIVE.motorP[i]=(ms[i]&&ms[i].p!=null)?+ms[i].p:0}
   if(d.log)appendLog(d.log);
@@ -1178,9 +1195,10 @@ void begin() {
             }
         }
 
-        response->printf("{\"fw\":\"%s\",\"uptime_s\":%lu,\"ip\":\"%s\",\"op\":\"%s\",\"rpm\":%s,\"log\":\"",
+        response->printf("{\"fw\":\"%s\",\"uptime_s\":%lu,\"heap\":%lu,\"ip\":\"%s\",\"op\":\"%s\",\"rpm\":%s,\"log\":\"",
             Platform::FW_VERSION,
             (unsigned long)(millis() / 1000),
+            (unsigned long)ESP.getFreeHeap(),
             Wifi::localIp().c_str(),
             Op::stateStr(),
             rpm > 0 ? String(rpm).c_str() : "null");

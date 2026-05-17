@@ -148,9 +148,9 @@ static float capWaveRangeByFreqAmp(float effSpeed, float effRangeDeg) {
         if (!cal.valid) continue;
         long ampMaxSafe = maxAmpAtFreq(cal, f);
         if (ampMaxSafe <= 0) continue;
-        long demandedHalfAmp = (long)(effRangeDeg * (float)Stepper::stepsPerRev(i) / 360.0f);
+        long demandedHalfAmp = (long)((effRangeDeg / 2.0f) * (float)Stepper::stepsPerRev(i) / 360.0f);
         if (demandedHalfAmp > ampMaxSafe) {
-            float maxRangeDeg = (float)ampMaxSafe * 360.0f / (float)Stepper::stepsPerRev(i);
+            float maxRangeDeg = (float)ampMaxSafe * 360.0f / (float)Stepper::stepsPerRev(i) * 2.0f;
             if (maxRangeDeg < effRangeCapped) {
                 effRangeCapped = maxRangeDeg;
                 restrictedMotor = i;
@@ -234,10 +234,14 @@ static void applyEngineCap(uint8_t i, bool stepMode, bool waveMode) {
 
     uint32_t accCap;
     if (stepMode)      accCap = (uint32_t)v4::rt.accelMax;
-    else if (isSquare) accCap = 500000;             // Ziel: hart (wird unten durch cal gedeckelt)
-    else if (isSaw)    accCap = 100000;             // Ziel: mittel
-    else if (isSinus)  accCap = 30000;              // Ziel: agil aber glatt
+    else if (isSquare) accCap = 500000;
+    else if (isSaw)    accCap = 500000; // Bug 88: Sharp retract
+    else if (isSinus)  accCap = 100000; // Ziel: agil
     else               accCap = DEFAULT_ACC_NOISE;  // Noise (4k)
+
+    // Bug 86: Dynamics-Skalierung für Beschleunigung
+    if (v4::rt.dynamics == 0)      accCap /= 2;
+    else if (v4::rt.dynamics == 2) accCap *= 2; 
 
     // Hardware-Grenzen aus Charakterisierung (Evidenzbasiert)
     // Wenn der Test sagt, der Motor kann nur X, dann fahren wir maximal X.
@@ -665,7 +669,8 @@ void tick() {
         }
 
         float stepsPerDeg = (float)Stepper::stepsPerRev(i) / 360.0f;
-        long maxSteps = (long)(effRangeDeg * stepsPerDeg);
+        float amplitude = effRangeDeg / 2.0f; // Bug 87: Range is pp, motor moves +/- amplitude
+        long maxSteps = (long)(amplitude * stepsPerDeg);
         long target = (long)(val * (float)maxSteps);
         if (target > maxSteps)  target = maxSteps;
         if (target < -maxSteps) target = -maxSteps;
