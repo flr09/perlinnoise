@@ -615,11 +615,18 @@ void tick() {
             float phase = timeAcc + (float)i * phaseSpread;
             if (v4::rt.moveType == 3) {            // SINUS
                 val = sinf(phase);
-            } else if (v4::rt.moveType == 4) {     // SAWTOOTH
+            } else if (v4::rt.moveType == 4) {     // SAWTOOTH (Linear + Sharp Retract)
                 float t = fmodf(phase / (2.0f * (float)M_PI), 1.0f);
                 if (t < 0.0f) t += 1.0f;
-                float exp = fmaxf(0.1f, expf(v4::rt.zShape * 0.25f));
-                val = powf(t, exp) * 2.0f - 1.0f;
+                // Bug 82 (v4.4.30): Lineare Sägezahn-Welle. zShape (0..2.5)
+                // steuert die Symmetrie. 0 = Dreieck (50/50), 2.5 = Saw (95/5).
+                float fallPart = 0.5f - (v4::rt.zShape / 2.5f) * 0.45f;
+                float risePart = 1.0f - fallPart;
+                if (t < risePart) {
+                    val = (t / risePart) * 2.0f - 1.0f; // Rise -1 -> 1
+                } else {
+                    val = 1.0f - ((t - risePart) / fallPart) * 2.0f; // Fall 1 -> -1
+                }
             } else {                                // SQUARE
                 float t = fmodf(phase / (2.0f * (float)M_PI), 1.0f);
                 if (t < 0.0f) t += 1.0f;

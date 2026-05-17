@@ -733,7 +733,8 @@ function applyWaveCoupling(){
     if(sSlider)sSlider.max=2;
     return;
   }
-  // Range-Max aus aktuellem Speed (f in Hz)
+  // Bug 83 (v4.4.30): Passiver Limiter statt aktives Mitziehen.
+  // Wir updaten .max, aber setzen .value nur wenn Überlauf.
   var f=(CFG.speed||0)/(2*Math.PI);
   if(rSlider){
     var rMax=360;
@@ -744,7 +745,6 @@ function applyWaveCoupling(){
       fetch('/set?range='+rSlider.value).catch(function(){});
     }
   }
-  // Speed-Max aus aktueller Range, zusätzlich harter Cap durch TACHO_HZ
   var r=CFG.range||0;
   if(sSlider){
     var sMax=2;
