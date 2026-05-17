@@ -416,25 +416,43 @@ static void applySilentHardwareSettings(uint8_t i, float f, float rangeDeg) {
     uint16_t bestMS = 16;
     uint16_t bestMA = cal.learnedCurrentMA > 0 ? cal.learnedCurrentMA : v4::DEFAULT_SAFE_CURRENT_MA;
     
-    uint16_t msLevels[] = {16, 32, 64, 128, 256};
-    for (int k = 4; k >= 0; k--) {
-        uint16_t ms = msLevels[k];
-        float spsMax = rpmMax * 200.0f / 60.0f * (float)ms;
-        if (spsMax > 200000.0f) continue;
-        if (cal.silentCurrentMA[k] > 0) {
-            bestMS = ms;
-            bestMA = cal.silentCurrentMA[k];
-            break;
-        }
-    }
+    // Bug 84 (v4.4.31): Multi-Tier Dynamics Profile
+    // 0 = Langsam/Silent: Fokus Laufruhe. Bis 256 MS, starker Strom-Drop bei low f.
+    // 1 = Normal: Balance. Max 64 MS, moderater Strom-Drop.
+    // 2 = Rasant: Performance. Immer 16 MS, voller Strom (Ignoriert Silent Matrix).
     
-    // Bug 72: Frequenz-abhängiges Strom-Scaling.
-    // Bei niedriger f braucht der Motor weniger Halte-Moment.
-    // Heuristik: 100% bei 5 Hz, runter auf 60% bei 0.01 Hz.
-    float fScale = 0.6f + 0.4f * (f / 5.0f);
-    if (fScale > 1.0f) fScale = 1.0f;
-    bestMA = (uint16_t)((float)bestMA * fScale);
-    if (bestMA < 200) bestMA = 200; // Bug 75: Höherer Floor für Z-Integrität
+    if (v4::rt.dynamics == 2) {
+        // RASANT: Full Power, no silent scaling
+        bestMS = 16;
+        // bestMA bleibt auf learnedCurrentMA
+    } else {
+        // SLOW / NORMAL: Matrix-Suche
+        uint16_t msLevels[] = {16, 32, 64, 128, 256};
+        int startK = (v4::rt.dynamics == 1) ? 2 : 4; // Normal fängt bei 64 (k=2) an, Slow bei 256 (k=4)
+        
+        for (int k = startK; k >= 0; k--) {
+            uint16_t ms = msLevels[k];
+            float spsMax = rpmMax * 200.0f / 60.0f * (float)ms;
+            if (spsMax > 200000.0f) continue;
+            if (cal.silentCurrentMA[k] > 0) {
+                bestMS = ms;
+                bestMA = cal.silentCurrentMA[k];
+                break;
+            }
+        }
+        
+        // Frequenz-abhängiges Strom-Scaling (Bug 72 Refined)
+        float fScale = 1.0f;
+        if (v4::rt.dynamics == 0) {
+            fScale = 0.5f + 0.5f * (f / 5.0f); // Slow: bis auf 50% runter
+        } else if (v4::rt.dynamics == 1) {
+            fScale = 0.8f + 0.2f * (f / 5.0f); // Normal: nur bis 80% runter
+        }
+        if (fScale > 1.0f) fScale = 1.0f;
+        
+        bestMA = (uint16_t)((float)bestMA * fScale);
+        if (bestMA < 200) bestMA = 200; // Floor für Z-Integrität
+    }
 
     if (!s->isRunning()) {
         Stepper::setMicrosteps(i, bestMS);

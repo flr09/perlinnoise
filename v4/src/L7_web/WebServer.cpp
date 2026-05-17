@@ -733,17 +733,15 @@ function applyWaveCoupling(){
     if(sSlider)sSlider.max=2;
     return;
   }
-  // Bug 83 (v4.4.30): Passiver Limiter statt aktives Mitziehen.
-  // Wir updaten .max, aber setzen .value nur wenn Überlauf.
+  // Bug 83 (v4.4.31): Passiver Limiter. Wir updaten nur .max.
+  // KEIN aktives Mitziehen/Pulling der Werte.
   var f=(CFG.speed||0)/(2*Math.PI);
   if(rSlider){
     var rMax=360;
     if(f>0.01){var rCalc=(2*WAVE_K)/(f*f);rMax=Math.min(360,Math.max(1,rCalc))}
     rSlider.max=rMax.toFixed(0);
-    if(+rSlider.value>rMax){
-      rSlider.value=rMax.toFixed(0);CFG.range=+rSlider.value;
-      fetch('/set?range='+rSlider.value).catch(function(){});
-    }
+    // Nur clampen, wenn der aktuelle Wert die neue Grenze REISST.
+    if(+rSlider.value>rMax) rSlider.value=rMax.toFixed(0);
   }
   var r=CFG.range||0;
   if(sSlider){
@@ -755,10 +753,8 @@ function applyWaveCoupling(){
       sMax=fMaxHz*2*Math.PI;
     }
     sSlider.max=sMax.toFixed(2);
-    if(+sSlider.value>sMax){
-      sSlider.value=sMax.toFixed(2);CFG.speed=+sSlider.value;
-      fetch('/set?speed='+sSlider.value).catch(function(){});
-    }
+    // Nur clampen, wenn der aktuelle Wert die neue Grenze REISST.
+    if(+sSlider.value>sMax) sSlider.value=sMax.toFixed(2);
   }
 }
 
