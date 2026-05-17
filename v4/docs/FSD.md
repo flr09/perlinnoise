@@ -1,68 +1,51 @@
 # FSD — PerlinNoise v4 (Modular)
 
-**Stand:** 2026-05-16 — Firmware **v4.4.28** auf Hardware. Phase 10.1 (Stabilität) + 10.2 (Silent Mode) abgeschlossen, Phase 10.3 (GUI-Härtung) begonnen.
+**Stand:** 2026-05-17 — Firmware **v4.4.32** auf Hardware. Phase 10.1–10.3 abgeschlossen, Phase 10.4 (API-First) in Planung.
 **Branch:** `v4-modular`
-**Status:** Systemstabilität unter UI-Last (Slider, Polling, Preview) durch Streaming-Endpoints + Slider-Debounce + DOM-Stabilität. Watchdog MS-invariant.
+**Status:** Systemstabilität gehärtet. Range-Konvention auf Peak-to-Peak (pp) vereinheitlicht. Dynamics-Profile (Slow/Normal/Rasant) aktiv.
 
 ---
 
 ## 9. Phasen-Plan (Fortsetzung)
 
 ### Phase 10.1 — Stabilitäts- & Safety-Sicherung (v4.4.8)
-
-**Ziel:** Behebung der v4.4.7-Stabilitätsprobleme und Vorbereitung auf Phase 11.
-
-**Priorisierte Fixes:**
-
-1.  **Bug 46 (Recorder Stability):**
-    - **Problem:** `Recorder::getCsv()` blockiert durch Spinlock und riesige String-Allokation den Kernel und fragmentiert den Heap.
-    - **Lösung:** Umstellung auf `AsyncResponseStream` (Streaming ohne Riesen-String) und Minimierung der Lock-Zeit (Snapshot-Copy der Samples).
-2.  **Bug 47 (Watchdog Robustness):**
-    - **Problem:** Fehlalarme bei $f < 1Hz$ durch zu kurzes 3s-Fenster.
-    - **Lösung:** Adaptives Fenster oder "Wait-for-First-Schwingung"-Logik.
-3.  **Bug 51/53 (Calibration Integrity):**
-    - **Problem:** Stall-Gefahr in Calib ohne Schutz; Microstep-Leak vom Player stört Calib-Präzision.
-    - **Lösung:** Explizites µStep-Reset vor Calib; Stall-Monitor (SG oder Tacho) während der Grob-Suche.
-4.  **Polish (Bugs 48, 49, 50):**
-    - Motor-Naming fixen (`X, Y, Z, E`).
-    - `/bounds` NVS-Caching.
-    - Layout-Shift "HIT" durch farbigen Dot ersetzen.
-
-**Deliverables:**
-- Firmware v4.4.8 (stable)
-- Dokumentation der Messwerte (Flash-Usage, Heap-Stand)
-
-**Tests:**
-- T10.1.1 Recorder-Download während aktivem Noise-Mode (kein WiFi-Drop).
-- T10.1.2 0.5 Hz Square-Wave über 60s ohne WD-Trigger.
-- T10.1.3 Calib nach Player-Stopp (verifiziert µStep-Umschaltung).
+*Abgeschlossen.* (Recorder-Streaming, Watchdog-Adaptive, Calib-Schutz).
 
 ### Phase 10.2 — Silent Mode Optimization (v4.4.16)
+*Abgeschlossen.* (Silent-Matrix, Dynamisches MS-Scaling).
 
-**Ziel:** Maximale Laufruhe und Präzision bei allen Bewegungsgeschwindigkeiten durch dynamische Hardware-Settings.
+### Phase 10.3 — GUI-Härtung & Dynamics (v4.4.23 → v4.4.32)
 
-**Implementierung:**
-1.  **Silent-Matrix:** Neue Datenstruktur `silentCurrentMA[5]` für Microstep-Level [16, 32, 64, 128, 256].
-2.  **Silent-Parcours:** `runSilentProfileTest` ermittelt den Mindeststrom pro MS-Level bei langsamer Fahrt über den Sensor.
-3.  **Dynamisches Scaling:** Die Engine (`Synthesis`) berechnet bei jedem Start/Wechsel die Peak-RPM und wählt das höchste gelernt MS-Level, das das ESP32-SPS-Limit (200kHz) nicht überschreitet.
+**Ziel:** Player-Crashes beheben, Slider-Ehrlichkeit, Dynamics-Profile.
 
-**Deliverables:**
-- Firmware v4.4.16
-- Automatisches High-Res-Switching (bis 256 MS) bei langsamen Wellen (z.B. 0.01 Hz).
+**Meilensteine:**
+- **v4.4.29:** Log-Flood gestoppt (`drainBuffer`), DOM-Thrashing in `/test` behoben.
+- **v4.4.30:** Saw-Refinement (Lineare Rampe + Sharp Retract via `zShape`), Passiver Slider-Limiter (nur `.max` Update).
+- **v4.4.31:** Dynamics-Profile (Slow: 256MS/Silent, Normal: 64MS, Rasant: 16MS/Full-Power).
+- **v4.4.32 (Critical Sync):** Range-Konvention auf **Peak-to-Peak** umgestellt (Bug 68/87). Engine rechnet jetzt `amplitude = range / 2.0`. UI-Labels und physikalische Fahrt sind nun synchron.
 
-### Phase 10.3 — GUI-Härtung & Crash-Behebung (v4.4.23 → v4.4.28)
+### Phase 10.4 — API-First Architecture & Local Control Tool (v4.4.33+)
 
-**Ziel:** Player-Crashes unter UI-Last beheben, Slider-Verhalten ehrlich machen, Watchdog mit Silent-Matrix kompatibel.
+**Ziel:** Entlastung des ESP32 durch Auslagerung der UI auf das lokale Dateisystem (`file://`).
 
-**Bugs behoben:**
-- **Bug 79** (v4.4.23): Watchdog-Schwellwert MS-invariant (Grad statt Steps). Mit Silent-Matrix bei MS=128 hatte der 250-Step-Threshold bei kleinster Range gegriffen → false-STOP. Jetzt 28°-deg-Schwellwert.
-- **Bug 76** (v4.4.24): `/preview` von String-Build (~80 KB/s Heap-Churn bei 10 Hz Noise) auf `AsyncResponseStream`. Live-Stress mit 30 parallelen Requests ohne Reboot.
-- **Bug 77** (v4.4.25): Logger eigener `loggerMutex` statt `uartMutex`-Sharing. Bug-74-Fix hatte TMC-Operationen unter Log-Last blockiert.
-- **Bug 78** (v4.4.26): `renderMotors` Update via `textContent`/`className` statt `innerHTML`-Rebuild. Buttons bleiben stabil, keine Click-Race.
-- **Bug 69** (v4.4.27, 3. Iteration): `setPower` ruft `applyDefaults` nur noch bei Erst-Power-On (`currentMA==0`). Race bei Re-Power weg, Freeze-Schutz bleibt.
-- **Bug 67, 70, 71, 80** (v4.4.28): Polish-Bündel — toten Mode-Switch-Call entfernt, `DEFAULT_SAFE_CURRENT_MA` zentralisiert, `silentMA` in `/bounds`, Slider-Flood gestoppt (`oninput`→lokal, `onchange`→Server).
+#### 1. Logik & Transport
+*   **Datei:** `v4/tools/PerlinControl_v4.html` (Standalone, enthält INDEX + TEST Features).
+*   **Transport:** REST-Polling (10Hz Status, 10Hz Preview). WebSocket/SSE bleibt Backlog für v4.5.
+*   **IP-Sync:** Konfigurierbare Ziel-IP in der UI, Speicherung im `localStorage`.
 
-**Deliverables:**
-- Firmware v4.4.28 (Hardware-läuft, ungetaggt — wartet auf User-Verifikation)
+#### 2. Logistik: ESP32 Refactoring
+*   **HTML Stripping:** Entfernen von `INDEX_HTML` und `TEST_HTML` (~40 KB Ersparnis).
+*   **CORS Hardening:**
+    - Header `Access-Control-Allow-Origin: *` auf allen API-Endpoints.
+    - Globaler **OPTIONS-Handler** für Preflight-Requests (HTTP 204 No Content).
+    - Explizite `Allow-Methods: GET, POST, OPTIONS` und `Allow-Headers: Content-Type`.
+*   **Security-Note:** CSRF-Schutz wird für dieses interne Engineering-Tool zugunsten der Usability (file:// Origin) bewusst ausgesetzt.
 
-### Phase 11 Plan — Sequencer (v4.5.0) — geplant
+#### 3. Engineering UI (`TEST_HTML`)
+*   Das Engineering-Tool wird in `PerlinControl.html` als separater Tab integriert. Kein separates Stripping nötig, da alles in einer lokalen Datei lebt.
+
+---
+
+### Phase 10.5 — Mobile & Small Display Optimization (Backlog)
+
+**Ziel:** Bedienbarkeit auf Smartphones via Media-Queries und einklappbaren UI-Elementen.
