@@ -557,7 +557,6 @@ function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)ret
 function appendLog(chunk){
   if(!chunk)return;
   var box=document.getElementById('log');
-  var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 40;
   var lines=chunk.split('\n');
   for(var i=0;i<lines.length;i++){
     var t=lines[i];if(!t)continue;
@@ -569,8 +568,18 @@ function appendLog(chunk){
   }
   var limit = (box.id==='log' && typeof PRESETS !== 'undefined') ? 120 : 200;
   while(box.children.length > limit) box.removeChild(box.firstChild);
-  if(isAtBottom) box.scrollTop = box.scrollHeight;
 }
+
+// Bug 59: Robust Auto-Scroll Fix.
+(function(){
+  var box = document.getElementById('log');
+  if(!box) return;
+  var obs = new MutationObserver(function(){
+    var isAtBottom = (box.scrollHeight - box.scrollTop - box.clientHeight) < 100;
+    if(isAtBottom) box.scrollTop = box.scrollHeight;
+  });
+  obs.observe(box, {childList:true});
+})();
 
 function apply(d){
   document.getElementById('fw').textContent=d.fw||'';
@@ -1004,30 +1013,47 @@ function runTest(){
 function dotCls(e,hit){if(hit===true)return 'hit';return e===true?'on':e===false?'off':'na'}
 function fmtUp(s){if(s<60)return s+'s';var m=Math.floor(s/60),r=s%60;if(m<60)return m+'m '+r+'s';var h=Math.floor(m/60);return h+'h '+(m%60)+'m'}
 
+function buildMotors(){
+  var g=document.getElementById('mlist');if(!g)return;
+  var h='';
+  for(var i=0;i<4;i++){
+    var btns=[];
+    btns.push({a:'pwr',l:'Power'});
+    btns.push({a:'setzero',l:'Zero'});
+    if(HAS_SENSOR[i]){btns.push({a:'cal',l:'Calib'});btns.push({a:'home',l:'Home'});btns.push({a:'learn',l:'SG'})}
+    var bcls=btns.length===2?'g2':btns.length===5?'g3':'g3';
+    var bh='';
+    for(var j=0;j<btns.length;j++){
+      var b=btns[j];
+      bh+='<button class="btn" id="b_'+b.a+'_'+i+'" onclick="cmd(\''+b.a+'\','+i+')">'+b.l+'</button>';
+    }
+    h+='<div class="mc"><div class="top"><span class="dot" id="dot_'+i+'"></span><span class="nm">'+MNAMES[i]+'</span></div>'
+      +'<div class="nums">'
+      +'<div><div class="k">Pos</div><div class="vv" id="pos_'+i+'">—</div></div>'
+      +'<div><div class="k">Speed</div><div class="vv" id="spd_'+i+'">—</div></div>'
+      +'<div><div class="k">Pulses</div><div class="vv" id="aux_'+i+'">—</div></div>'
+      +'<div><div class="k">Sensor</div><div class="vv" id="hit_'+i+'">—</div></div>'
+      +'</div>'
+      +'<div class="btns '+bcls+'">'+bh+'</div></div>';
+  }
+  g.innerHTML=h;
+}
+
 function renderMotors(M){
-  var box=document.getElementById('mlist'),h='';
   for(var i=0;i<4;i++){
     var m=M[i]||{},e=m.e,p=m.p,s=m.s,puls=m.pulses,hit=m.hit;
     var pos=(p==null?'—':p.toFixed(1)+'°');
     var spd=(s==null?'—':s);
-    var pulsTxt=(puls==null?'—':puls);
+    var aux=(puls==null?'—':puls);
     var hitTxt=(hit===true?'HIT':hit===false?'—':'n/a');
-    var btns=[];
-    btns.push({a:'pwr',l:'Power',cls:e===true?'pri':''});
-    btns.push({a:'setzero',l:'Zero'});
-    if(HAS_SENSOR[i]){btns.push({a:'cal',l:'Calib'});btns.push({a:'home',l:'Home'});btns.push({a:'learn',l:'SG'})}
-    var bcls=btns.length===2?'g2':btns.length===5?'g3':'g3';
-    var bh='';for(var j=0;j<btns.length;j++){var b=btns[j];bh+='<button class="btn '+(b.cls||'')+'" onclick="cmd(\''+b.a+'\','+i+')">'+b.l+'</button>'}
-    h+='<div class="mc"><div class="top"><span class="dot '+dotCls(e,hit)+'"></span><span class="nm">'+MNAMES[i]+'</span></div>'
-      +'<div class="nums">'
-      +'<div><div class="k">Pos</div><div class="vv">'+pos+'</div></div>'
-      +'<div><div class="k">Speed</div><div class="vv">'+spd+'</div></div>'
-      +'<div><div class="k">Pulses</div><div class="vv">'+pulsTxt+'</div></div>'
-      +'<div><div class="k">Sensor</div><div class="vv'+(hit===true?' hit':'')+'">'+hitTxt+'</div></div>'
-      +'</div>'
-      +'<div class="btns '+bcls+'">'+bh+'</div></div>';
+    
+    var posEl=document.getElementById('pos_'+i);if(posEl)posEl.textContent=pos;
+    var spdEl=document.getElementById('spd_'+i);if(spdEl)spdEl.textContent=spd;
+    var auxEl=document.getElementById('aux_'+i);if(auxEl)auxEl.textContent=aux;
+    var hitEl=document.getElementById('hit_'+i);if(hitEl){hitEl.textContent=hitTxt;hitEl.className='vv'+(hit===true?' hit':'')}
+    var dotEl=document.getElementById('dot_'+i);if(dotEl)dotEl.className='dot '+dotCls(e,hit);
+    var pwrBtn=document.getElementById('b_pwr_'+i);if(pwrBtn)pwrBtn.className='btn'+(e===true?' pri':'');
   }
-  box.innerHTML=h;
 }
 
 function renderWd(W){
@@ -1057,7 +1083,7 @@ function appendLog(chunk){
   while(box.children.length>200)box.removeChild(box.firstChild);
 }
 
-// Bug 59: Nuclear Scroll Fix. Auto-scroll only if already at bottom.
+// Bug 59: Robust Auto-Scroll Fix.
 (function(){
   var box = document.getElementById('log');
   if(!box) return;
@@ -1089,6 +1115,7 @@ function pollWd(){
   fetch('/watchdog').then(function(r){return r.json()}).then(renderWd).catch(function(){})
 }
 
+buildMotors();
 setInterval(pollStatus,500);pollStatus();
 setInterval(pollWd,1000);pollWd();
 </script>
@@ -1162,8 +1189,10 @@ void begin() {
             Op::stateStr(),
             rpm > 0 ? String(rpm).c_str() : "null");
 
-        // Bug-ID 36: Stream log with escaping to avoid huge String copies/replacements.
-        String log = Logger::getBuffer();
+        // Bug 81: Nutze drainBuffer, damit die UI nur neue Zeilen bekommt.
+        // getBuffer (v4.3.6) führte zu redundanten 6KB-Chunks alle 100ms
+        // und killte die Browser-Threads (Bug 81).
+        String log = Logger::drainBuffer();
         for (size_t i = 0; i < log.length(); i++) {
             char c = log[i];
             if (c == '\"') response->print("\\\"");
